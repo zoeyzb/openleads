@@ -370,8 +370,40 @@ const nodeHandler = toNodeHandler(handler);
 
 const httpServer = createHttpServer((req, res) => {
   if (req.url === "/health") {
-    res.writeHead(200, {"content-type":"application/json"});
-    res.end(JSON.stringify({ok:true,name:"recover-scrape-mcp"}));
+    const checks = {
+      maps: MAPS_BASE_URL ? `${MAPS_BASE_URL}/api/v1/jobs` : "",
+      crawl4ai: CRAWL4AI_BASE_URL ? `${CRAWL4AI_BASE_URL}/health` : "",
+      yozh: YOZH_BASE_URL ? `${YOZH_BASE_URL}/api/v1/health` : "",
+      scrapling: SCRAPLING_MCP_URL ? SCRAPLING_MCP_URL.replace(/\/mcp$/, "/health") : ""
+    };
+
+    void (async () => {
+      const backends = {};
+      for (const [name, url] of Object.entries(checks)) {
+        if (!url) {
+          backends[name] = { configured:false, reachable:false };
+          continue;
+        }
+        try {
+          const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+          backends[name] = {
+            configured:true,
+            reachable:response.ok,
+            status:response.status
+          };
+        } catch (error) {
+          backends[name] = {
+            configured:true,
+            reachable:false,
+            error:error?.name || "request_failed"
+          };
+        }
+      }
+      const required = ["maps","crawl4ai","yozh"];
+      const ok = required.every(name => backends[name]?.reachable === true);
+      res.writeHead(ok ? 200 : 503, {"content-type":"application/json"});
+      res.end(JSON.stringify({ok,name:"recover-scrape-mcp",backends}));
+    })();
     return;
   }
   if (req.url?.startsWith("/mcp")) {
