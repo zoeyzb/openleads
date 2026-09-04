@@ -8,6 +8,7 @@ const PORT = Number(process.env.PORT || 3000);
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
 const CRAWL4AI_BASE_URL = (process.env.CRAWL4AI_BASE_URL || "").replace(/\/$/, "");
 const CRAWL4AI_API_TOKEN = process.env.CRAWL4AI_API_TOKEN || "";
+const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || "";
 
 const jsonText = (value) => ({
   content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
@@ -96,7 +97,20 @@ function buildServer() {
       crawl4ai: { configured: !!CRAWL4AI_BASE_URL, authConfigured: !!CRAWL4AI_API_TOKEN },
       emailEnrich: { configured: true },
       dedupe: { configured: true },
-      qualification: { configured: true }
+      qualification: { configured: true },
+      components: {
+        googleMaps: "zoeyzb/google-maps-scraper",
+        crawl4ai: "zoeyzb/crawl4ai",
+        firecrawl: "zoeyzb/firecrawl (external/optional adapter)",
+        openleads: "zoeyzb/openleads",
+        aura: "zoeyzb/aura-app (reference/enrichment patterns)",
+        gtmSignalScoring: "zoeyzb/gtm-signal-scoring (scoring reference; full app needs DB/provider keys)",
+        gtmSkills: "zoeyzb/gtm-skills (agent playbooks, not a runtime service)",
+        emailEnrich: "zoeyzb/email-enrich",
+        dedupe: "zoeyzb/dedupe",
+        leadQualifier: "zoeyzb/LeadQualifier (offline ML reference)",
+        aiLeadScoring: "zoeyzb/ai-lead-scoring-qualification (n8n reference workflow)"
+      }
     };
     return jsonText(status);
   });
@@ -237,6 +251,14 @@ const httpServer = createHttpServer((req, res) => {
     return;
   }
   if (req.url?.startsWith("/mcp")) {
+    if (MCP_AUTH_TOKEN) {
+      const auth = req.headers.authorization || "";
+      if (auth !== `Bearer ${MCP_AUTH_TOKEN}`) {
+        res.writeHead(401, {"content-type":"application/json"});
+        res.end(JSON.stringify({error:"unauthorized"}));
+        return;
+      }
+    }
     void nodeHandler(req, res);
     return;
   }
