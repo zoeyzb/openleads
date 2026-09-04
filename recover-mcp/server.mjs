@@ -163,7 +163,7 @@ function buildServer() {
       scrapling: { configured: !!SCRAPLING_MCP_URL, authConfigured: !!SCRAPLING_MCP_TOKEN },
       components: {
         googleMaps: "zoeyzb/google-maps-scraper",
-        crawl4ai: "zoeyzb/crawl4ai",
+        crawl4ai: "unclecode/crawl4ai:latest (Railway service: crawl4ai-runtime)",
         firecrawl: "zoeyzb/firecrawl (external/optional adapter)",
         openleads: "zoeyzb/openleads",
         aura: "zoeyzb/aura-app (reference/enrichment patterns)",
