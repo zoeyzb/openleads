@@ -9,6 +9,9 @@ const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
 const CRAWL4AI_BASE_URL = (process.env.CRAWL4AI_BASE_URL || "").replace(/\/$/, "");
 const CRAWL4AI_API_TOKEN = process.env.CRAWL4AI_API_TOKEN || "";
 const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || "";
+const YOZH_BASE_URL = (process.env.YOZH_BASE_URL || "").replace(/\/$/, "");
+const SCRAPLING_MCP_URL = (process.env.SCRAPLING_MCP_URL || "").replace(/\/$/, "");
+const SCRAPLING_MCP_TOKEN = process.env.SCRAPLING_MCP_TOKEN || "";
 
 const jsonText = (value) => ({
   content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
@@ -28,6 +31,64 @@ async function fetchJson(url, init = {}, timeoutMs = 120000) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+
+function parseMcpPayload(text) {
+  try { return JSON.parse(text); } catch {}
+  const dataLines = String(text).split("\n").filter(line => line.startsWith("data:"));
+  for (const line of dataLines.reverse()) {
+    try { return JSON.parse(line.slice(5).trim()); } catch {}
+  }
+  return { raw: text };
+}
+
+async function callRemoteMcpTool(url, token, toolName, args = {}) {
+  const headers = {
+    "content-type": "application/json",
+    "accept": "application/json, text/event-stream"
+  };
+  if (token) headers.authorization = `Bearer ${token}`;
+
+  const initRes = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: { name: "recover-scrape-gateway", version: "1.0.0" }
+      }
+    })
+  });
+  const initText = await initRes.text();
+  if (!initRes.ok) throw new Error(`MCP initialize failed: ${initRes.status} ${initText}`);
+  const sessionId = initRes.headers.get("mcp-session-id");
+  const sessionHeaders = { ...headers };
+  if (sessionId) sessionHeaders["mcp-session-id"] = sessionId;
+
+  await fetch(url, {
+    method: "POST",
+    headers: sessionHeaders,
+    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })
+  });
+
+  const callRes = await fetch(url, {
+    method: "POST",
+    headers: sessionHeaders,
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: toolName, arguments: args }
+    })
+  });
+  const callText = await callRes.text();
+  if (!callRes.ok) throw new Error(`MCP tool call failed: ${callRes.status} ${callText}`);
+  return parseMcpPayload(callText);
 }
 
 function normalizeDomain(value = "") {
@@ -84,7 +145,7 @@ function buildServer() {
     { name: "recover-scrape", version: "1.0.0" },
     {
       instructions:
-        "Use Recover Scrape for business discovery, Google Maps scraping, website crawling, public-contact enrichment, deduplication and lead qualification. Prefer maps_start_job for local-business discovery, crawl_website for website analysis, enrich_email for public professional-email enrichment, dedupe_leads before returning large lead sets, and qualify_leads to rank prospects. Never claim an email or owner identity is verified unless the returned evidence supports it."
+        "Use Recover Scrape for business discovery, Google Maps scraping, website crawling, stealth scraping, public-contact enrichment, deduplication and lead qualification. Prefer maps_start_job for local-business discovery. For websites, try crawl_website first; if blocked or highly dynamic, use scrapling_stealth_fetch; for durable queued browser work use yozh_start_scrape. Use enrich_email for public professional-email enrichment, dedupe_leads before returning large lead sets, and qualify_leads to rank prospects. Never claim an email, owner identity, or lead attribute is verified unless returned evidence supports it."
     }
   );
 
@@ -98,6 +159,8 @@ function buildServer() {
       emailEnrich: { configured: true },
       dedupe: { configured: true },
       qualification: { configured: true },
+      yozh: { configured: !!YOZH_BASE_URL },
+      scrapling: { configured: !!SCRAPLING_MCP_URL, authConfigured: !!SCRAPLING_MCP_TOKEN },
       components: {
         googleMaps: "zoeyzb/google-maps-scraper",
         crawl4ai: "zoeyzb/crawl4ai",
@@ -161,6 +224,67 @@ function buildServer() {
       }, 120000));
     } catch (e) {
       return { content:[{type:"text",text:`Crawl4AI backend error: ${e.message}`}], isError:true };
+    }
+  });
+
+
+  server.registerTool("yozh_start_scrape", {
+    description: "Start a durable browser scrape job on the internal Yozh worker queue. Use for difficult/dynamic sites when a queued Playwright worker is useful.",
+    inputSchema: z.object({
+      url: z.string().url(),
+      proxy_type: z.enum(["none","res_rotating","res_static","mobile","mobile_shared","dc_static"]).default("none"),
+      headless: z.boolean().optional(),
+      browser_engine: z.enum(["chromium","camoufox"]).optional()
+    })
+  }, async (args) => {
+    if (!YOZH_BASE_URL) return { content:[{type:"text",text:"YOZH_BASE_URL is not configured"}], isError:true };
+    try {
+      return jsonText(await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/page`, {
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify(args)
+      }, 30000));
+    } catch (e) {
+      return { content:[{type:"text",text:`Yozh backend error: ${e.message}`}], isError:true };
+    }
+  });
+
+  server.registerTool("yozh_job_status", {
+    description: "Check a Yozh scrape job.",
+    inputSchema: z.object({ job_id: z.string().min(1) })
+  }, async ({ job_id }) => {
+    if (!YOZH_BASE_URL) return { content:[{type:"text",text:"YOZH_BASE_URL is not configured"}], isError:true };
+    try { return jsonText(await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/${encodeURIComponent(job_id)}`)); }
+    catch (e) { return { content:[{type:"text",text:`Yozh backend error: ${e.message}`}], isError:true }; }
+  });
+
+  server.registerTool("yozh_job_results", {
+    description: "Fetch Yozh scrape results for a job, including partial results while still running.",
+    inputSchema: z.object({ job_id: z.string().min(1) })
+  }, async ({ job_id }) => {
+    if (!YOZH_BASE_URL) return { content:[{type:"text",text:"YOZH_BASE_URL is not configured"}], isError:true };
+    try { return jsonText(await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/${encodeURIComponent(job_id)}/results`)); }
+    catch (e) { return { content:[{type:"text",text:`Yozh backend error: ${e.message}`}], isError:true }; }
+  });
+
+  server.registerTool("scrapling_stealth_fetch", {
+    description: "Use Scrapling's stealth browser MCP as a fallback for difficult public websites or anti-bot protected pages.",
+    inputSchema: z.object({
+      url: z.string().url(),
+      css_selector: z.string().optional(),
+      ai_targeted: z.boolean().default(true),
+      headless: z.boolean().default(true),
+      network_idle: z.boolean().default(false)
+    })
+  }, async ({ url, css_selector, ai_targeted, headless, network_idle }) => {
+    if (!SCRAPLING_MCP_URL) return { content:[{type:"text",text:"SCRAPLING_MCP_URL is not configured"}], isError:true };
+    try {
+      const args = { url, ai_targeted, headless, network_idle };
+      if (css_selector) args.css_selector = css_selector;
+      const result = await callRemoteMcpTool(SCRAPLING_MCP_URL, SCRAPLING_MCP_TOKEN, "stealthy_fetch", args);
+      return jsonText(result);
+    } catch (e) {
+      return { content:[{type:"text",text:`Scrapling backend error: ${e.message}`}], isError:true };
     }
   });
 
