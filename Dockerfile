@@ -8,6 +8,7 @@ RUN git clone --depth 1 https://github.com/zoeyzb/email-enrich.git /tmp/email-en
     && npm install \
     && npm run build \
     && npm pack \
+    && cd /app \
     && npm install /tmp/email-enrich/email-enrich-0.1.0.tgz \
     && rm -rf /tmp/email-enrich
 COPY recover-mcp ./recover-mcp
