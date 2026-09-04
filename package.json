@@ -1,0 +1,14 @@
+{
+  "name": "recover-scrape-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node recover-mcp/server.mjs" },
+  "dependencies": {
+    "@modelcontextprotocol/server": "latest",
+    "@modelcontextprotocol/node": "latest",
+    "email-enrich": "github:zoeyzb/email-enrich",
+    "zod": "^4.0.0"
+  }
+}
