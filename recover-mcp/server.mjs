@@ -143,7 +143,7 @@ async function fetchText(url, init = {}, timeoutMs = 120000) {
 
 function mapsTerminal(job) {
   const value = String(job?.status || job?.Status || job?.state || job?.State || job?.job?.status || job?.job?.Status || "").toLowerCase();
-  return ["completed","complete","done","finished","success","succeeded"].some(x => value.includes(x));
+  return ["ok","completed","complete","done","finished","success","succeeded"].some(x => value.includes(x));
 }
 
 function mapsFailed(job) {
@@ -507,8 +507,13 @@ function buildServer() {
       }
       let leads = dedupeRecords(all);
 
-      const websites = leads.map(x=>x.website).filter(Boolean).slice(0, Math.min(100, leads.length));
-      const enriched = websites.length ? await dataforgeScrape(websites) : [];
+      const websites = [...new Set(leads.map(x=>x.website).filter(Boolean))];
+      const enriched = [];
+      for (let i = 0; i < websites.length; i += 100) {
+        try {
+          enriched.push(...await dataforgeScrape(websites.slice(i, i + 100)));
+        } catch {}
+      }
       const byDomain = new Map(enriched.map(x=>[normalizeDomain(x.url || ""), x]));
       leads = leads.map(lead => {
         const e = byDomain.get(normalizeDomain(lead.website || ""));
