@@ -518,9 +518,13 @@ function buildServer() {
       leads = leads.map(lead => {
         const e = byDomain.get(normalizeDomain(lead.website || ""));
         if (!e) return lead;
+        const leadDomain = normalizeDomain(lead.website || "");
+        const sameDomainEmails = Array.isArray(e.emails)
+          ? e.emails.filter(email => normalizeDomain(String(email).split("@")[1] || "") === leadDomain)
+          : [];
         return {
           ...lead,
-          emails: e.emails || lead.emails,
+          emails: sameDomainEmails.length ? sameDomainEmails : lead.emails,
           tech_stack: e.tech_stack || [],
           cms_detected: e.cms_detected || null,
           ssl_valid: e.ssl_valid,
