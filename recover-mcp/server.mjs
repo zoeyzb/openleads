@@ -18,7 +18,6 @@ const KEELEAD_BASE_URL = (process.env.KEELEAD_BASE_URL || "").replace(/\/$/, "")
 const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 const ACQUISITION_REDIS_URL = process.env.ACQUISITION_REDIS_URL || "";
-const SMOKE_TEST_TOKEN = process.env.SMOKE_TEST_TOKEN || "";
 let acquisitionRedisPromise = null;
 
 async function getAcquisitionRedis() {
@@ -703,83 +702,6 @@ const handler = createMcpHandler(buildServer);
 const nodeHandler = toNodeHandler(handler);
 
 const httpServer = createHttpServer((req, res) => {
-  if (req.url?.startsWith("/_internal/acquisition-smoke-status") && req.method === "GET") {
-    const auth = req.headers.authorization || "";
-    if (!SMOKE_TEST_TOKEN || auth !== `Bearer ${SMOKE_TEST_TOKEN}`) {
-      res.writeHead(401, {"content-type":"application/json"});
-      res.end(JSON.stringify({error:"unauthorized"}));
-      return;
-    }
-    void (async () => {
-      try {
-        const redis = await getAcquisitionRedis();
-        const url = new URL(req.url, "http://localhost");
-        const id = url.searchParams.get("id") || "";
-        if (!id) {
-          res.writeHead(400, {"content-type":"application/json"});
-          res.end(JSON.stringify({error:"missing_id"}));
-          return;
-        }
-        const raw = await redis.get(`recover:acq:${id}`);
-        const resultCount = await redis.lLen(`recover:acq:${id}:results`);
-        const rawCount = await redis.lLen(`recover:acq:${id}:raw`);
-        res.writeHead(raw ? 200 : 404, {"content-type":"application/json"});
-        res.end(JSON.stringify({job:raw?JSON.parse(raw):null,raw_list_count:rawCount,result_count:resultCount}));
-      } catch (error) {
-        res.writeHead(500, {"content-type":"application/json"});
-        res.end(JSON.stringify({error:String(error?.message||error)}));
-      }
-    })();
-    return;
-  }
-
-  if (req.url === "/_internal/acquisition-smoke" && req.method === "POST") {
-    const auth = req.headers.authorization || "";
-    if (!SMOKE_TEST_TOKEN || auth !== `Bearer ${SMOKE_TEST_TOKEN}`) {
-      res.writeHead(401, {"content-type":"application/json"});
-      res.end(JSON.stringify({error:"unauthorized"}));
-      return;
-    }
-    void (async () => {
-      try {
-        const redis = await getAcquisitionRedis();
-        const id = randomUUID();
-        const job = {
-          id,
-          industry:"HVAC",
-          location:"Galesburg, IL",
-          target:3,
-          min_score:0,
-          require_phone:false,
-          require_email:false,
-          include_no_website:true,
-          max_rounds:1,
-          depth:1,
-          status:"queued",
-          phase:"queued",
-          round:0,
-          rounds_completed:0,
-          raw_count:0,
-          unique_count:0,
-          qualified_count:0,
-          stored_count:0,
-          maps_jobs:[],
-          created_at:new Date().toISOString(),
-          updated_at:new Date().toISOString()
-        };
-        await redis.set(`recover:acq:${id}`, JSON.stringify(job), { EX: 3600 });
-        await redis.sAdd("recover:acq:index", id);
-        await redis.lPush("recover:acquisition:queue", id);
-        res.writeHead(202, {"content-type":"application/json"});
-        res.end(JSON.stringify({status:"queued",acquisition_id:id}));
-      } catch (error) {
-        res.writeHead(500, {"content-type":"application/json"});
-        res.end(JSON.stringify({error:String(error?.message||error)}));
-      }
-    })();
-    return;
-  }
-
   if (req.url === "/health") {
     const checks = {
       maps: MAPS_BASE_URL ? `${MAPS_BASE_URL}/api/v1/jobs` : "",
