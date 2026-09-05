@@ -15,6 +15,8 @@ const SCRAPLING_MCP_TOKEN = process.env.SCRAPLING_MCP_TOKEN || "";
 const KEELEAD_BASE_URL = (process.env.KEELEAD_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
+const SMOKE_TEST_ENABLED = process.env.SMOKE_TEST_ENABLED === "1";
+let smokeStateToken = "";
 
 const jsonText = (value) => ({
   content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
@@ -44,6 +46,30 @@ function parseMcpPayload(text) {
     try { return JSON.parse(line.slice(5).trim()); } catch {}
   }
   return { raw: text };
+}
+
+async function callSelfMcpTool(toolName, args = {}) {
+  const url = "http://127.0.0.1:" + PORT + "/mcp";
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "accept": "application/json, text/event-stream",
+      "authorization": "Bearer " + MCP_AUTH_TOKEN
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method: "tools/call",
+      params: { name: toolName, arguments: args }
+    })
+  });
+  const bodyText = await response.text();
+  if (!response.ok) throw new Error("self MCP call failed: " + response.status + " " + bodyText.slice(0,500));
+  const payload = parseMcpPayload(bodyText);
+  const raw = payload?.result?.content?.[0]?.text;
+  if (!raw) return payload;
+  try { return JSON.parse(raw); } catch { return { raw }; }
 }
 
 async function callRemoteMcpTool(url, token, toolName, args = {}) {
@@ -656,6 +682,62 @@ const handler = createMcpHandler(buildServer);
 const nodeHandler = toNodeHandler(handler);
 
 const httpServer = createHttpServer((req, res) => {
+  if (req.url === "/__recover_smoke/start" && req.method === "POST") {
+    if (!SMOKE_TEST_ENABLED) {
+      res.writeHead(404, {"content-type":"application/json"});
+      res.end(JSON.stringify({error:"not_found"}));
+      return;
+    }
+    void (async () => {
+      try {
+        const result = await callSelfMcpTool("acquire_qualified_leads", {
+          industry:"HVAC",
+          location:"Galesburg, IL",
+          target:3,
+          min_score:0,
+          require_phone:false,
+          require_email:false,
+          include_no_website:true,
+          max_rounds:1,
+          depth:1
+        });
+        smokeStateToken = result?.state_token || "";
+        const safe = {...result};
+        delete safe.state_token;
+        safe.state_token_present = !!smokeStateToken;
+        res.writeHead(200, {"content-type":"application/json"});
+        res.end(JSON.stringify(safe));
+      } catch (error) {
+        res.writeHead(500, {"content-type":"application/json"});
+        res.end(JSON.stringify({error:String(error?.message || error)}));
+      }
+    })();
+    return;
+  }
+
+  if (req.url === "/__recover_smoke/status" && req.method === "POST") {
+    if (!SMOKE_TEST_ENABLED || !smokeStateToken) {
+      res.writeHead(404, {"content-type":"application/json"});
+      res.end(JSON.stringify({error:"not_found"}));
+      return;
+    }
+    void (async () => {
+      try {
+        const result = await callSelfMcpTool("acquisition_status", {state_token:smokeStateToken});
+        if (result?.state_token) smokeStateToken = result.state_token;
+        const safe = {...result};
+        delete safe.state_token;
+        safe.state_token_present = !!smokeStateToken;
+        res.writeHead(200, {"content-type":"application/json"});
+        res.end(JSON.stringify(safe));
+      } catch (error) {
+        res.writeHead(500, {"content-type":"application/json"});
+        res.end(JSON.stringify({error:String(error?.message || error)}));
+      }
+    })();
+    return;
+  }
+
   if (req.url === "/health") {
     const checks = {
       maps: MAPS_BASE_URL ? `${MAPS_BASE_URL}/api/v1/jobs` : "",
