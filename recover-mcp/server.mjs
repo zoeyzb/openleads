@@ -277,7 +277,7 @@ function buildServer() {
     })
   }, async ({ keywords, name, depth, max_time, extra_reviews }) => {
     if (!MAPS_BASE_URL) return { content:[{type:"text",text:"MAPS_BASE_URL is not configured"}], isError:true };
-    const body = { name: name || `Recover Scrape ${new Date().toISOString()}`, keywords, depth, max_time, extra_reviews };
+    const body = { name: name || `Recover Scrape ${new Date().toISOString()}`, keywords, depth, max_time, extra_reviews, lang: "en" };
     try {
       return jsonText(await fetchJson(`${MAPS_BASE_URL}/api/v1/jobs`, {
         method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body)
@@ -450,7 +450,8 @@ function buildServer() {
           keywords:[query],
           depth:args.depth,
           max_time:900,
-          extra_reviews:false
+          extra_reviews:false,
+          lang:"en"
         })
       }, 30000);
       const jobId = String(job?.id || job?.job_id || job?.job?.id || "");
@@ -562,7 +563,8 @@ function buildServer() {
           keywords:[query],
           depth:state.depth,
           max_time:900,
-          extra_reviews:false
+          extra_reviews:false,
+          lang:"en"
         })
       }, 30000);
       const jobId = String(job?.id || job?.job_id || job?.job?.id || "");
