@@ -142,12 +142,12 @@ async function fetchText(url, init = {}, timeoutMs = 120000) {
 }
 
 function mapsTerminal(job) {
-  const value = String(job?.status || job?.state || job?.job?.status || "").toLowerCase();
+  const value = String(job?.status || job?.Status || job?.state || job?.State || job?.job?.status || job?.job?.Status || "").toLowerCase();
   return ["completed","complete","done","finished","success","succeeded"].some(x => value.includes(x));
 }
 
 function mapsFailed(job) {
-  const value = String(job?.status || job?.state || job?.job?.status || "").toLowerCase();
+  const value = String(job?.status || job?.Status || job?.state || job?.State || job?.job?.status || job?.job?.Status || "").toLowerCase();
   return ["failed","error","cancelled","canceled"].some(x => value.includes(x));
 }
 
@@ -486,7 +486,7 @@ function buildServer() {
       let pending = false;
       for (const j of state.jobs) {
         const job = await fetchJson(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(j.id)}`, {}, 30000);
-        statuses.push({id:j.id,query:j.query,status:job?.status || job?.state || job?.job?.status || "unknown"});
+        statuses.push({id:j.id,query:j.query,status:job?.status || job?.Status || job?.state || job?.State || job?.job?.status || job?.job?.Status || "unknown"});
         if (!mapsTerminal(job) && !mapsFailed(job)) pending = true;
       }
       if (pending) {
