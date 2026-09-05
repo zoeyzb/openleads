@@ -386,7 +386,8 @@ console.log("Acquisition worker connected to Redis");
 await recoverInterrupted();
 
 if (process.env.ACQUISITION_SMOKE_TEST === "1") {
-  const smokeGuard = "recover:acq:smoke:last";
+  const smokeRunId = process.env.ACQUISITION_SMOKE_TEST_ID || "default";
+  const smokeGuard = `recover:acq:smoke:${smokeRunId}`;
   const previous = await redis.get(smokeGuard);
   if (!previous) {
     const id = randomUUID();
