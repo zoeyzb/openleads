@@ -3,11 +3,17 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
-  "scripts": { "start": "node recover-mcp/server.mjs" },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node recover-mcp/server.mjs",
+    "worker": "node recover-mcp/acquisition-worker.mjs"
+  },
   "dependencies": {
     "@modelcontextprotocol/server": "latest",
     "@modelcontextprotocol/node": "latest",
-    "zod": "^4.0.0"
+    "zod": "^4.0.0",
+    "redis": "^5.8.2"
   }
 }
