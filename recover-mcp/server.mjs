@@ -258,7 +258,7 @@ function buildServer() {
         dedupe: "zoeyzb/dedupe",
         leadQualifier: "zoeyzb/LeadQualifier (offline ML reference)",
         aiLeadScoring: "zoeyzb/ai-lead-scoring-qualification (n8n reference workflow)",
-        keelead: "zoeyzb/keelead (secondary discovery + email verification only; fake demo enrichment is not used)",
+        keelead: "zoeyzb/keelead (heuristic email/domain checks only; demo lead discovery and fake enrichment are intentionally disabled)",
         dataforge: "zoeyzb/dataforge (real website/email/tech enrichment API)",
         openGTM: "zoeyzb/opengtm (qualification/orchestration patterns; Gemini discovery disabled unless configured)"
       }
@@ -377,27 +377,8 @@ function buildServer() {
   });
 
 
-  server.registerTool("keelead_search", {
-    description: "Secondary lead discovery through KeeLead's real source manager. Use as a supplement to Google Maps, not as the primary local-business source.",
-    inputSchema: z.object({
-      query: z.string().min(1),
-      count: z.number().int().min(1).max(100).default(25),
-      location: z.string().optional(),
-      industry: z.string().optional()
-    })
-  }, async (args) => {
-    if (!KEELEAD_BASE_URL) return { content:[{type:"text",text:"KEELEAD_BASE_URL is not configured"}], isError:true };
-    try {
-      return jsonText(await fetchJson(`${KEELEAD_BASE_URL}/api/leads`, {
-        method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(args)
-      }, 120000));
-    } catch (e) {
-      return { content:[{type:"text",text:`KeeLead error: ${e.message}`}], isError:true };
-    }
-  });
-
   server.registerTool("keelead_verify_email", {
-    description: "Verify one or more candidate business emails using KeeLead's multi-layer DNS/MX/SMTP-oriented verifier.",
+    description: "Run KeeLead heuristic checks on candidate business emails: syntax, domain, MX, disposable, role, typo, and mail-infrastructure signals. This does not prove that a specific mailbox exists or accepts mail.",
     inputSchema: z.object({
       email: z.string().email().optional(),
       emails: z.array(z.string().email()).max(100).optional()
