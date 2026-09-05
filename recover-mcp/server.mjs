@@ -12,6 +12,9 @@ const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || "";
 const YOZH_BASE_URL = (process.env.YOZH_BASE_URL || "").replace(/\/$/, "");
 const SCRAPLING_MCP_URL = (process.env.SCRAPLING_MCP_URL || "").replace(/\/$/, "");
 const SCRAPLING_MCP_TOKEN = process.env.SCRAPLING_MCP_TOKEN || "";
+const KEELEAD_BASE_URL = (process.env.KEELEAD_BASE_URL || "").replace(/\/$/, "");
+const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
+const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 
 const jsonText = (value) => ({
   content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
@@ -91,6 +94,86 @@ async function callRemoteMcpTool(url, token, toolName, args = {}) {
   return parseMcpPayload(callText);
 }
 
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else field += ch;
+    } else {
+      if (ch === '"') quoted = true;
+      else if (ch === ',') { row.push(field); field = ""; }
+      else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ""; }
+      else if (ch !== '\r') field += ch;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return [];
+  const headers = rows.shift().map(h => h.trim());
+  return rows.filter(r => r.some(v => String(v).trim())).map(r => {
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = r[i] ?? ""; });
+    return obj;
+  });
+}
+
+function encodeState(value) {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}
+function decodeState(token) {
+  return JSON.parse(Buffer.from(token, "base64url").toString("utf8"));
+}
+
+async function fetchText(url, init = {}, timeoutMs = 120000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${text.slice(0,500)}`);
+    return text;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function mapsTerminal(job) {
+  const value = String(job?.status || job?.state || job?.job?.status || "").toLowerCase();
+  return ["completed","complete","done","finished","success","succeeded"].some(x => value.includes(x));
+}
+
+function mapsFailed(job) {
+  const value = String(job?.status || job?.state || job?.job?.status || "").toLowerCase();
+  return ["failed","error","cancelled","canceled"].some(x => value.includes(x));
+}
+
+function acquisitionQuery(state, round) {
+  const base = state.industry + " in " + state.location;
+  const variants = [
+    base,
+    state.industry + " contractor in " + state.location,
+    state.industry + " service company in " + state.location,
+    state.industry + " near " + state.location,
+    state.industry + " company " + state.location,
+    state.industry + " services " + state.location
+  ];
+  return variants[Math.min(round, variants.length - 1)];
+}
+
+async function dataforgeScrape(urls) {
+  if (!DATAFORGE_BASE_URL || !urls.length) return [];
+  const headers = {"content-type":"application/json"};
+  if (DATAFORGE_API_TOKEN) headers.authorization = `Bearer ${DATAFORGE_API_TOKEN}`;
+  const body = await fetchJson(`${DATAFORGE_BASE_URL}/scrape`, {
+    method:"POST", headers, body:JSON.stringify({ urls, max_concurrent:25 })
+  }, 120000);
+  return body?.results || [];
+}
+
 function normalizeDomain(value = "") {
   try {
     const url = value.includes("://") ? new URL(value) : new URL("https://" + value);
@@ -161,6 +244,8 @@ function buildServer() {
       qualification: { configured: true },
       yozh: { configured: !!YOZH_BASE_URL },
       scrapling: { configured: !!SCRAPLING_MCP_URL, authConfigured: !!SCRAPLING_MCP_TOKEN },
+      keelead: { configured: !!KEELEAD_BASE_URL },
+      dataforge: { configured: !!DATAFORGE_BASE_URL, authConfigured: !!DATAFORGE_API_TOKEN },
       components: {
         googleMaps: "zoeyzb/google-maps-scraper",
         crawl4ai: "unclecode/crawl4ai:latest (Railway service: crawl4ai-runtime)",
@@ -172,7 +257,10 @@ function buildServer() {
         emailEnrich: "zoeyzb/email-enrich",
         dedupe: "zoeyzb/dedupe",
         leadQualifier: "zoeyzb/LeadQualifier (offline ML reference)",
-        aiLeadScoring: "zoeyzb/ai-lead-scoring-qualification (n8n reference workflow)"
+        aiLeadScoring: "zoeyzb/ai-lead-scoring-qualification (n8n reference workflow)",
+        keelead: "zoeyzb/keelead (secondary discovery + email verification only; fake demo enrichment is not used)",
+        dataforge: "zoeyzb/dataforge (real website/email/tech enrichment API)",
+        openGTM: "zoeyzb/opengtm (qualification/orchestration patterns; Gemini discovery disabled unless configured)"
       }
     };
     return jsonText(status);
@@ -288,6 +376,213 @@ function buildServer() {
     }
   });
 
+
+  server.registerTool("keelead_search", {
+    description: "Secondary lead discovery through KeeLead's real source manager. Use as a supplement to Google Maps, not as the primary local-business source.",
+    inputSchema: z.object({
+      query: z.string().min(1),
+      count: z.number().int().min(1).max(100).default(25),
+      location: z.string().optional(),
+      industry: z.string().optional()
+    })
+  }, async (args) => {
+    if (!KEELEAD_BASE_URL) return { content:[{type:"text",text:"KEELEAD_BASE_URL is not configured"}], isError:true };
+    try {
+      return jsonText(await fetchJson(`${KEELEAD_BASE_URL}/api/leads`, {
+        method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(args)
+      }, 120000));
+    } catch (e) {
+      return { content:[{type:"text",text:`KeeLead error: ${e.message}`}], isError:true };
+    }
+  });
+
+  server.registerTool("keelead_verify_email", {
+    description: "Verify one or more candidate business emails using KeeLead's multi-layer DNS/MX/SMTP-oriented verifier.",
+    inputSchema: z.object({
+      email: z.string().email().optional(),
+      emails: z.array(z.string().email()).max(100).optional()
+    })
+  }, async (args) => {
+    if (!KEELEAD_BASE_URL) return { content:[{type:"text",text:"KEELEAD_BASE_URL is not configured"}], isError:true };
+    try {
+      return jsonText(await fetchJson(`${KEELEAD_BASE_URL}/api/verify`, {
+        method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(args)
+      }, 120000));
+    } catch (e) {
+      return { content:[{type:"text",text:`KeeLead verification error: ${e.message}`}], isError:true };
+    }
+  });
+
+  server.registerTool("dataforge_enrich_websites", {
+    description: "Enrich public business websites with real DataForge extraction: public emails, tech stack, CMS, SSL status, response speed and HTTP status.",
+    inputSchema: z.object({
+      urls: z.array(z.string().url()).min(1).max(100)
+    })
+  }, async ({ urls }) => {
+    if (!DATAFORGE_BASE_URL) return { content:[{type:"text",text:"DATAFORGE_BASE_URL is not configured"}], isError:true };
+    try { return jsonText({count:urls.length, results:await dataforgeScrape(urls)}); }
+    catch (e) { return { content:[{type:"text",text:`DataForge error: ${e.message}`}], isError:true }; }
+  });
+
+  server.registerTool("acquire_qualified_leads", {
+    description: "Start a durable multi-round local-business acquisition. Use this when the user asks for a target number of qualified leads. Call acquisition_status with the returned state_token until complete.",
+    inputSchema: z.object({
+      industry: z.string().min(1),
+      location: z.string().min(1),
+      target: z.number().int().min(1).max(5000).default(100),
+      min_score: z.number().int().min(0).max(100).default(50),
+      require_phone: z.boolean().default(false),
+      require_email: z.boolean().default(false),
+      include_no_website: z.boolean().default(true),
+      max_rounds: z.number().int().min(1).max(6).default(4),
+      depth: z.number().int().min(1).max(50).default(10)
+    })
+  }, async (args) => {
+    if (!MAPS_BASE_URL) return { content:[{type:"text",text:"MAPS_BASE_URL is not configured"}], isError:true };
+    const state = {...args, round:0, jobs:[], created_at:new Date().toISOString()};
+    const query = acquisitionQuery(state, 0);
+    try {
+      const job = await fetchJson(`${MAPS_BASE_URL}/api/v1/jobs`, {
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({
+          name:`Recover acquisition: ${args.industry} / ${args.location} / round 1`,
+          keywords:[query],
+          depth:args.depth,
+          max_time:900,
+          extra_reviews:false
+        })
+      }, 30000);
+      const jobId = String(job?.id || job?.job_id || job?.job?.id || "");
+      if (!jobId) throw new Error("Maps backend did not return a job id");
+      state.jobs.push({id:jobId,query,round:0});
+      return jsonText({
+        status:"started",
+        acquisition_id:jobId,
+        state_token:encodeState(state),
+        query,
+        target:args.target,
+        next:"Call acquisition_status with state_token until status is complete."
+      });
+    } catch (e) {
+      return { content:[{type:"text",text:`Acquisition start error: ${e.message}`}], isError:true };
+    }
+  });
+
+  server.registerTool("acquisition_status", {
+    description: "Continue a Recover Scrape acquisition. Checks Maps jobs, downloads completed CSVs, deduplicates, enriches websites with DataForge, scores leads, and starts another discovery round if the requested target has not been reached.",
+    inputSchema: z.object({
+      state_token: z.string().min(1)
+    })
+  }, async ({ state_token }) => {
+    if (!MAPS_BASE_URL) return { content:[{type:"text",text:"MAPS_BASE_URL is not configured"}], isError:true };
+    let state;
+    try { state = decodeState(state_token); }
+    catch { return { content:[{type:"text",text:"Invalid acquisition state token"}], isError:true }; }
+
+    try {
+      const statuses = [];
+      let pending = false;
+      for (const j of state.jobs) {
+        const job = await fetchJson(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(j.id)}`, {}, 30000);
+        statuses.push({id:j.id,query:j.query,status:job?.status || job?.state || job?.job?.status || "unknown"});
+        if (!mapsTerminal(job) && !mapsFailed(job)) pending = true;
+      }
+      if (pending) {
+        return jsonText({
+          status:"running",
+          state_token,
+          jobs:statuses,
+          next:"Call acquisition_status again after the Maps job has progressed."
+        });
+      }
+
+      let all = [];
+      for (const j of state.jobs) {
+        try {
+          const csv = await fetchText(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(j.id)}/download`, {}, 60000);
+          all.push(...parseCsv(csv));
+        } catch {}
+      }
+      let leads = dedupeRecords(all);
+
+      const websites = leads.map(x=>x.website).filter(Boolean).slice(0, Math.min(100, leads.length));
+      const enriched = websites.length ? await dataforgeScrape(websites) : [];
+      const byDomain = new Map(enriched.map(x=>[normalizeDomain(x.url || ""), x]));
+      leads = leads.map(lead => {
+        const e = byDomain.get(normalizeDomain(lead.website || ""));
+        if (!e) return lead;
+        return {
+          ...lead,
+          emails: e.emails || lead.emails,
+          tech_stack: e.tech_stack || [],
+          cms_detected: e.cms_detected || null,
+          ssl_valid: e.ssl_valid,
+          site_speed_ms: e.site_speed_ms,
+          website_status: e.status
+        };
+      });
+
+      leads = leads.map(lead => ({...lead, qualification:scoreLead(lead)}))
+        .filter(lead => lead.qualification.score >= state.min_score)
+        .filter(lead => !state.require_phone || !!lead.phone)
+        .filter(lead => !state.require_email || !!lead.email || (Array.isArray(lead.emails) && lead.emails.length))
+        .filter(lead => state.include_no_website || !!lead.website)
+        .sort((a,b)=>b.qualification.score-a.qualification.score);
+
+      if (leads.length >= state.target) {
+        return jsonText({
+          status:"complete",
+          target:state.target,
+          qualified_count:leads.length,
+          returned_count:Math.min(state.target, leads.length),
+          rounds:state.jobs.length,
+          leads:leads.slice(0,state.target)
+        });
+      }
+
+      const nextRound = state.jobs.length;
+      if (nextRound >= state.max_rounds) {
+        return jsonText({
+          status:"partial_complete",
+          target:state.target,
+          qualified_count:leads.length,
+          rounds:state.jobs.length,
+          reason:"max_rounds_reached",
+          leads
+        });
+      }
+
+      const query = acquisitionQuery(state, nextRound);
+      const job = await fetchJson(`${MAPS_BASE_URL}/api/v1/jobs`, {
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({
+          name:`Recover acquisition: ${state.industry} / ${state.location} / round ${nextRound+1}`,
+          keywords:[query],
+          depth:state.depth,
+          max_time:900,
+          extra_reviews:false
+        })
+      }, 30000);
+      const jobId = String(job?.id || job?.job_id || job?.job?.id || "");
+      if (!jobId) throw new Error("Maps backend did not return a job id for next round");
+      state.jobs.push({id:jobId,query,round:nextRound});
+      return jsonText({
+        status:"continuing",
+        qualified_so_far:leads.length,
+        target:state.target,
+        new_job_id:jobId,
+        query,
+        state_token:encodeState(state),
+        jobs:[...statuses,{id:jobId,query,status:"started"}],
+        next:"Call acquisition_status again."
+      });
+    } catch (e) {
+      return { content:[{type:"text",text:`Acquisition status error: ${e.message}`}], isError:true };
+    }
+  });
+
   server.registerTool("enrich_email", {
     description: "Find public professional email evidence for a named person/company using the forked email-enrich library. Use only for lawful business research/outreach.",
     inputSchema: z.object({
@@ -374,7 +669,9 @@ const httpServer = createHttpServer((req, res) => {
       maps: MAPS_BASE_URL ? `${MAPS_BASE_URL}/api/v1/jobs` : "",
       crawl4ai: CRAWL4AI_BASE_URL ? `${CRAWL4AI_BASE_URL}/health` : "",
       yozh: YOZH_BASE_URL ? `${YOZH_BASE_URL}/api/v1/health` : "",
-      scrapling: SCRAPLING_MCP_URL ? SCRAPLING_MCP_URL.replace(/\/mcp$/, "/health") : ""
+      scrapling: SCRAPLING_MCP_URL ? SCRAPLING_MCP_URL.replace(/\/mcp$/, "/health") : "",
+      keelead: KEELEAD_BASE_URL ? `${KEELEAD_BASE_URL}/api/sources` : "",
+      dataforge: DATAFORGE_BASE_URL ? `${DATAFORGE_BASE_URL}/health` : ""
     };
 
     void (async () => {
