@@ -1,4 +1,5 @@
 import { createClient } from "redis";
+import { randomUUID } from "node:crypto";
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -383,6 +384,41 @@ async function recoverInterrupted() {
 await redis.connect();
 console.log("Acquisition worker connected to Redis");
 await recoverInterrupted();
+
+if (process.env.ACQUISITION_SMOKE_TEST === "1") {
+  const smokeGuard = "recover:acq:smoke:last";
+  const previous = await redis.get(smokeGuard);
+  if (!previous) {
+    const id = randomUUID();
+    const smokeJob = {
+      id,
+      industry:"HVAC",
+      location:"Galesburg, IL",
+      target:3,
+      min_score:0,
+      require_phone:false,
+      require_email:false,
+      include_no_website:true,
+      max_rounds:1,
+      depth:1,
+      status:"queued",
+      phase:"queued",
+      round:0,
+      rounds_completed:0,
+      raw_count:0,
+      unique_count:0,
+      qualified_count:0,
+      stored_count:0,
+      maps_jobs:[],
+      created_at:new Date().toISOString(),
+      updated_at:new Date().toISOString()
+    };
+    await saveJob(smokeJob);
+    await redis.lPush("recover:acquisition:queue", id);
+    await redis.set(smokeGuard, id, { EX: 3600 });
+    console.log("Acquisition smoke test queued", id);
+  }
+}
 
 while (true) {
   try {
