@@ -259,6 +259,8 @@ function compactLead(lead) {
     name: lead.name || lead.title || "",
     category: lead.category || lead.industry || "",
     address: lead.address || "",
+    city: lead.city || lead.locality || "",
+    region: lead.region || lead.state || lead.state_code || "",
     website: lead.website || "",
     phone: lead.phone || "",
     emails: normalizeEmails(lead.emails || lead.email || ""),
