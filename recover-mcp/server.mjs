@@ -11,6 +11,7 @@ const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
 const CRAWL4AI_BASE_URL = (process.env.CRAWL4AI_BASE_URL || "").replace(/\/$/, "");
 const CRAWL4AI_API_TOKEN = process.env.CRAWL4AI_API_TOKEN || "";
 const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || "";
+const MCP_AUTH_TOKEN_SECONDARY = process.env.MCP_AUTH_TOKEN_SECONDARY || "";
 const YOZH_BASE_URL = (process.env.YOZH_BASE_URL || "").replace(/\/$/, "");
 const SCRAPLING_MCP_URL = (process.env.SCRAPLING_MCP_URL || "").replace(/\/$/, "");
 const SCRAPLING_MCP_TOKEN = process.env.SCRAPLING_MCP_TOKEN || "";
@@ -744,9 +745,13 @@ const httpServer = createHttpServer((req, res) => {
     return;
   }
   if (req.url?.startsWith("/mcp")) {
-    if (MCP_AUTH_TOKEN) {
+    if (MCP_AUTH_TOKEN || MCP_AUTH_TOKEN_SECONDARY) {
       const auth = req.headers.authorization || "";
-      if (auth !== `Bearer ${MCP_AUTH_TOKEN}`) {
+      const allowed = [
+        MCP_AUTH_TOKEN ? `Bearer ${MCP_AUTH_TOKEN}` : "",
+        MCP_AUTH_TOKEN_SECONDARY ? `Bearer ${MCP_AUTH_TOKEN_SECONDARY}` : "",
+      ].filter(Boolean);
+      if (!allowed.includes(auth)) {
         res.writeHead(401, {"content-type":"application/json"});
         res.end(JSON.stringify({error:"unauthorized"}));
         return;
