@@ -15,8 +15,7 @@ const SCRAPLING_MCP_TOKEN = process.env.SCRAPLING_MCP_TOKEN || "";
 const KEELEAD_BASE_URL = (process.env.KEELEAD_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
-const SMOKE_TEST_ENABLED = process.env.SMOKE_TEST_ENABLED === "1";
-let smokeStateToken = "";
+const acquisitionResultStore = new Map();
 
 const jsonText = (value) => ({
   content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
@@ -46,30 +45,6 @@ function parseMcpPayload(text) {
     try { return JSON.parse(line.slice(5).trim()); } catch {}
   }
   return { raw: text };
-}
-
-async function callSelfMcpTool(toolName, args = {}) {
-  const url = "http://127.0.0.1:" + PORT + "/mcp";
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "accept": "application/json, text/event-stream",
-      "authorization": "Bearer " + MCP_AUTH_TOKEN
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method: "tools/call",
-      params: { name: toolName, arguments: args }
-    })
-  });
-  const bodyText = await response.text();
-  if (!response.ok) throw new Error("self MCP call failed: " + response.status + " " + bodyText.slice(0,500));
-  const payload = parseMcpPayload(bodyText);
-  const raw = payload?.result?.content?.[0]?.text;
-  if (!raw) return payload;
-  try { return JSON.parse(raw); } catch { return { raw }; }
 }
 
 async function callRemoteMcpTool(url, token, toolName, args = {}) {
@@ -227,6 +202,75 @@ function dedupeRecords(records) {
   return output;
 }
 
+function matchesRequestedIndustry(lead, industry) {
+  const target = normalizeText(industry || "");
+  const haystack = normalizeText(
+    (lead.category || "") + " " + (lead.title || lead.name || "") + " " + (lead.descriptions || "")
+  );
+  if (!target) return true;
+  if (/hvac|heating|air conditioning|cooling/.test(target)) {
+    return /hvac|heating|cooling|air conditioning|mechanical contractor/.test(haystack);
+  }
+  if (/roof/.test(target)) return /roof/.test(haystack);
+  if (/plumb/.test(target)) return /plumb/.test(haystack);
+  if (/electric/.test(target)) return /electric/.test(haystack);
+  if (/landscap/.test(target)) return /landscap|lawn|tree service/.test(haystack);
+  if (/dent/.test(target)) return /dent/.test(haystack);
+  if (/restaurant|food/.test(target)) return /restaurant|food|cafe|grill|kitchen/.test(haystack);
+  const tokens = target.split(" ").filter(x => x.length >= 4);
+  return tokens.length === 0 || tokens.some(token => haystack.includes(token));
+}
+
+function normalizeEmails(value) {
+  const values = Array.isArray(value) ? value : String(value || "").split(/[;,\s]+/);
+  return [...new Set(values.map(x => String(x).trim().toLowerCase()).filter(x => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)))];
+}
+
+function ownerNameFromLead(lead) {
+  if (lead.owner_name) return String(lead.owner_name);
+  if (!lead.owner) return "";
+  if (typeof lead.owner === "object") return String(lead.owner.name || "");
+  try {
+    const parsed = JSON.parse(String(lead.owner));
+    return String(parsed?.name || "");
+  } catch {
+    return "";
+  }
+}
+
+function compactLead(lead) {
+  return {
+    name: lead.name || lead.title || "",
+    category: lead.category || lead.industry || "",
+    address: lead.address || "",
+    website: lead.website || "",
+    phone: lead.phone || "",
+    emails: normalizeEmails(lead.emails || lead.email || ""),
+    owner_name: ownerNameFromLead(lead),
+    google_maps_url: lead.link || lead.google_maps_url || "",
+    place_id: lead.place_id || "",
+    review_count: Number(lead.review_count || lead.reviews || 0),
+    review_rating: Number(lead.review_rating || lead.rating || 0),
+    latitude: lead.latitude ? Number(lead.latitude) : null,
+    longitude: lead.longitude ? Number(lead.longitude) : null,
+    tech_stack: Array.isArray(lead.tech_stack) ? lead.tech_stack : [],
+    cms_detected: lead.cms_detected || null,
+    ssl_valid: typeof lead.ssl_valid === "boolean" ? lead.ssl_valid : null,
+    site_speed_ms: Number.isFinite(Number(lead.site_speed_ms)) ? Number(lead.site_speed_ms) : null,
+    website_status: lead.website_status || null,
+    qualification: lead.qualification || null
+  };
+}
+
+function storeAcquisitionResults(acquisitionId, leads) {
+  if (!acquisitionId) return;
+  acquisitionResultStore.set(acquisitionId, leads.map(compactLead));
+  while (acquisitionResultStore.size > 20) {
+    const firstKey = acquisitionResultStore.keys().next().value;
+    acquisitionResultStore.delete(firstKey);
+  }
+}
+
 function scoreLead(lead) {
   let score = 0;
   const reasons = [];
@@ -254,7 +298,7 @@ function buildServer() {
     { name: "recover-scrape", version: "1.0.0" },
     {
       instructions:
-        "Use Recover Scrape for business discovery, Google Maps scraping, website crawling, stealth scraping, public-contact enrichment, deduplication and lead qualification. Prefer maps_start_job for local-business discovery. For websites, try crawl_website first; if blocked or highly dynamic, use scrapling_stealth_fetch; for durable queued browser work use yozh_start_scrape. Use enrich_email for public professional-email enrichment, dedupe_leads before returning large lead sets, and qualify_leads to rank prospects. Never claim an email, owner identity, or lead attribute is verified unless returned evidence supports it."
+        "Use Recover Scrape for business discovery, Google Maps scraping, website crawling, stealth scraping, public-contact enrichment, deduplication and lead qualification. When the user requests a target number of leads, prefer acquire_qualified_leads, continue with acquisition_status until terminal, then page results with acquisition_results. Prefer maps_start_job for one-off local-business discovery. For websites, try crawl_website first; if blocked or highly dynamic, use scrapling_stealth_fetch; for durable queued browser work use yozh_start_scrape. Use enrich_email for public professional-email enrichment, dedupe_leads before returning large lead sets, and qualify_leads to rank prospects. Never claim an email, owner identity, or lead attribute is verified unless returned evidence supports it."
     }
   );
 
@@ -540,7 +584,8 @@ function buildServer() {
         };
       });
 
-      leads = leads.map(lead => ({...lead, qualification:scoreLead(lead)}))
+      leads = leads.filter(lead => matchesRequestedIndustry(lead, state.industry))
+        .map(lead => ({...lead, qualification:scoreLead(lead)}))
         .filter(lead => lead.qualification.score >= state.min_score)
         .filter(lead => !state.require_phone || !!lead.phone)
         .filter(lead => !state.require_email || !!lead.email || (Array.isArray(lead.emails) && lead.emails.length))
@@ -548,25 +593,37 @@ function buildServer() {
         .sort((a,b)=>b.qualification.score-a.qualification.score);
 
       if (leads.length >= state.target) {
+        const acquisitionId = state.jobs[0]?.id || "";
+        const finalLeads = leads.slice(0, state.target);
+        storeAcquisitionResults(acquisitionId, finalLeads);
         return jsonText({
           status:"complete",
+          acquisition_id:acquisitionId,
           target:state.target,
           qualified_count:leads.length,
-          returned_count:Math.min(state.target, leads.length),
+          stored_count:finalLeads.length,
           rounds:state.jobs.length,
-          leads:leads.slice(0,state.target)
+          preview:finalLeads.slice(0, Math.min(20, finalLeads.length)).map(compactLead),
+          results_paged:finalLeads.length > 20,
+          next:finalLeads.length > 20 ? "Call acquisition_results with acquisition_id, offset, and limit to fetch all stored leads." : "All results are in preview."
         });
       }
 
       const nextRound = state.jobs.length;
       if (nextRound >= state.max_rounds) {
+        const acquisitionId = state.jobs[0]?.id || "";
+        storeAcquisitionResults(acquisitionId, leads);
         return jsonText({
           status:"partial_complete",
+          acquisition_id:acquisitionId,
           target:state.target,
           qualified_count:leads.length,
+          stored_count:leads.length,
           rounds:state.jobs.length,
           reason:"max_rounds_reached",
-          leads
+          preview:leads.slice(0, Math.min(20, leads.length)).map(compactLead),
+          results_paged:leads.length > 20,
+          next:leads.length > 20 ? "Call acquisition_results with acquisition_id, offset, and limit to fetch stored leads." : "All results are in preview."
         });
       }
 
@@ -599,6 +656,30 @@ function buildServer() {
     } catch (e) {
       return { content:[{type:"text",text:`Acquisition status error: ${e.message}`}], isError:true };
     }
+  });
+
+  server.registerTool("acquisition_results", {
+    description: "Fetch a page of compact leads from a completed acquisition. Results are kept in memory for recent acquisitions and may be lost after a service restart.",
+    inputSchema: z.object({
+      acquisition_id: z.string().min(1),
+      offset: z.number().int().min(0).default(0),
+      limit: z.number().int().min(1).max(200).default(100)
+    })
+  }, async ({ acquisition_id, offset, limit }) => {
+    const leads = acquisitionResultStore.get(acquisition_id);
+    if (!leads) {
+      return { content:[{type:"text",text:"Acquisition results are not available in this process. They may have expired after a restart."}], isError:true };
+    }
+    const page = leads.slice(offset, offset + limit);
+    return jsonText({
+      acquisition_id,
+      total:leads.length,
+      offset,
+      limit,
+      returned:page.length,
+      next_offset:offset + page.length < leads.length ? offset + page.length : null,
+      leads:page
+    });
   });
 
   server.registerTool("enrich_email", {
@@ -682,62 +763,6 @@ const handler = createMcpHandler(buildServer);
 const nodeHandler = toNodeHandler(handler);
 
 const httpServer = createHttpServer((req, res) => {
-  if (req.url === "/__recover_smoke/start" && req.method === "POST") {
-    if (!SMOKE_TEST_ENABLED) {
-      res.writeHead(404, {"content-type":"application/json"});
-      res.end(JSON.stringify({error:"not_found"}));
-      return;
-    }
-    void (async () => {
-      try {
-        const result = await callSelfMcpTool("acquire_qualified_leads", {
-          industry:"HVAC",
-          location:"Galesburg, IL",
-          target:3,
-          min_score:0,
-          require_phone:false,
-          require_email:false,
-          include_no_website:true,
-          max_rounds:1,
-          depth:1
-        });
-        smokeStateToken = result?.state_token || "";
-        const safe = {...result};
-        delete safe.state_token;
-        safe.state_token_present = !!smokeStateToken;
-        res.writeHead(200, {"content-type":"application/json"});
-        res.end(JSON.stringify(safe));
-      } catch (error) {
-        res.writeHead(500, {"content-type":"application/json"});
-        res.end(JSON.stringify({error:String(error?.message || error)}));
-      }
-    })();
-    return;
-  }
-
-  if (req.url === "/__recover_smoke/status" && req.method === "POST") {
-    if (!SMOKE_TEST_ENABLED || !smokeStateToken) {
-      res.writeHead(404, {"content-type":"application/json"});
-      res.end(JSON.stringify({error:"not_found"}));
-      return;
-    }
-    void (async () => {
-      try {
-        const result = await callSelfMcpTool("acquisition_status", {state_token:smokeStateToken});
-        if (result?.state_token) smokeStateToken = result.state_token;
-        const safe = {...result};
-        delete safe.state_token;
-        safe.state_token_present = !!smokeStateToken;
-        res.writeHead(200, {"content-type":"application/json"});
-        res.end(JSON.stringify(safe));
-      } catch (error) {
-        res.writeHead(500, {"content-type":"application/json"});
-        res.end(JSON.stringify({error:String(error?.message || error)}));
-      }
-    })();
-    return;
-  }
-
   if (req.url === "/health") {
     const checks = {
       maps: MAPS_BASE_URL ? `${MAPS_BASE_URL}/api/v1/jobs` : "",
