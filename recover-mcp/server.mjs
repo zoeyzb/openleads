@@ -279,12 +279,15 @@ function scoreLead(lead) {
   if (/hvac|heating|air conditioning|plumb|roof|electric/.test(category)) add(15, "target local-service category");
   if (!lead.website) add(20, "no website");
   if (lead.website && (lead.website_issues || lead.bad_website || lead.outdated_website)) add(15, "website has conversion/quality issues");
+  if (lead.website && lead.website_status && lead.website_status !== "ok") add(10, "website fetch/health problem");
+  if (lead.website && lead.ssl_valid === false) add(10, "website SSL problem");
+  if (lead.website && Number(lead.site_speed_ms || 0) >= 3000) add(10, "slow website");
   const reviews = Number(lead.review_count || lead.reviews || 0);
   if (reviews >= 20) add(10, "20+ reviews");
   if (Number(lead.review_rating || lead.rating || 0) >= 4.2) add(5, "strong rating");
   if (lead.phone) add(10, "phone available");
   if (lead.email || (Array.isArray(lead.emails) && lead.emails.length)) add(10, "email available");
-  if (lead.owner || lead.owner_name) add(10, "owner signal available");
+  if (lead.owner_name) add(10, "identified owner/decision-maker signal available");
   if (lead.no_online_booking || lead.booking_missing) add(10, "booking gap");
   if (lead.no_chat) add(5, "chat gap");
   if (lead.missed_call_gap || lead.no_missed_call_automation) add(5, "missed-call automation gap");
