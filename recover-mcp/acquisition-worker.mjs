@@ -1,4 +1,5 @@
 import { createClient } from "redis";
+import { randomUUID } from "node:crypto";
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -6,6 +7,10 @@ const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/,
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 const JOB_TTL = Number(process.env.ACQUISITION_TTL_SECONDS || 604800);
 const POLL_MS = Number(process.env.ACQUISITION_POLL_MS || 10000);
+const LEASE_SECONDS = Number(process.env.ACQUISITION_LEASE_SECONDS || 180);
+const RETRY_ATTEMPTS = Number(process.env.ACQUISITION_RETRY_ATTEMPTS || 3);
+let shuttingDown = false;
+let currentJobId = null;
 
 if (!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL is required");
 if (!MAPS_BASE_URL) throw new Error("MAPS_BASE_URL is required");
@@ -14,6 +19,29 @@ const redis = createClient({ url: REDIS_URL });
 redis.on("error", err => console.error("Redis error", err));
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function isRetryableError(error) {
+  const message = String(error?.message || error || "");
+  if (/\b(408|425|429|500|502|503|504)\b/.test(message)) return true;
+  return /abort|timeout|timed out|fetch failed|econnreset|econnrefused|socket|network/i.test(message);
+}
+
+async function withRetry(label, fn, attempts = RETRY_ATTEMPTS) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (shuttingDown) throw new Error("worker shutting down");
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isRetryableError(error)) throw error;
+      const delay = Math.min(15000, 1000 * (2 ** (attempt - 1))) + Math.floor(Math.random() * 500);
+      console.warn(label, "attempt", attempt, "failed; retrying in", delay, "ms:", error.message);
+      await sleep(delay);
+    }
+  }
+  throw lastError;
+}
 
 async function fetchJson(url, init = {}, timeoutMs = 120000) {
   const controller = new AbortController();
@@ -183,15 +211,16 @@ async function dataforgeScrape(urls) {
   if (!DATAFORGE_BASE_URL || !urls.length) return [];
   const headers={"content-type":"application/json"};
   if (DATAFORGE_API_TOKEN) headers.authorization=`Bearer ${DATAFORGE_API_TOKEN}`;
-  const body=await fetchJson(`${DATAFORGE_BASE_URL}/scrape`,{
+  const body=await withRetry("DataForge scrape", () => fetchJson(`${DATAFORGE_BASE_URL}/scrape`,{
     method:"POST",headers,body:JSON.stringify({urls,max_concurrent:25})
-  },120000);
+  },120000));
   return body?.results||[];
 }
 
 const jobKey=id=>`recover:acq:${id}`;
 const resultsKey=id=>`recover:acq:${id}:results`;
 const rawKey=id=>`recover:acq:${id}:raw`;
+const leaseKey=id=>`recover:acq:${id}:lease`;
 
 async function saveJob(job) {
   job.updated_at=new Date().toISOString();
@@ -214,7 +243,8 @@ async function replaceList(key,values) {
 async function waitForMaps(jobId, acquisition) {
   const deadline=Date.now()+20*60*1000;
   while (Date.now()<deadline) {
-    const status=await fetchJson(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(jobId)}`,{},30000);
+    if (shuttingDown) throw new Error("worker shutting down");
+    const status=await withRetry("Maps status", () => fetchJson(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(jobId)}`,{},30000));
     acquisition.current_maps_status=mapsStatus(status)||"unknown";
     await saveJob(acquisition);
     if (mapsTerminal(status)) return status;
@@ -225,11 +255,39 @@ async function waitForMaps(jobId, acquisition) {
 }
 
 async function processAcquisition(id) {
+  const leaseToken = randomUUID();
+  const acquired = await redis.set(leaseKey(id), leaseToken, { NX:true, EX:LEASE_SECONDS });
+  if (!acquired) {
+    console.log("Acquisition lease busy; skipping duplicate queue item", id);
+    return;
+  }
+
+  currentJobId = id;
+  const heartbeat = setInterval(async () => {
+    try {
+      const owner = await redis.get(leaseKey(id));
+      if (owner === leaseToken) await redis.expire(leaseKey(id), LEASE_SECONDS);
+    } catch (error) {
+      console.warn("Lease heartbeat failed", id, error.message);
+    }
+  }, 30000);
+  heartbeat.unref?.();
+
   console.log("Acquisition start", id);
   const raw=await redis.get(jobKey(id));
-  if (!raw) return;
+  if (!raw) {
+    clearInterval(heartbeat);
+    await redis.del(leaseKey(id));
+    currentJobId = null;
+    return;
+  }
   const job=JSON.parse(raw);
-  if (["complete","partial_complete"].includes(job.status)) return;
+  if (["complete","partial_complete"].includes(job.status)) {
+    clearInterval(heartbeat);
+    await redis.del(leaseKey(id));
+    currentJobId = null;
+    return;
+  }
 
   job.status="running";
   job.started_at=job.started_at||new Date().toISOString();
@@ -250,7 +308,7 @@ async function processAcquisition(id) {
       await saveJob(job);
 
       console.log("Acquisition maps start", id, "round", round+1, variants[round]);
-      const create=await fetchJson(`${MAPS_BASE_URL}/api/v1/jobs`,{
+      const create=await withRetry("Maps create job", () => fetchJson(`${MAPS_BASE_URL}/api/v1/jobs`,{
         method:"POST",
         headers:{"content-type":"application/json"},
         body:JSON.stringify({
@@ -261,7 +319,7 @@ async function processAcquisition(id) {
           extra_reviews:false,
           lang:"en"
         })
-      },30000);
+      },30000));
       const mapsJobId=String(create?.id||create?.job_id||create?.job?.id||"");
       if (!mapsJobId) throw new Error("Maps backend did not return a job id");
       job.current_maps_job_id=mapsJobId;
@@ -270,7 +328,7 @@ async function processAcquisition(id) {
 
       await waitForMaps(mapsJobId,job);
       console.log("Acquisition maps done", id, mapsJobId);
-      const csv=await fetchText(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(mapsJobId)}/download`,{},60000);
+      const csv=await withRetry("Maps CSV download", () => fetchText(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(mapsJobId)}/download`,{},60000));
       const roundRows=parseCsv(csv);
       console.log("Acquisition CSV parsed", id, "rows", roundRows.length);
       allRaw.push(...roundRows);
@@ -361,11 +419,27 @@ async function processAcquisition(id) {
     await saveJob(job);
     console.log("Acquisition partial_complete", id, "stored", leads.length);
   } catch (error) {
-    job.status="failed";
-    job.phase="failed";
-    job.error=String(error?.message||error);
-    await saveJob(job);
-    console.error("Acquisition failed",id,error);
+    if (shuttingDown || String(error?.message||error).includes("worker shutting down")) {
+      job.status="queued";
+      job.phase="interrupted_requeued";
+      job.error=null;
+      await saveJob(job);
+      await redis.lPush("recover:acquisition:queue", id);
+      console.warn("Acquisition interrupted and requeued", id);
+    } else {
+      job.status="failed";
+      job.phase="failed";
+      job.error=String(error?.message||error);
+      await saveJob(job);
+      console.error("Acquisition failed",id,error);
+    }
+  } finally {
+    clearInterval(heartbeat);
+    try {
+      const owner = await redis.get(leaseKey(id));
+      if (owner === leaseToken) await redis.del(leaseKey(id));
+    } catch {}
+    currentJobId = null;
   }
 }
 
@@ -389,13 +463,22 @@ async function recoverInterrupted() {
   }
 }
 
+function beginShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log("Acquisition worker received", signal, "current_job", currentJobId || "none");
+}
+process.on("SIGTERM", () => beginShutdown("SIGTERM"));
+process.on("SIGINT", () => beginShutdown("SIGINT"));
+
 await redis.connect();
 console.log("Acquisition worker connected to Redis");
 await recoverInterrupted();
 
-while (true) {
+while (!shuttingDown) {
   try {
-    const item=await redis.brPop("recover:acquisition:queue",0);
+    const item=await redis.brPop("recover:acquisition:queue",5);
+    if (shuttingDown) break;
     const id=item?.element||item;
     if (!id) continue;
     await processAcquisition(String(id));
@@ -404,3 +487,7 @@ while (true) {
     await sleep(5000);
   }
 }
+
+
+try { await redis.quit(); } catch {}
+console.log("Acquisition worker stopped cleanly");
