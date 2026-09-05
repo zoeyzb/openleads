@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node recover-mcp/launcher.mjs",
+    "start": "node recover-mcp/server.mjs",
     "worker": "node recover-mcp/acquisition-worker.mjs"
   },
   "dependencies": {
