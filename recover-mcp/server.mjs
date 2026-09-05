@@ -1,4 +1,6 @@
 import { createServer as createHttpServer } from "node:http";
+import { randomUUID } from "node:crypto";
+import { createClient } from "redis";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import * as z from "zod/v4";
@@ -15,7 +17,21 @@ const SCRAPLING_MCP_TOKEN = process.env.SCRAPLING_MCP_TOKEN || "";
 const KEELEAD_BASE_URL = (process.env.KEELEAD_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
-const acquisitionResultStore = new Map();
+const ACQUISITION_REDIS_URL = process.env.ACQUISITION_REDIS_URL || "";
+let acquisitionRedisPromise = null;
+
+async function getAcquisitionRedis() {
+  if (!ACQUISITION_REDIS_URL) throw new Error("ACQUISITION_REDIS_URL is not configured");
+  if (!acquisitionRedisPromise) {
+    acquisitionRedisPromise = (async () => {
+      const client = createClient({ url: ACQUISITION_REDIS_URL });
+      client.on("error", err => console.error("Acquisition Redis error", err));
+      await client.connect();
+      return client;
+    })();
+  }
+  return acquisitionRedisPromise;
+}
 
 const jsonText = (value) => ({
   content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
@@ -301,7 +317,7 @@ function buildServer() {
     { name: "recover-scrape", version: "1.0.0" },
     {
       instructions:
-        "Use Recover Scrape for business discovery, Google Maps scraping, website crawling, stealth scraping, public-contact enrichment, deduplication and lead qualification. When the user requests a target number of leads, prefer acquire_qualified_leads, continue with acquisition_status until terminal, then page results with acquisition_results. Prefer maps_start_job for one-off local-business discovery. For websites, try crawl_website first; if blocked or highly dynamic, use scrapling_stealth_fetch; for durable queued browser work use yozh_start_scrape. Use enrich_email for public professional-email enrichment, dedupe_leads before returning large lead sets, and qualify_leads to rank prospects. Never claim an email, owner identity, or lead attribute is verified unless returned evidence supports it."
+        "Use Recover Scrape for business discovery, Google Maps scraping, website crawling, stealth scraping, public-contact enrichment, deduplication and lead qualification. When the user requests a target number of leads, prefer acquire_qualified_leads, poll acquisition_status by acquisition_id until terminal, then page results with acquisition_results. Prefer maps_start_job for one-off local-business discovery. For websites, try crawl_website first; if blocked or highly dynamic, use scrapling_stealth_fetch; for durable queued browser work use yozh_start_scrape. Use enrich_email for public professional-email enrichment, dedupe_leads before returning large lead sets, and qualify_leads to rank prospects. Never claim an email, owner identity, or lead attribute is verified unless returned evidence supports it."
     }
   );
 
@@ -479,7 +495,7 @@ function buildServer() {
   });
 
   server.registerTool("acquire_qualified_leads", {
-    description: "Start a durable multi-round local-business acquisition. Use this when the user asks for a target number of qualified leads. Call acquisition_status with the returned state_token until complete.",
+    description: "Start a durable background lead-acquisition job. The worker keeps discovering, deduplicating, enriching and qualifying until the target is reached or the search limit is exhausted. Use acquisition_status with the returned acquisition_id.",
     inputSchema: z.object({
       industry: z.string().min(1),
       location: z.string().min(1),
@@ -488,173 +504,81 @@ function buildServer() {
       require_phone: z.boolean().default(false),
       require_email: z.boolean().default(false),
       include_no_website: z.boolean().default(true),
-      max_rounds: z.number().int().min(1).max(6).default(4),
+      max_rounds: z.number().int().min(1).max(20).default(12),
       depth: z.number().int().min(1).max(50).default(10)
     })
   }, async (args) => {
-    if (!MAPS_BASE_URL) return { content:[{type:"text",text:"MAPS_BASE_URL is not configured"}], isError:true };
-    const state = {...args, round:0, jobs:[], created_at:new Date().toISOString()};
-    const query = acquisitionQuery(state, 0);
     try {
-      const job = await fetchJson(`${MAPS_BASE_URL}/api/v1/jobs`, {
-        method:"POST",
-        headers:{"content-type":"application/json"},
-        body:JSON.stringify({
-          name:`Recover acquisition: ${args.industry} / ${args.location} / round 1`,
-          keywords:[query],
-          depth:args.depth,
-          max_time:900,
-          extra_reviews:false,
-          lang:"en"
-        })
-      }, 30000);
-      const jobId = String(job?.id || job?.job_id || job?.job?.id || "");
-      if (!jobId) throw new Error("Maps backend did not return a job id");
-      state.jobs.push({id:jobId,query,round:0});
+      const redis = await getAcquisitionRedis();
+      const id = randomUUID();
+      const job = {
+        id,
+        ...args,
+        status:"queued",
+        phase:"queued",
+        round:0,
+        rounds_completed:0,
+        raw_count:0,
+        unique_count:0,
+        qualified_count:0,
+        stored_count:0,
+        maps_jobs:[],
+        created_at:new Date().toISOString(),
+        updated_at:new Date().toISOString()
+      };
+      await redis.set(`recover:acq:${id}`, JSON.stringify(job), { EX: 604800 });
+      await redis.sAdd("recover:acq:index", id);
+      await redis.lPush("recover:acquisition:queue", id);
       return jsonText({
-        status:"started",
-        acquisition_id:jobId,
-        state_token:encodeState(state),
-        query,
+        status:"queued",
+        acquisition_id:id,
         target:args.target,
-        next:"Call acquisition_status with state_token until status is complete."
+        industry:args.industry,
+        location:args.location,
+        next:"Call acquisition_status with acquisition_id. The background worker continues without keeping this chat request open."
       });
     } catch (e) {
-      return { content:[{type:"text",text:`Acquisition start error: ${e.message}`}], isError:true };
+      return { content:[{type:"text",text:`Acquisition queue error: ${e.message}`}], isError:true };
     }
   });
 
   server.registerTool("acquisition_status", {
-    description: "Continue a Recover Scrape acquisition. Checks Maps jobs, downloads completed CSVs, deduplicates, enriches websites with DataForge, scores leads, and starts another discovery round if the requested target has not been reached.",
+    description: "Get live progress for a background Recover Scrape acquisition.",
     inputSchema: z.object({
-      state_token: z.string().min(1)
+      acquisition_id: z.string().min(1)
     })
-  }, async ({ state_token }) => {
-    if (!MAPS_BASE_URL) return { content:[{type:"text",text:"MAPS_BASE_URL is not configured"}], isError:true };
-    let state;
-    try { state = decodeState(state_token); }
-    catch { return { content:[{type:"text",text:"Invalid acquisition state token"}], isError:true }; }
-
+  }, async ({ acquisition_id }) => {
     try {
-      const statuses = [];
-      let pending = false;
-      for (const j of state.jobs) {
-        const job = await fetchJson(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(j.id)}`, {}, 30000);
-        statuses.push({id:j.id,query:j.query,status:job?.status || job?.Status || job?.state || job?.State || job?.job?.status || job?.job?.Status || "unknown"});
-        if (!mapsTerminal(job) && !mapsFailed(job)) pending = true;
+      const redis = await getAcquisitionRedis();
+      const raw = await redis.get(`recover:acq:${acquisition_id}`);
+      if (!raw) {
+        return { content:[{type:"text",text:"Acquisition not found or expired."}], isError:true };
       }
-      if (pending) {
-        return jsonText({
-          status:"running",
-          state_token,
-          jobs:statuses,
-          next:"Call acquisition_status again after the Maps job has progressed."
-        });
-      }
-
-      let all = [];
-      for (const j of state.jobs) {
-        try {
-          const csv = await fetchText(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(j.id)}/download`, {}, 60000);
-          all.push(...parseCsv(csv));
-        } catch {}
-      }
-      let leads = dedupeRecords(all);
-
-      const websites = [...new Set(leads.map(x=>x.website).filter(Boolean))];
-      const enriched = [];
-      for (let i = 0; i < websites.length; i += 100) {
-        try {
-          enriched.push(...await dataforgeScrape(websites.slice(i, i + 100)));
-        } catch {}
-      }
-      const byDomain = new Map(enriched.map(x=>[normalizeDomain(x.url || ""), x]));
-      leads = leads.map(lead => {
-        const e = byDomain.get(normalizeDomain(lead.website || ""));
-        if (!e) return lead;
-        const leadDomain = normalizeDomain(lead.website || "");
-        const sameDomainEmails = Array.isArray(e.emails)
-          ? e.emails.filter(email => normalizeDomain(String(email).split("@")[1] || "") === leadDomain)
-          : [];
-        return {
-          ...lead,
-          emails: sameDomainEmails.length ? sameDomainEmails : lead.emails,
-          tech_stack: e.tech_stack || [],
-          cms_detected: e.cms_detected || null,
-          ssl_valid: e.ssl_valid,
-          site_speed_ms: e.site_speed_ms,
-          website_status: e.status
-        };
-      });
-
-      leads = leads.filter(lead => matchesRequestedIndustry(lead, state.industry))
-        .map(lead => ({...lead, qualification:scoreLead(lead)}))
-        .filter(lead => lead.qualification.score >= state.min_score)
-        .filter(lead => !state.require_phone || !!lead.phone)
-        .filter(lead => !state.require_email || !!lead.email || (Array.isArray(lead.emails) && lead.emails.length))
-        .filter(lead => state.include_no_website || !!lead.website)
-        .sort((a,b)=>b.qualification.score-a.qualification.score);
-
-      if (leads.length >= state.target) {
-        const acquisitionId = state.jobs[0]?.id || "";
-        const finalLeads = leads.slice(0, state.target);
-        storeAcquisitionResults(acquisitionId, finalLeads);
-        return jsonText({
-          status:"complete",
-          acquisition_id:acquisitionId,
-          target:state.target,
-          qualified_count:leads.length,
-          stored_count:finalLeads.length,
-          rounds:state.jobs.length,
-          preview:finalLeads.slice(0, Math.min(20, finalLeads.length)).map(compactLead),
-          results_paged:finalLeads.length > 20,
-          next:finalLeads.length > 20 ? "Call acquisition_results with acquisition_id, offset, and limit to fetch all stored leads." : "All results are in preview."
-        });
-      }
-
-      const nextRound = state.jobs.length;
-      if (nextRound >= state.max_rounds) {
-        const acquisitionId = state.jobs[0]?.id || "";
-        storeAcquisitionResults(acquisitionId, leads);
-        return jsonText({
-          status:"partial_complete",
-          acquisition_id:acquisitionId,
-          target:state.target,
-          qualified_count:leads.length,
-          stored_count:leads.length,
-          rounds:state.jobs.length,
-          reason:"max_rounds_reached",
-          preview:leads.slice(0, Math.min(20, leads.length)).map(compactLead),
-          results_paged:leads.length > 20,
-          next:leads.length > 20 ? "Call acquisition_results with acquisition_id, offset, and limit to fetch stored leads." : "All results are in preview."
-        });
-      }
-
-      const query = acquisitionQuery(state, nextRound);
-      const job = await fetchJson(`${MAPS_BASE_URL}/api/v1/jobs`, {
-        method:"POST",
-        headers:{"content-type":"application/json"},
-        body:JSON.stringify({
-          name:`Recover acquisition: ${state.industry} / ${state.location} / round ${nextRound+1}`,
-          keywords:[query],
-          depth:state.depth,
-          max_time:900,
-          extra_reviews:false,
-          lang:"en"
-        })
-      }, 30000);
-      const jobId = String(job?.id || job?.job_id || job?.job?.id || "");
-      if (!jobId) throw new Error("Maps backend did not return a job id for next round");
-      state.jobs.push({id:jobId,query,round:nextRound});
+      const job = JSON.parse(raw);
       return jsonText({
-        status:"continuing",
-        qualified_so_far:leads.length,
-        target:state.target,
-        new_job_id:jobId,
-        query,
-        state_token:encodeState(state),
-        jobs:[...statuses,{id:jobId,query,status:"started"}],
-        next:"Call acquisition_status again."
+        acquisition_id,
+        status:job.status,
+        phase:job.phase,
+        target:job.target,
+        raw_count:job.raw_count||0,
+        unique_count:job.unique_count||0,
+        qualified_count:job.qualified_count||0,
+        stored_count:job.stored_count||0,
+        rounds_completed:job.rounds_completed||0,
+        max_rounds:job.max_rounds,
+        current_query:job.current_query||null,
+        current_maps_job_id:job.current_maps_job_id||null,
+        current_maps_status:job.current_maps_status||null,
+        error:job.error||null,
+        reason:job.reason||null,
+        created_at:job.created_at,
+        updated_at:job.updated_at,
+        completed_at:job.completed_at||null,
+        next:["complete","partial_complete"].includes(job.status)
+          ? "Call acquisition_results with acquisition_id to page the stored leads."
+          : job.status==="failed"
+            ? "Inspect error and start a new acquisition after fixing the backend issue."
+            : "Call acquisition_status again later. The worker is still running."
       });
     } catch (e) {
       return { content:[{type:"text",text:`Acquisition status error: ${e.message}`}], isError:true };
@@ -662,27 +586,39 @@ function buildServer() {
   });
 
   server.registerTool("acquisition_results", {
-    description: "Fetch a page of compact leads from a completed acquisition. Results are kept in memory for recent acquisitions and may be lost after a service restart.",
+    description: "Fetch a page of persisted leads from a completed or partially completed acquisition.",
     inputSchema: z.object({
       acquisition_id: z.string().min(1),
       offset: z.number().int().min(0).default(0),
       limit: z.number().int().min(1).max(200).default(100)
     })
   }, async ({ acquisition_id, offset, limit }) => {
-    const leads = acquisitionResultStore.get(acquisition_id);
-    if (!leads) {
-      return { content:[{type:"text",text:"Acquisition results are not available in this process. They may have expired after a restart."}], isError:true };
+    try {
+      const redis = await getAcquisitionRedis();
+      const key = `recover:acq:${acquisition_id}:results`;
+      const total = await redis.lLen(key);
+      if (!total) {
+        const raw = await redis.get(`recover:acq:${acquisition_id}`);
+        if (!raw) return { content:[{type:"text",text:"Acquisition not found or expired."}], isError:true };
+        const job = JSON.parse(raw);
+        if (!["complete","partial_complete"].includes(job.status)) {
+          return jsonText({ acquisition_id, status:job.status, total:0, leads:[], next:"The acquisition is still running. Call acquisition_status." });
+        }
+      }
+      const rows = total ? await redis.lRange(key, offset, offset + limit - 1) : [];
+      const leads = rows.map(row => { try { return JSON.parse(row); } catch { return null; } }).filter(Boolean);
+      return jsonText({
+        acquisition_id,
+        total,
+        offset,
+        limit,
+        returned:leads.length,
+        next_offset:offset+leads.length<total ? offset+leads.length : null,
+        leads
+      });
+    } catch (e) {
+      return { content:[{type:"text",text:`Acquisition results error: ${e.message}`}], isError:true };
     }
-    const page = leads.slice(offset, offset + limit);
-    return jsonText({
-      acquisition_id,
-      total:leads.length,
-      offset,
-      limit,
-      returned:page.length,
-      next_offset:offset + page.length < leads.length ? offset + page.length : null,
-      leads:page
-    });
   });
 
   server.registerTool("enrich_email", {
