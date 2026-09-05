@@ -226,6 +226,7 @@ async function waitForMaps(jobId, acquisition) {
 }
 
 async function processAcquisition(id) {
+  console.log("Acquisition start", id);
   const raw=await redis.get(jobKey(id));
   if (!raw) return;
   const job=JSON.parse(raw);
@@ -249,6 +250,7 @@ async function processAcquisition(id) {
       job.phase="maps";
       await saveJob(job);
 
+      console.log("Acquisition maps start", id, "round", round+1, variants[round]);
       const create=await fetchJson(`${MAPS_BASE_URL}/api/v1/jobs`,{
         method:"POST",
         headers:{"content-type":"application/json"},
@@ -268,8 +270,10 @@ async function processAcquisition(id) {
       await saveJob(job);
 
       await waitForMaps(mapsJobId,job);
+      console.log("Acquisition maps done", id, mapsJobId);
       const csv=await fetchText(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(mapsJobId)}/download`,{},60000);
       const roundRows=parseCsv(csv);
+      console.log("Acquisition CSV parsed", id, "rows", roundRows.length);
       allRaw.push(...roundRows);
       allRaw=dedupeRecords(allRaw);
       await replaceList(rawKey(id),allRaw);
@@ -281,6 +285,7 @@ async function processAcquisition(id) {
 
       const websites=[...new Set(allRaw.map(x=>x.website).filter(Boolean))];
       const newUrls=websites.filter(url=>!enrichmentCache.has(normalizeDomain(url)));
+      console.log("Acquisition enrichment start", id, "urls", newUrls.length);
       for (let i=0;i<newUrls.length;i+=100) {
         try {
           const enriched=await dataforgeScrape(newUrls.slice(i,i+100));
@@ -290,6 +295,7 @@ async function processAcquisition(id) {
         }
       }
 
+      console.log("Acquisition enrichment done", id, "enriched_domains", enrichmentCache.size);
       let leads=allRaw.map(lead=>{
         const e=enrichmentCache.get(normalizeDomain(lead.website||""));
         if (!e) return lead;
@@ -320,6 +326,7 @@ async function processAcquisition(id) {
 
       job.qualified_count=leads.length;
       job.rounds_completed=round+1;
+      console.log("Acquisition qualified", id, "count", leads.length, "target", job.target);
       await saveJob(job);
 
       if (leads.length>=Number(job.target)) {
@@ -330,6 +337,7 @@ async function processAcquisition(id) {
         job.stored_count=finalLeads.length;
         job.completed_at=new Date().toISOString();
         await saveJob(job);
+        console.log("Acquisition complete", id, "stored", finalLeads.length);
         return;
       }
     }
@@ -352,6 +360,7 @@ async function processAcquisition(id) {
     job.reason="max_rounds_reached";
     job.completed_at=new Date().toISOString();
     await saveJob(job);
+    console.log("Acquisition partial_complete", id, "stored", leads.length);
   } catch (error) {
     job.status="failed";
     job.phase="failed";
