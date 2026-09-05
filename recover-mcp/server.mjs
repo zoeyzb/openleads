@@ -703,6 +703,36 @@ const handler = createMcpHandler(buildServer);
 const nodeHandler = toNodeHandler(handler);
 
 const httpServer = createHttpServer((req, res) => {
+  if (req.url?.startsWith("/_internal/acquisition-smoke-status") && req.method === "GET") {
+    const auth = req.headers.authorization || "";
+    if (!SMOKE_TEST_TOKEN || auth !== `Bearer ${SMOKE_TEST_TOKEN}`) {
+      res.writeHead(401, {"content-type":"application/json"});
+      res.end(JSON.stringify({error:"unauthorized"}));
+      return;
+    }
+    void (async () => {
+      try {
+        const redis = await getAcquisitionRedis();
+        const url = new URL(req.url, "http://localhost");
+        const id = url.searchParams.get("id") || "";
+        if (!id) {
+          res.writeHead(400, {"content-type":"application/json"});
+          res.end(JSON.stringify({error:"missing_id"}));
+          return;
+        }
+        const raw = await redis.get(`recover:acq:${id}`);
+        const resultCount = await redis.lLen(`recover:acq:${id}:results`);
+        const rawCount = await redis.lLen(`recover:acq:${id}:raw`);
+        res.writeHead(raw ? 200 : 404, {"content-type":"application/json"});
+        res.end(JSON.stringify({job:raw?JSON.parse(raw):null,raw_list_count:rawCount,result_count:resultCount}));
+      } catch (error) {
+        res.writeHead(500, {"content-type":"application/json"});
+        res.end(JSON.stringify({error:String(error?.message||error)}));
+      }
+    })();
+    return;
+  }
+
   if (req.url === "/_internal/acquisition-smoke" && req.method === "POST") {
     const auth = req.headers.authorization || "";
     if (!SMOKE_TEST_TOKEN || auth !== `Bearer ${SMOKE_TEST_TOKEN}`) {
