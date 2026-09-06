@@ -1,5 +1,5 @@
 import { createServer as createHttpServer } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createClient } from "redis";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
@@ -12,6 +12,11 @@ const CRAWL4AI_BASE_URL = (process.env.CRAWL4AI_BASE_URL || "").replace(/\/$/, "
 const CRAWL4AI_API_TOKEN = process.env.CRAWL4AI_API_TOKEN || "";
 const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || "";
 const MCP_AUTH_TOKEN_SECONDARY = process.env.MCP_AUTH_TOKEN_SECONDARY || "";
+const OAUTH_ISSUER = (process.env.OAUTH_ISSUER || "").replace(/\/$/, "");
+const OAUTH_CLIENT_ID = process.env.OAUTH_CLIENT_ID || "";
+const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET || "";
+const OAUTH_SIGNING_SECRET = process.env.OAUTH_SIGNING_SECRET || "";
+const OAUTH_ACCESS_KEY = process.env.OAUTH_ACCESS_KEY || "";
 const YOZH_BASE_URL = (process.env.YOZH_BASE_URL || "").replace(/\/$/, "");
 const SCRAPLING_MCP_URL = (process.env.SCRAPLING_MCP_URL || "").replace(/\/$/, "");
 const SCRAPLING_MCP_TOKEN = process.env.SCRAPLING_MCP_TOKEN || "";
@@ -20,6 +25,141 @@ const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/,
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 const ACQUISITION_REDIS_URL = process.env.ACQUISITION_REDIS_URL || "";
 let acquisitionRedisPromise = null;
+
+const oauthEnabled = Boolean(OAUTH_ISSUER && OAUTH_CLIENT_ID && OAUTH_CLIENT_SECRET && OAUTH_SIGNING_SECRET && OAUTH_ACCESS_KEY);
+
+function secureEqual(left, right) {
+  const a = Buffer.from(String(left));
+  const b = Buffer.from(String(right));
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function signOauthToken(payload) {
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const signature = createHmac("sha256", OAUTH_SIGNING_SECRET).update(encoded).digest("base64url");
+  return `${encoded}.${signature}`;
+}
+
+function verifyOauthToken(token, expectedType) {
+  if (!oauthEnabled || typeof token !== "string") return null;
+  const [encoded, signature, extra] = token.split(".");
+  if (!encoded || !signature || extra) return null;
+  const expected = createHmac("sha256", OAUTH_SIGNING_SECRET).update(encoded).digest("base64url");
+  if (!secureEqual(signature, expected)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    if (payload.typ !== expectedType || payload.exp <= Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch { return null; }
+}
+
+function oauthMetadata() {
+  return {
+    issuer: OAUTH_ISSUER,
+    authorization_endpoint: `${OAUTH_ISSUER}/oauth/authorize`,
+    token_endpoint: `${OAUTH_ISSUER}/oauth/token`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    code_challenge_methods_supported: ["S256"],
+    token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
+    scopes_supported: ["recover_scrape"]
+  };
+}
+
+function protectedResourceMetadata() {
+  return { resource:`${OAUTH_ISSUER}/mcp`, authorization_servers:[OAUTH_ISSUER], scopes_supported:["recover_scrape"], bearer_methods_supported:["header"] };
+}
+
+function validChatGptRedirect(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && ["chatgpt.com", "www.chatgpt.com"].includes(url.hostname);
+  } catch { return false; }
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
+}
+
+async function readForm(req, maxBytes = 16384) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error("request_too_large");
+    chunks.push(chunk);
+  }
+  return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+}
+
+function oauthError(res, status, error, description) {
+  res.writeHead(status, {"content-type":"application/json", "cache-control":"no-store"});
+  res.end(JSON.stringify({error, error_description:description}));
+}
+
+function validateOauthClient(req, form) {
+  let clientId = form.get("client_id") || "";
+  let clientSecret = form.get("client_secret") || "";
+  const authorization = req.headers.authorization || "";
+  if (authorization.startsWith("Basic ")) {
+    try {
+      const decoded = Buffer.from(authorization.slice(6), "base64").toString("utf8");
+      const separator = decoded.indexOf(":");
+      clientId = decodeURIComponent(decoded.slice(0, separator));
+      clientSecret = decodeURIComponent(decoded.slice(separator + 1));
+    } catch {}
+  }
+  return secureEqual(clientId, OAUTH_CLIENT_ID) && secureEqual(clientSecret, OAUTH_CLIENT_SECRET);
+}
+
+function issueOauthTokens(scope = "recover_scrape") {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    access_token:signOauthToken({typ:"access",scope,iat:now,exp:now+3600}), token_type:"Bearer", expires_in:3600,
+    refresh_token:signOauthToken({typ:"refresh",scope,iat:now,exp:now+2592000}), scope
+  };
+}
+
+async function handleOauthAuthorize(req, res, url) {
+  const params = req.method === "POST" ? await readForm(req) : url.searchParams;
+  const clientId = params.get("client_id") || "";
+  const redirectUri = params.get("redirect_uri") || "";
+  const state = params.get("state") || "";
+  const codeChallenge = params.get("code_challenge") || "";
+  if (!secureEqual(clientId, OAUTH_CLIENT_ID) || !validChatGptRedirect(redirectUri) || !state || !codeChallenge || params.get("code_challenge_method") !== "S256") {
+    return oauthError(res, 400, "invalid_request", "Invalid OAuth client, callback, state, or PKCE parameters.");
+  }
+  if (req.method === "GET") {
+    const hidden = [...params.entries()].map(([key,value]) => `<input type="hidden" name="${escapeHtml(key)}" value="${escapeHtml(value)}">`).join("");
+    res.writeHead(200, {"content-type":"text/html; charset=utf-8", "cache-control":"no-store", "x-frame-options":"DENY"});
+    res.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>Authorize Recover Scrape</title></head><body style="font-family:system-ui;max-width:440px;margin:48px auto;padding:20px"><h1>Authorize Recover Scrape</h1><p>Enter the private Recover Scrape access key to connect ChatGPT.</p><form method="post">${hidden}<label>Access key<br><input name="access_key" type="password" required autocomplete="current-password" style="width:100%;padding:10px;margin:8px 0 16px"></label><button type="submit" style="padding:10px 16px">Authorize</button></form></body></html>`);
+    return;
+  }
+  if (!secureEqual(params.get("access_key") || "", OAUTH_ACCESS_KEY)) return oauthError(res, 403, "access_denied", "The Recover Scrape access key is invalid.");
+  const now = Math.floor(Date.now()/1000);
+  const code = signOauthToken({typ:"code",client_id:clientId,redirect_uri:redirectUri,code_challenge:codeChallenge,scope:"recover_scrape",iat:now,exp:now+300});
+  const redirect = new URL(redirectUri);
+  redirect.searchParams.set("code", code);
+  redirect.searchParams.set("state", state);
+  res.writeHead(302, {location:redirect.toString(), "cache-control":"no-store"}); res.end();
+}
+
+async function handleOauthToken(req, res) {
+  const form = await readForm(req);
+  if (!validateOauthClient(req, form)) return oauthError(res, 401, "invalid_client", "Client authentication failed.");
+  if (form.get("grant_type") === "authorization_code") {
+    const payload = verifyOauthToken(form.get("code"), "code");
+    const challenge = createHash("sha256").update(form.get("code_verifier") || "").digest("base64url");
+    if (!payload || !secureEqual(payload.client_id,OAUTH_CLIENT_ID) || !secureEqual(payload.redirect_uri,form.get("redirect_uri")||"") || !secureEqual(payload.code_challenge,challenge)) return oauthError(res,400,"invalid_grant","Authorization code or PKCE verification failed.");
+    res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"}); res.end(JSON.stringify(issueOauthTokens(payload.scope))); return;
+  }
+  if (form.get("grant_type") === "refresh_token") {
+    const payload = verifyOauthToken(form.get("refresh_token"), "refresh");
+    if (!payload) return oauthError(res,400,"invalid_grant","Refresh token is invalid or expired.");
+    res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"}); res.end(JSON.stringify(issueOauthTokens(payload.scope))); return;
+  }
+  oauthError(res,400,"unsupported_grant_type","Use authorization_code or refresh_token.");
+}
 
 async function getAcquisitionRedis() {
   if (!ACQUISITION_REDIS_URL) throw new Error("ACQUISITION_REDIS_URL is not configured");
@@ -705,6 +845,25 @@ const handler = createMcpHandler(buildServer);
 const nodeHandler = toNodeHandler(handler);
 
 const httpServer = createHttpServer((req, res) => {
+  const requestUrl = new URL(req.url || "/", OAUTH_ISSUER || `http://${req.headers.host || "localhost"}`);
+  if (oauthEnabled && req.method === "GET" && ["/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"].includes(requestUrl.pathname)) {
+    res.writeHead(200, {"content-type":"application/json", "cache-control":"public, max-age=300"});
+    res.end(JSON.stringify(oauthMetadata()));
+    return;
+  }
+  if (oauthEnabled && req.method === "GET" && ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/mcp/.well-known/oauth-protected-resource"].includes(requestUrl.pathname)) {
+    res.writeHead(200, {"content-type":"application/json", "cache-control":"public, max-age=300"});
+    res.end(JSON.stringify(protectedResourceMetadata()));
+    return;
+  }
+  if (oauthEnabled && requestUrl.pathname === "/oauth/authorize" && ["GET", "POST"].includes(req.method || "")) {
+    void handleOauthAuthorize(req, res, requestUrl).catch(() => oauthError(res, 400, "invalid_request", "Unable to process authorization request."));
+    return;
+  }
+  if (oauthEnabled && requestUrl.pathname === "/oauth/token" && req.method === "POST") {
+    void handleOauthToken(req, res).catch(() => oauthError(res, 400, "invalid_request", "Unable to process token request."));
+    return;
+  }
   if (req.url === "/health") {
     const checks = {
       maps: MAPS_BASE_URL ? `${MAPS_BASE_URL}/api/v1/jobs` : "",
@@ -744,15 +903,18 @@ const httpServer = createHttpServer((req, res) => {
     })();
     return;
   }
-  if (req.url?.startsWith("/mcp")) {
+  if (requestUrl.pathname === "/mcp") {
     if (MCP_AUTH_TOKEN || MCP_AUTH_TOKEN_SECONDARY) {
       const auth = req.headers.authorization || "";
       const allowed = [
         MCP_AUTH_TOKEN ? `Bearer ${MCP_AUTH_TOKEN}` : "",
         MCP_AUTH_TOKEN_SECONDARY ? `Bearer ${MCP_AUTH_TOKEN_SECONDARY}` : "",
       ].filter(Boolean);
-      if (!allowed.includes(auth)) {
-        res.writeHead(401, {"content-type":"application/json"});
+      const oauthAccess = auth.startsWith("Bearer ") ? verifyOauthToken(auth.slice(7), "access") : null;
+      if (!allowed.includes(auth) && !oauthAccess) {
+        const headers = {"content-type":"application/json"};
+        if (oauthEnabled) headers["www-authenticate"] = `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource/mcp"`;
+        res.writeHead(401, headers);
         res.end(JSON.stringify({error:"unauthorized"}));
         return;
       }
