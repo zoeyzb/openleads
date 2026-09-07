@@ -11,6 +11,14 @@ export function qualificationProfile(job={}) {
     `score:${Number(job.min_score||0)}`
   ].join("|");
 }
+export function campaignScope(job={}) {
+  const industry=norm(job.industry).replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"")||"unknown";
+  const profile=qualificationProfile(job).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+  return `${industry}::${profile}`;
+}
+export function campaignLeadSetKey(job={}) {
+  return `recover:leadstore:scope:${campaignScope(job)}`;
+}
 export function coverageField(job={}) {
   return [norm(job.industry), norm(job.location), qualificationProfile(job)].join("::");
 }
