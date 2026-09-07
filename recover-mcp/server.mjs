@@ -864,6 +864,49 @@ const httpServer = createHttpServer((req, res) => {
     return;
   }
 
+
+  if (requestUrl.pathname === "/exports/legacy-raw-recovery.csv" && req.method === "GET") {
+    void (async () => {
+      try {
+        const redis = await getAcquisitionRedis();
+        const jobs = [
+          ["Brooklyn","b7a7858d-32a6-46c9-823c-0e477f938955",198],
+          ["Bronx","99126613-c5ad-49c7-9fa5-1e92fd70e14b",116],
+          ["Long Island","0861b272-d805-4af2-a084-71169153c7f8",154],
+          ["Westchester","b28d3596-e31f-47ce-8342-040c3895ad67",119],
+          ["Buffalo","df431879-e411-4536-bf87-a154ec180e84",90]
+        ];
+        const esc = value => '"' + String(value ?? "").replace(/"/g,'""') + '"';
+        const header = ["Area","Business Name","Category","Address","Phone","Email","Website","Place ID","Review Count","Rating","Old Acquisition ID","Old UI Qualified Count","Old Status","No Website?","Contactable?","Campaign Eligible Now?","Legacy Note","Source"];
+        const lines=[header.map(esc).join(",")];
+        for (const [area,id,oldQualified] of jobs) {
+          const jobRaw = await redis.get(`recover:acq:${id}`);
+          if (!jobRaw) continue;
+          const job = JSON.parse(jobRaw);
+          const rawRows = await redis.lRange(`recover:acq:${id}:raw`,0,-1);
+          for (const raw of rawRows) {
+            let lead; try { lead = JSON.parse(raw); } catch { continue; }
+            const emails = Array.isArray(lead.emails) ? lead.emails : String(lead.email||lead.emails||"").split(/[;,\s]+/).filter(Boolean);
+            const noWebsite = !String(lead.website||"").trim();
+            const contactable = !!String(lead.phone||"").trim() || emails.length>0;
+            lines.push([
+              area,lead.name||lead.title||"",lead.category||lead.industry||"",lead.address||"",lead.phone||"",emails.join(", "),lead.website||"",lead.place_id||"",
+              lead.review_count||lead.reviews||0,lead.review_rating||lead.rating||0,id,oldQualified,job.status||"",
+              noWebsite?"YES":"NO",contactable?"YES":"NO",(noWebsite&&contactable)?"YES":"NO",
+              "Old UI qualified counter used score threshold and did not enforce no-website-only",
+              `recover:acq:${id}:raw`
+            ].map(esc).join(","));
+          }
+        }
+        res.writeHead(200, {"content-type":"text/csv; charset=utf-8","cache-control":"no-store, max-age=0","access-control-allow-origin":"*"});
+        res.end(lines.join("\n"));
+      } catch (error) {
+        res.writeHead(500, {"content-type":"application/json"});
+        res.end(JSON.stringify({error:"legacy_export_failed",message:error?.message||"unknown"}));
+      }
+    })();
+    return;
+  }
   if (requestUrl.pathname === "/exports/ny-hvac-leads.csv" && req.method === "GET") {
     void (async () => {
       try {
