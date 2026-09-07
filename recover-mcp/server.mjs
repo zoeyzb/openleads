@@ -729,7 +729,7 @@ function buildServer() {
   });
 
   server.registerTool("acquisition_results", {
-    description: "Fetch a page of persisted leads from a completed or partially completed acquisition.",
+    description: "Fetch a page of already-persisted acquisition leads, including while the acquisition is still running.",
     inputSchema: z.object({
       acquisition_id: z.string().min(1),
       offset: z.number().int().min(0).default(0),
@@ -739,19 +739,16 @@ function buildServer() {
     try {
       const redis = await getAcquisitionRedis();
       const key = `recover:acq:${acquisition_id}:results`;
+      const raw = await redis.get(`recover:acq:${acquisition_id}`);
+      if (!raw) return { content:[{type:"text",text:"Acquisition not found or expired."}], isError:true };
+      const job = JSON.parse(raw);
       const total = await redis.lLen(key);
-      if (!total) {
-        const raw = await redis.get(`recover:acq:${acquisition_id}`);
-        if (!raw) return { content:[{type:"text",text:"Acquisition not found or expired."}], isError:true };
-        const job = JSON.parse(raw);
-        if (!["complete","partial_complete"].includes(job.status)) {
-          return jsonText({ acquisition_id, status:job.status, total:0, leads:[], next:"The acquisition is still running. Call acquisition_status." });
-        }
-      }
       const rows = total ? await redis.lRange(key, offset, offset + limit - 1) : [];
       const leads = rows.map(row => { try { return JSON.parse(row); } catch { return null; } }).filter(Boolean);
       return jsonText({
         acquisition_id,
+        status:job.status,
+        stored_count:job.stored_count||total,
         total,
         offset,
         limit,
