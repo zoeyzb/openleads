@@ -181,6 +181,32 @@ function compactLead(lead) {
     qualification:lead.qualification||null
   };
 }
+
+function permanentLeadIdentity(lead) {
+  if (lead.place_id) return "place:"+String(lead.place_id).trim();
+  const domain=normalizeDomain(lead.website||"");
+  if (domain) return "domain:"+domain;
+  const phone=normalizePhone(lead.phone||"");
+  if (phone) return "phone:"+phone;
+  return "nameaddr:"+normalizeText((lead.name||lead.title||"")+"|"+(lead.address||""));
+}
+async function persistPermanentQualified(redis, job, leads) {
+  if (!Array.isArray(leads) || !leads.length) return 0;
+  const entries=[];
+  for (const lead of leads) {
+    const compact=compactLead(lead);
+    const key=permanentLeadIdentity(compact);
+    entries.push(key, JSON.stringify({
+      ...compact,
+      acquisition_id:job.id,
+      acquisition_location:job.location||"",
+      industry:job.industry||"",
+      persisted_at:new Date().toISOString()
+    }));
+  }
+  if (entries.length) await redis.hSet("recover:leadstore:qualified", entries);
+  return Math.floor(entries.length/2);
+}
 function mapsStatus(job) {
   return String(job?.status||job?.Status||job?.state||job?.State||job?.job?.status||job?.job?.Status||"").toLowerCase();
 }
@@ -406,6 +432,7 @@ async function processAcquisition(id) {
       const existingPersisted=await loadList(resultsKey(id));
       const persisted=upsertQualifiedLeads(existingPersisted,compactQualified);
       await replaceList(resultsKey(id),persisted);
+      await persistPermanentQualified(redis, job, leads);
       job.stored_count=persisted.length;
       console.log("Acquisition qualified", id, "count", leads.length, "stored", job.stored_count, "target", job.target);
       await saveJob(job);
