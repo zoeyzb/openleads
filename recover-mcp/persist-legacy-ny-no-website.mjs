@@ -5,7 +5,7 @@ await redis.connect();
 const TTL=Number(process.env.ACQUISITION_TTL_SECONDS||604800);
 const jobs=[
  ["Brooklyn","b7a7858d-32a6-46c9-823c-0e477f938955"],
- ["Bronx","99126613-c5ad-49c7-8256-2c346f981e2c".replace("257d68a2-1e52-4d7c-8256-2c346f981e2c","99126613-c5ad-49c7-9fa5-1e92fd70e14b")],
+ ["Bronx","99126613-c5ad-49c7-9fa5-1e92fd70e14b"],
  ["Long Island","0861b272-d805-4af2-a084-71169153c7f8"],
  ["Westchester","b28d3596-e31f-47ce-8342-040c3895ad67"],
  ["Buffalo","df431879-e411-4536-bf87-a154ec180e84"]
