@@ -1,6 +1,7 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { matchesRequestedLocation, upsertQualifiedLeads } from "./acquisition-persistence.mjs";
+import { markCoverage } from "./acquisition-coverage.mjs";
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -350,6 +351,7 @@ async function processAcquisition(id) {
   job.status="running";
   job.started_at=job.started_at||new Date().toISOString();
   await saveJob(job);
+  await markCoverage(redis, job, "running", {started_at:job.started_at});
 
   let allRaw=await loadList(rawKey(id));
   const enrichmentCache=new Map();
@@ -478,6 +480,7 @@ async function processAcquisition(id) {
         job.stored_count=finalLeads.length;
         job.completed_at=new Date().toISOString();
         await saveJob(job);
+        await markCoverage(redis, job, "target_reached", {reason:"target_reached"});
         console.log("Acquisition complete", id, "stored", finalLeads.length);
         return;
       }
@@ -506,6 +509,7 @@ async function processAcquisition(id) {
     job.reason="max_rounds_reached";
     job.completed_at=new Date().toISOString();
     await saveJob(job);
+    await markCoverage(redis, job, "exhausted", {reason:"max_rounds_reached"});
     console.log("Acquisition partial_complete", id, "stored", leads.length);
   } catch (error) {
     if (shuttingDown || String(error?.message||error).includes("worker shutting down")) {
