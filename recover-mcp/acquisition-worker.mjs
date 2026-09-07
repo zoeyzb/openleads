@@ -273,7 +273,16 @@ async function waitForMaps(jobId, acquisition) {
   const deadline=Date.now()+20*60*1000;
   while (Date.now()<deadline) {
     if (shuttingDown) throw new Error("worker shutting down");
-    const status=await withRetry("Maps status", () => fetchJson(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(jobId)}`,{},30000));
+    let status;
+    try {
+      status=await withRetry("Maps status", () => fetchJson(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(jobId)}`,{},30000));
+    } catch (error) {
+      const msg=String(error?.message||error);
+      if (/\b404\b|not found/i.test(msg)) {
+        throw new Error(`Maps job ${jobId} lost after runtime restart`);
+      }
+      throw error;
+    }
     acquisition.current_maps_status=mapsStatus(status)||"unknown";
     await saveJob(acquisition);
     if (mapsTerminal(status)) return status;
