@@ -329,7 +329,19 @@ async function processAcquisition(id) {
       job.maps_jobs=[...(job.maps_jobs||[]),{id:mapsJobId,query:variants[round],round}];
       await saveJob(job);
 
-      await waitForMaps(mapsJobId,job);
+      try {
+        await waitForMaps(mapsJobId,job);
+      } catch (error) {
+        if (/timed out/i.test(String(error?.message||error))) {
+          job.maps_jobs[job.maps_jobs.length-1].status="timed_out";
+          job.maps_jobs[job.maps_jobs.length-1].error=String(error?.message||error);
+          job.phase="maps_timeout_continue";
+          await saveJob(job);
+          console.warn("Acquisition maps timeout; continuing next round", id, mapsJobId);
+          continue;
+        }
+        throw error;
+      }
       console.log("Acquisition maps done", id, mapsJobId);
       const csv=await withRetry("Maps CSV download", () => fetchText(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(mapsJobId)}/download`,{},60000));
       const roundRows=parseCsv(csv);
@@ -384,6 +396,7 @@ async function processAcquisition(id) {
         .filter(lead=>!job.require_email||normalizeEmails(lead.emails||lead.email||"").length>0)
         .filter(lead=>!job.require_contact||!!lead.phone||normalizeEmails(lead.emails||lead.email||"").length>0)
         .filter(lead=>job.include_no_website!==false||!!lead.website)
+        .filter(lead=>!job.require_no_website||!lead.website)
         .sort((a,b)=>b.qualification.score-a.qualification.score);
 
       job.qualified_count=leads.length;
@@ -419,6 +432,7 @@ async function processAcquisition(id) {
       .filter(lead=>!job.require_email||normalizeEmails(lead.emails||lead.email||"").length>0)
       .filter(lead=>!job.require_contact||!!lead.phone||normalizeEmails(lead.emails||lead.email||"").length>0)
       .filter(lead=>job.include_no_website!==false||!!lead.website)
+      .filter(lead=>!job.require_no_website||!lead.website)
       .sort((a,b)=>b.qualification.score-a.qualification.score)
       .map(compactLead);
 
