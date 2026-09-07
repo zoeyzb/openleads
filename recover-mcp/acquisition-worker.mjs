@@ -1,7 +1,7 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { matchesRequestedLocation, upsertQualifiedLeads } from "./acquisition-persistence.mjs";
-import { markCoverage } from "./acquisition-coverage.mjs";
+import { markCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -214,19 +214,24 @@ function permanentLeadIdentity(lead) {
 async function persistPermanentQualified(redis, job, leads) {
   if (!Array.isArray(leads) || !leads.length) return 0;
   const entries=[];
+  const identities=[];
   for (const lead of leads) {
     const compact=compactLead(lead);
     const key=permanentLeadIdentity(compact);
+    identities.push(key);
     entries.push(key, JSON.stringify({
       ...compact,
       acquisition_id:job.id,
       acquisition_location:job.location||"",
       industry:job.industry||"",
+      campaign_scope:campaignLeadSetKey(job),
       persisted_at:new Date().toISOString()
     }));
   }
   if (entries.length) await redis.hSet("recover:leadstore:qualified", entries);
-  return Math.floor(entries.length/2);
+  const uniqueIdentities=[...new Set(identities)];
+  if (uniqueIdentities.length) await redis.sAdd(campaignLeadSetKey(job), uniqueIdentities);
+  return uniqueIdentities.length;
 }
 function mapsStatus(job) {
   return String(job?.status||job?.Status||job?.state||job?.State||job?.job?.status||job?.job?.Status||"").toLowerCase();
