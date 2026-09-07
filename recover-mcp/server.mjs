@@ -646,6 +646,7 @@ function buildServer() {
       min_score: z.number().int().min(0).max(100).default(50),
       require_phone: z.boolean().default(false),
       require_email: z.boolean().default(false),
+      require_contact: z.boolean().default(false),
       include_no_website: z.boolean().default(true),
       max_rounds: z.number().int().min(1).max(20).default(12),
       depth: z.number().int().min(1).max(50).default(10)
