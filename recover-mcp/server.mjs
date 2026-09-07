@@ -863,6 +863,50 @@ const httpServer = createHttpServer((req, res) => {
     void handleOauthToken(req, res).catch(() => oauthError(res, 400, "invalid_request", "Unable to process token request."));
     return;
   }
+
+  if (requestUrl.pathname === "/exports/ny-hvac-leads.csv" && req.method === "GET") {
+    void (async () => {
+      try {
+        const redis = await getAcquisitionRedis();
+        const values = await redis.hVals("recover:leadstore:qualified");
+        const rows = values.map(v => { try { return JSON.parse(v); } catch { return null; } }).filter(Boolean)
+          .filter(lead => {
+            const hay = [lead.address, lead.city, lead.region, lead.acquisition_location].filter(Boolean).join(" ").toLowerCase();
+            const noWebsite = !String(lead.website||"").trim();
+            const emails = Array.isArray(lead.emails) ? lead.emails : String(lead.email||lead.emails||"").split(/[;,\s]+/).filter(Boolean);
+            const contactable = !!String(lead.phone||"").trim() || emails.length>0;
+            const inNY = /\bny\b|new york/.test(hay);
+            const hvac = /hvac|heating|air conditioning|cooling|mechanical/.test(String(lead.category||lead.industry||"").toLowerCase());
+            return noWebsite && contactable && inNY && hvac;
+          })
+          .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
+        const esc = value => {
+          const text = Array.isArray(value) ? value.join(", ") : String(value ?? "");
+          return '"' + text.replace(/"/g,'""') + '"';
+        };
+        const header = ["Business Name","Category","Address","City","Region","Phone","Email","Website","Google Maps URL","Place ID","Review Count","Rating","Qualification Score","Acquisition Location","Acquisition ID","Status"];
+        const lines=[header.map(esc).join(",")];
+        for(const lead of rows){
+          lines.push([
+            lead.name||"",lead.category||"",lead.address||"",lead.city||"",lead.region||"",lead.phone||"",
+            lead.emails||lead.email||"",lead.website||"",lead.google_maps_url||"",lead.place_id||"",
+            lead.review_count||0,lead.review_rating||lead.rating||0,lead.qualification?.score||0,
+            lead.acquisition_location||"",lead.acquisition_id||"","auto"
+          ].map(esc).join(","));
+        }
+        res.writeHead(200, {
+          "content-type":"text/csv; charset=utf-8",
+          "cache-control":"no-store, max-age=0",
+          "access-control-allow-origin":"*"
+        });
+        res.end(lines.join("\n"));
+      } catch (error) {
+        res.writeHead(500, {"content-type":"application/json"});
+        res.end(JSON.stringify({error:"export_failed",message:error?.message||"unknown"}));
+      }
+    })();
+    return;
+  }
   if (req.url === "/health") {
     const checks = {
       maps: MAPS_BASE_URL ? `${MAPS_BASE_URL}/api/v1/jobs` : "",
