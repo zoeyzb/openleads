@@ -875,7 +875,13 @@ const httpServer = createHttpServer((req, res) => {
             const noWebsite = !String(lead.website||"").trim();
             const emails = Array.isArray(lead.emails) ? lead.emails : String(lead.email||lead.emails||"").split(/[;,\s]+/).filter(Boolean);
             const contactable = !!String(lead.phone||"").trim() || emails.length>0;
-            const inNY = /\bny\b|new york/.test(hay);
+            const address = String(lead.address||"").toLowerCase();
+            const region = String(lead.region||"").toLowerCase();
+            const city = String(lead.city||"").toLowerCase();
+            const explicitOtherState = /,\s*(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy)\b/i.test(address);
+            const explicitNY = /,\s*ny\b|new york\b/i.test(address) || /\bny\b|new york/.test(region) || /new york/.test(city);
+            const fallbackNY = !address && !region && !city && /new york|\bny\b/.test(String(lead.acquisition_location||"").toLowerCase());
+            const inNY = !explicitOtherState && (explicitNY || fallbackNY);
             const hvac = /hvac|heating|air conditioning|cooling|mechanical/.test(String(lead.category||lead.industry||"").toLowerCase());
             return noWebsite && contactable && inNY && hvac;
           })
