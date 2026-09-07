@@ -382,6 +382,7 @@ async function processAcquisition(id) {
         .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
         .filter(lead=>!job.require_phone||!!lead.phone)
         .filter(lead=>!job.require_email||normalizeEmails(lead.emails||lead.email||"").length>0)
+        .filter(lead=>!job.require_contact||!!lead.phone||normalizeEmails(lead.emails||lead.email||"").length>0)
         .filter(lead=>job.include_no_website!==false||!!lead.website)
         .sort((a,b)=>b.qualification.score-a.qualification.score);
 
@@ -416,6 +417,7 @@ async function processAcquisition(id) {
       .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
       .filter(lead=>!job.require_phone||!!lead.phone)
       .filter(lead=>!job.require_email||normalizeEmails(lead.emails||lead.email||"").length>0)
+      .filter(lead=>!job.require_contact||!!lead.phone||normalizeEmails(lead.emails||lead.email||"").length>0)
       .filter(lead=>job.include_no_website!==false||!!lead.website)
       .sort((a,b)=>b.qualification.score-a.qualification.score)
       .map(compactLead);
