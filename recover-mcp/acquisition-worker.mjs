@@ -4,6 +4,8 @@ import { matchesRequestedLocation, upsertQualifiedLeads } from "./acquisition-pe
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
+const MAPS_BASE_URLS = String(process.env.MAPS_BASE_URLS || MAPS_BASE_URL)
+  .split(",").map(x=>x.trim().replace(/\/$/,"")).filter(Boolean);
 const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 const JOB_TTL = Number(process.env.ACQUISITION_TTL_SECONDS || 604800);
@@ -14,7 +16,13 @@ let shuttingDown = false;
 let currentJobId = null;
 
 if (!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL is required");
-if (!MAPS_BASE_URL) throw new Error("MAPS_BASE_URL is required");
+if (!MAPS_BASE_URLS.length) throw new Error("MAPS_BASE_URL or MAPS_BASE_URLS is required");
+
+function mapsBaseFor(acquisitionId) {
+  let hash=0;
+  for (const ch of String(acquisitionId||"")) hash=(hash*31+ch.charCodeAt(0))>>>0;
+  return MAPS_BASE_URLS[hash % MAPS_BASE_URLS.length];
+}
 
 const redis = createClient({ url: REDIS_URL });
 redis.on("error", err => console.error("Redis error", err));
@@ -269,13 +277,13 @@ async function replaceList(key,values) {
   await redis.expire(key,JOB_TTL);
 }
 
-async function waitForMaps(jobId, acquisition) {
+async function waitForMaps(jobId, acquisition, mapsBase) {
   const deadline=Date.now()+20*60*1000;
   while (Date.now()<deadline) {
     if (shuttingDown) throw new Error("worker shutting down");
     let status;
     try {
-      status=await withRetry("Maps status", () => fetchJson(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(jobId)}`,{},30000));
+      status=await withRetry("Maps status", () => fetchJson(`${mapsBase}/api/v1/jobs/${encodeURIComponent(jobId)}`,{},30000));
     } catch (error) {
       const msg=String(error?.message||error);
       if (/\b404\b|not found/i.test(msg)) {
@@ -345,8 +353,10 @@ async function processAcquisition(id) {
       job.phase="maps";
       await saveJob(job);
 
-      console.log("Acquisition maps start", id, "round", round+1, variants[round]);
-      const create=await withRetry("Maps create job", () => fetchJson(`${MAPS_BASE_URL}/api/v1/jobs`,{
+      const mapsBase=mapsBaseFor(id);
+      job.current_maps_base_url=mapsBase;
+      console.log("Acquisition maps start", id, "round", round+1, variants[round], "via", mapsBase);
+      const create=await withRetry("Maps create job", () => fetchJson(`${mapsBase}/api/v1/jobs`,{
         method:"POST",
         headers:{"content-type":"application/json"},
         body:JSON.stringify({
@@ -361,11 +371,11 @@ async function processAcquisition(id) {
       const mapsJobId=String(create?.id||create?.job_id||create?.job?.id||"");
       if (!mapsJobId) throw new Error("Maps backend did not return a job id");
       job.current_maps_job_id=mapsJobId;
-      job.maps_jobs=[...(job.maps_jobs||[]),{id:mapsJobId,query:variants[round],round}];
+      job.maps_jobs=[...(job.maps_jobs||[]),{id:mapsJobId,query:variants[round],round,base_url:mapsBase}];
       await saveJob(job);
 
       try {
-        await waitForMaps(mapsJobId,job);
+        await waitForMaps(mapsJobId,job,mapsBase);
       } catch (error) {
         if (/timed out/i.test(String(error?.message||error))) {
           job.maps_jobs[job.maps_jobs.length-1].status="timed_out";
@@ -378,7 +388,7 @@ async function processAcquisition(id) {
         throw error;
       }
       console.log("Acquisition maps done", id, mapsJobId);
-      const csv=await withRetry("Maps CSV download", () => fetchText(`${MAPS_BASE_URL}/api/v1/jobs/${encodeURIComponent(mapsJobId)}/download`,{},60000));
+      const csv=await withRetry("Maps CSV download", () => fetchText(`${mapsBase}/api/v1/jobs/${encodeURIComponent(mapsJobId)}/download`,{},60000));
       const roundRows=parseCsv(csv);
       console.log("Acquisition CSV parsed", id, "rows", roundRows.length);
       allRaw.push(...roundRows);
