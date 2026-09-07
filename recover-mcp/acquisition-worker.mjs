@@ -389,12 +389,14 @@ async function processAcquisition(id) {
       try {
         await waitForMaps(mapsJobId,job,mapsBase);
       } catch (error) {
-        if (/timed out/i.test(String(error?.message||error))) {
-          job.maps_jobs[job.maps_jobs.length-1].status="timed_out";
-          job.maps_jobs[job.maps_jobs.length-1].error=String(error?.message||error);
-          job.phase="maps_timeout_continue";
+        const mapsError=String(error?.message||error);
+        if (/timed out|lost after runtime restart/i.test(mapsError)) {
+          const lost=/lost after runtime restart/i.test(mapsError);
+          job.maps_jobs[job.maps_jobs.length-1].status=lost?"lost_after_restart":"timed_out";
+          job.maps_jobs[job.maps_jobs.length-1].error=mapsError;
+          job.phase=lost?"maps_restart_continue":"maps_timeout_continue";
           await saveJob(job);
-          console.warn("Acquisition maps timeout; continuing next round", id, mapsJobId);
+          console.warn(lost?"Acquisition Maps state reset; continuing next round":"Acquisition maps timeout; continuing next round", id, mapsJobId);
           continue;
         }
         throw error;
