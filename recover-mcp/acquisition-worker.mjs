@@ -12,6 +12,8 @@ const JOB_TTL = Number(process.env.ACQUISITION_TTL_SECONDS || 604800);
 const POLL_MS = Number(process.env.ACQUISITION_POLL_MS || 10000);
 const LEASE_SECONDS = Number(process.env.ACQUISITION_LEASE_SECONDS || 180);
 const RETRY_ATTEMPTS = Number(process.env.ACQUISITION_RETRY_ATTEMPTS || 3);
+const MAPS_ROUND_DEPTH_CAP = Number(process.env.MAPS_ROUND_DEPTH_CAP || 25);
+const MAPS_ROUND_MAX_TIME_SECONDS = Number(process.env.MAPS_ROUND_MAX_TIME_SECONDS || 300);
 let shuttingDown = false;
 let currentJobId = null;
 
@@ -22,6 +24,16 @@ function mapsBaseFor(acquisitionId) {
   let hash=0;
   for (const ch of String(acquisitionId||"")) hash=(hash*31+ch.charCodeAt(0))>>>0;
   return MAPS_BASE_URLS[hash % MAPS_BASE_URLS.length];
+}
+
+async function nextMapsBase(acquisitionId) {
+  if (MAPS_BASE_URLS.length <= 1) return MAPS_BASE_URLS[0];
+  try {
+    const n=await redis.incr("recover:maps:round_robin");
+    return MAPS_BASE_URLS[(n-1) % MAPS_BASE_URLS.length];
+  } catch {
+    return mapsBaseFor(acquisitionId);
+  }
 }
 
 const redis = createClient({ url: REDIS_URL });
@@ -353,7 +365,7 @@ async function processAcquisition(id) {
       job.phase="maps";
       await saveJob(job);
 
-      const mapsBase=mapsBaseFor(id);
+      const mapsBase=await nextMapsBase(id);
       job.current_maps_base_url=mapsBase;
       console.log("Acquisition maps start", id, "round", round+1, variants[round], "via", mapsBase);
       const create=await withRetry("Maps create job", () => fetchJson(`${mapsBase}/api/v1/jobs`,{
@@ -362,8 +374,8 @@ async function processAcquisition(id) {
         body:JSON.stringify({
           name:`Recover acquisition ${id} round ${round+1}`,
           keywords:[variants[round]],
-          depth:Number(job.depth||10),
-          max_time:900,
+          depth:Math.min(Number(job.depth||10), MAPS_ROUND_DEPTH_CAP),
+          max_time:MAPS_ROUND_MAX_TIME_SECONDS,
           extra_reviews:false,
           lang:"en"
         })
