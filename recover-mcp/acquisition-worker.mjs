@@ -1,5 +1,6 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
+import { matchesRequestedLocation, upsertQualifiedLeads } from "./acquisition-persistence.mjs";
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -375,6 +376,7 @@ async function processAcquisition(id) {
 
       job.phase="qualification";
       leads=leads
+        .filter(lead=>matchesRequestedLocation(lead,job.location))
         .filter(lead=>matchesRequestedIndustry(lead,job.industry))
         .map(lead=>({...lead,qualification:scoreLead(lead)}))
         .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
@@ -385,7 +387,13 @@ async function processAcquisition(id) {
 
       job.qualified_count=leads.length;
       job.rounds_completed=round+1;
-      console.log("Acquisition qualified", id, "count", leads.length, "target", job.target);
+
+      const compactQualified=leads.map(compactLead);
+      const existingPersisted=await loadList(resultsKey(id));
+      const persisted=upsertQualifiedLeads(existingPersisted,compactQualified);
+      await replaceList(resultsKey(id),persisted);
+      job.stored_count=persisted.length;
+      console.log("Acquisition qualified", id, "count", leads.length, "stored", job.stored_count, "target", job.target);
       await saveJob(job);
 
       if (leads.length>=Number(job.target)) {
@@ -402,6 +410,7 @@ async function processAcquisition(id) {
     }
 
     let leads=allRaw
+      .filter(lead=>matchesRequestedLocation(lead,job.location))
       .filter(lead=>matchesRequestedIndustry(lead,job.industry))
       .map(lead=>({...lead,qualification:scoreLead(lead)}))
       .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
@@ -411,11 +420,13 @@ async function processAcquisition(id) {
       .sort((a,b)=>b.qualification.score-a.qualification.score)
       .map(compactLead);
 
-    await replaceList(resultsKey(id),leads);
+    const existingPersisted=await loadList(resultsKey(id));
+    const persisted=upsertQualifiedLeads(existingPersisted,leads);
+    await replaceList(resultsKey(id),persisted);
     job.status="partial_complete";
     job.phase="complete";
     job.qualified_count=leads.length;
-    job.stored_count=leads.length;
+    job.stored_count=persisted.length;
     job.reason="max_rounds_reached";
     job.completed_at=new Date().toISOString();
     await saveJob(job);
