@@ -1,6 +1,6 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
-import { claimCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
+import { claimCoverage, campaignLeadSetKey, qualificationProfile } from "./acquisition-coverage.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||"";
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
@@ -22,6 +22,37 @@ const BATCH_ID=process.env.US_HVAC_BATCH_ID||"us-hvac-no-website-100k-2026-09-08
 const states={"Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","California":"CA","Colorado":"CO","Connecticut":"CT","Delaware":"DE","District of Columbia":"DC","Florida":"FL","Georgia":"GA","Hawaii":"HI","Idaho":"ID","Illinois":"IL","Indiana":"IN","Iowa":"IA","Kansas":"KS","Kentucky":"KY","Louisiana":"LA","Maine":"ME","Maryland":"MD","Massachusetts":"MA","Michigan":"MI","Minnesota":"MN","Mississippi":"MS","Missouri":"MO","Montana":"MT","Nebraska":"NE","Nevada":"NV","New Hampshire":"NH","New Jersey":"NJ","New Mexico":"NM","New York":"NY","North Carolina":"NC","North Dakota":"ND","Ohio":"OH","Oklahoma":"OK","Oregon":"OR","Pennsylvania":"PA","Rhode Island":"RI","South Carolina":"SC","South Dakota":"SD","Tennessee":"TN","Texas":"TX","Utah":"UT","Vermont":"VT","Virginia":"VA","Washington":"WA","West Virginia":"WV","Wisconsin":"WI","Wyoming":"WY"};
 
 const profileJob={industry:"HVAC",require_no_website:true,require_contact:true,require_phone:false,require_email:false,include_no_website:true,min_score:30};
+
+async function bootstrapScopedLeads(redis, scopeSet){
+  if(await redis.sCard(scopeSet)>0) return await redis.sCard(scopeSet);
+  const all=await redis.hGetAll("recover:leadstore:qualified");
+  const expectedProfile=qualificationProfile(profileJob);
+  const jobCache=new Map();
+  const emailList=v=>{
+    const arr=Array.isArray(v)?v:String(v||"").split(/[;,\s]+/);
+    return arr.map(x=>String(x).trim().toLowerCase()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+  };
+  let added=0;
+  for(const [identity,raw] of Object.entries(all)){
+    let lead; try{lead=JSON.parse(raw)}catch{continue}
+    if(lead.website) continue;
+    if(!lead.phone && !emailList(lead.emails||lead.email||"").length) continue;
+    let matches=lead.campaign_scope===scopeSet;
+    const acquisitionId=lead.acquisition_id||"";
+    if(!matches && acquisitionId){
+      let job=jobCache.get(acquisitionId);
+      if(job===undefined){
+        const jraw=await redis.get("recover:acq:"+acquisitionId);
+        try{job=jraw?JSON.parse(jraw):null}catch{job=null}
+        jobCache.set(acquisitionId,job);
+      }
+      if(job && String(job.industry||"").toLowerCase()==="hvac" && qualificationProfile(job)===expectedProfile) matches=true;
+    }
+    if(matches) added+=await redis.sAdd(scopeSet,identity);
+  }
+  console.log(JSON.stringify({event:"scope_bootstrap",added,total:await redis.sCard(scopeSet)}));
+  return await redis.sCard(scopeSet);
+}
 
 async function fetchCities(){
   const res=await fetch(CITY_SOURCE_URL,{headers:{"user-agent":"Recover-Scrape/1.0"}});
@@ -48,6 +79,7 @@ const redis=createClient({url:REDIS_URL});
 await redis.connect();
 const cities=await fetchCities();
 const scopeSet=campaignLeadSetKey(profileJob);
+await bootstrapScopedLeads(redis,scopeSet);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0);
 console.log("US HVAC controller started",JSON.stringify({cities:cities.length,target:TARGET_TOTAL,scopeSet,cursor}));
 
