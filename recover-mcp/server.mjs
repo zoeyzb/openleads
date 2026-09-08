@@ -938,8 +938,7 @@ const httpServer = createHttpServer((req, res) => {
             const noWebsite = !String(lead.website||"").trim();
             const emails = Array.isArray(lead.emails) ? lead.emails : String(lead.email||lead.emails||"").split(/[;,\s]+/).filter(Boolean);
             const contactable = !!String(lead.phone||"").trim() || emails.length>0;
-            const hvac = /hvac|heating|air conditioning|cooling|mechanical|refrigeration/.test(String(lead.category||lead.industry||"").toLowerCase());
-            return noWebsite && contactable && hvac;
+            return noWebsite && contactable;
           })
           .sort((a,b)=>String(a.acquisition_location||a.address||"").localeCompare(String(b.acquisition_location||b.address||"")) || String(a.name||"").localeCompare(String(b.name||"")));
 
