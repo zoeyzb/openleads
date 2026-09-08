@@ -406,13 +406,19 @@ async function processAcquisition(id) {
         await waitForMaps(mapsJobId,job,mapsBase);
       } catch (error) {
         const mapsError=String(error?.message||error);
-        if (/timed out|lost after runtime restart/i.test(mapsError)) {
+        if (/timed out|lost after runtime restart|Maps job .* failed:/i.test(mapsError)) {
           const lost=/lost after runtime restart/i.test(mapsError);
-          job.maps_jobs[job.maps_jobs.length-1].status=lost?"lost_after_restart":"timed_out";
+          const backendFailed=/Maps job .* failed:/i.test(mapsError);
+          job.maps_jobs[job.maps_jobs.length-1].status=lost?"lost_after_restart":backendFailed?"backend_failed":"timed_out";
           job.maps_jobs[job.maps_jobs.length-1].error=mapsError;
-          job.phase=lost?"maps_restart_continue":"maps_timeout_continue";
+          job.phase=lost?"maps_restart_continue":backendFailed?"maps_failed_continue":"maps_timeout_continue";
           await saveJob(job);
-          console.warn(lost?"Acquisition Maps state reset; continuing next round":"Acquisition maps timeout; continuing next round", id, mapsJobId);
+          console.warn(
+            lost?"Acquisition Maps state reset; continuing next round":
+            backendFailed?"Acquisition Maps backend failed; continuing next round":
+            "Acquisition maps timeout; continuing next round",
+            id,mapsJobId
+          );
           continue;
         }
         throw error;
