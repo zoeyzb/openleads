@@ -433,51 +433,63 @@ async function processAcquisition(id) {
 
       job.raw_count=roundRows.length+(job.raw_count||0);
       job.unique_count=allRaw.length;
-      job.phase="enrichment";
-      await saveJob(job);
 
-      const websites=[...new Set(allRaw.map(x=>x.website).filter(Boolean))];
-      const newUrls=websites.filter(url=>!enrichmentCache.has(normalizeDomain(url)));
-      console.log("Acquisition enrichment start", id, "urls", newUrls.length);
-      for (let i=0;i<newUrls.length;i+=100) {
-        try {
-          const enriched=await dataforgeScrape(newUrls.slice(i,i+100));
-          for (const item of enriched) enrichmentCache.set(normalizeDomain(item.url||""),item);
-        } catch (e) {
-          console.warn("DataForge batch failed",e.message);
+      let leads;
+      if (job.require_no_website) {
+        // For no-website campaigns, domain crawling/enrichment is wasted work:
+        // any lead with a website will be rejected, and no-domain leads cannot
+        // benefit from domain enrichment. Go straight to qualification.
+        job.phase="qualification";
+        await saveJob(job);
+        console.log("Acquisition enrichment skipped for no-website campaign", id);
+        leads=allRaw;
+      } else {
+        job.phase="enrichment";
+        await saveJob(job);
+
+        const websites=[...new Set(allRaw.map(x=>x.website).filter(Boolean))];
+        const newUrls=websites.filter(url=>!enrichmentCache.has(normalizeDomain(url)));
+        console.log("Acquisition enrichment start", id, "urls", newUrls.length);
+        for (let i=0;i<newUrls.length;i+=100) {
+          try {
+            const enriched=await dataforgeScrape(newUrls.slice(i,i+100));
+            for (const item of enriched) enrichmentCache.set(normalizeDomain(item.url||""),item);
+          } catch (e) {
+            console.warn("DataForge batch failed",e.message);
+          }
         }
+
+        console.log("Acquisition enrichment done", id, "enriched_domains", enrichmentCache.size);
+        leads=allRaw.map(lead=>{
+          const e=enrichmentCache.get(normalizeDomain(lead.website||""));
+          if (!e) return lead;
+          const domain=normalizeDomain(lead.website||"");
+          const sameDomainEmails=Array.isArray(e.emails)
+            ? e.emails.filter(email=>normalizeDomain(String(email).split("@")[1]||"")===domain)
+            : [];
+          return {
+            ...lead,
+            emails:sameDomainEmails.length?sameDomainEmails:lead.emails,
+            tech_stack:e.tech_stack||[],
+            cms_detected:e.cms_detected||null,
+            ssl_valid:e.ssl_valid,
+            site_speed_ms:e.site_speed_ms,
+            website_status:e.status
+          };
+        });
+        job.phase="qualification";
       }
 
-      console.log("Acquisition enrichment done", id, "enriched_domains", enrichmentCache.size);
-      let leads=allRaw.map(lead=>{
-        const e=enrichmentCache.get(normalizeDomain(lead.website||""));
-        if (!e) return lead;
-        const domain=normalizeDomain(lead.website||"");
-        const sameDomainEmails=Array.isArray(e.emails)
-          ? e.emails.filter(email=>normalizeDomain(String(email).split("@")[1]||"")===domain)
-          : [];
-        return {
-          ...lead,
-          emails:sameDomainEmails.length?sameDomainEmails:lead.emails,
-          tech_stack:e.tech_stack||[],
-          cms_detected:e.cms_detected||null,
-          ssl_valid:e.ssl_valid,
-          site_speed_ms:e.site_speed_ms,
-          website_status:e.status
-        };
-      });
-
-      job.phase="qualification";
       leads=leads
         .filter(lead=>matchesRequestedLocation(lead,job.location))
         .filter(lead=>matchesRequestedIndustry(lead,job.industry))
-        .map(lead=>({...lead,qualification:scoreLead(lead)}))
-        .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
+        .filter(lead=>!job.require_no_website||!lead.website)
         .filter(lead=>!job.require_phone||!!lead.phone)
         .filter(lead=>!job.require_email||normalizeEmails(lead.emails||lead.email||"").length>0)
         .filter(lead=>!job.require_contact||!!lead.phone||normalizeEmails(lead.emails||lead.email||"").length>0)
         .filter(lead=>job.include_no_website!==false||!!lead.website)
-        .filter(lead=>!job.require_no_website||!lead.website)
+        .map(lead=>({...lead,qualification:scoreLead(lead)}))
+        .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
         .sort((a,b)=>b.qualification.score-a.qualification.score);
 
       job.qualified_count=leads.length;
