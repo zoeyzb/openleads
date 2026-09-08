@@ -294,6 +294,15 @@ async function replaceList(key,values) {
   }
   await redis.expire(key,JOB_TTL);
 }
+async function enqueueUnique(id) {
+  const queueKey="recover:acquisition:queue";
+  const pos=await redis.lPos(queueKey,String(id));
+  if (pos===null) {
+    await redis.lPush(queueKey,String(id));
+    return true;
+  }
+  return false;
+}
 
 async function waitForMaps(jobId, acquisition, mapsBase) {
   const deadline=Date.now()+20*60*1000;
@@ -522,7 +531,7 @@ async function processAcquisition(id) {
       job.phase="interrupted_requeued";
       job.error=null;
       await saveJob(job);
-      await redis.lPush("recover:acquisition:queue", id);
+      await enqueueUnique(id);
       console.warn("Acquisition interrupted and requeued", id);
     } else {
       job.status="failed";
@@ -555,7 +564,7 @@ async function recoverInterrupted() {
         job.status="queued";
         job.phase="requeued_after_restart";
         await saveJob(job);
-        await redis.lPush("recover:acquisition:queue",id);
+        await enqueueUnique(id);
       }
     } catch {}
   }
