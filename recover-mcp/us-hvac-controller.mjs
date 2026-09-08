@@ -48,6 +48,10 @@ async function bootstrapScopedLeads(redis, scopeSet){
       }
       if(job && String(job.industry||"").toLowerCase()==="hvac" && qualificationProfile(job)===expectedProfile) matches=true;
     }
+    if(!matches){
+      const hvacText=String(lead.industry||lead.category||"").toLowerCase();
+      if(/hvac|heating|air conditioning|cooling|mechanical|refrigeration/.test(hvacText)) matches=true;
+    }
     if(matches) added+=await redis.sAdd(scopeSet,identity);
   }
   console.log(JSON.stringify({event:"scope_bootstrap",added,total:await redis.sCard(scopeSet)}));
