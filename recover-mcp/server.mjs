@@ -5,6 +5,7 @@ import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import * as z from "zod/v4";
 import { orchestrate as enrichEmail } from "email-enrich";
+import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -903,6 +904,68 @@ const httpServer = createHttpServer((req, res) => {
       } catch (error) {
         res.writeHead(500, {"content-type":"application/json"});
         res.end(JSON.stringify({error:"legacy_export_failed",message:error?.message||"unknown"}));
+      }
+    })();
+    return;
+  }
+  if (requestUrl.pathname === "/exports/us-hvac-no-website.csv" && req.method === "GET") {
+    void (async () => {
+      try {
+        const redis = await getAcquisitionRedis();
+        const profileJob = {
+          industry:"HVAC",
+          require_no_website:true,
+          require_contact:true,
+          require_phone:false,
+          require_email:false,
+          include_no_website:true,
+          min_score:30
+        };
+        const scopeKey = campaignLeadSetKey(profileJob);
+        const ids = await redis.sMembers(scopeKey);
+        const values = [];
+        for (let i=0;i<ids.length;i+=500) {
+          const chunk=ids.slice(i,i+500);
+          let rows;
+          if (typeof redis.hMGet === "function") rows = await redis.hMGet("recover:leadstore:qualified", chunk);
+          else rows = await Promise.all(chunk.map(id=>redis.hGet("recover:leadstore:qualified",id)));
+          values.push(...rows);
+        }
+        const leads = values
+          .map(v => { try { return v ? JSON.parse(v) : null; } catch { return null; } })
+          .filter(Boolean)
+          .filter(lead => {
+            const noWebsite = !String(lead.website||"").trim();
+            const emails = Array.isArray(lead.emails) ? lead.emails : String(lead.email||lead.emails||"").split(/[;,\s]+/).filter(Boolean);
+            const contactable = !!String(lead.phone||"").trim() || emails.length>0;
+            const hvac = /hvac|heating|air conditioning|cooling|mechanical|refrigeration/.test(String(lead.category||lead.industry||"").toLowerCase());
+            return noWebsite && contactable && hvac;
+          })
+          .sort((a,b)=>String(a.acquisition_location||a.address||"").localeCompare(String(b.acquisition_location||b.address||"")) || String(a.name||"").localeCompare(String(b.name||"")));
+
+        const esc = value => {
+          const text = Array.isArray(value) ? value.join(", ") : String(value ?? "");
+          return '"' + text.replace(/"/g,'""') + '"';
+        };
+        const header = ["Business Name","Category","Address","City","Region","Phone","Email","Website","Google Maps URL","Place ID","Review Count","Rating","Qualification Score","Acquisition Location","Acquisition ID","Status"];
+        const lines=[header.map(esc).join(",")];
+        for(const lead of leads){
+          lines.push([
+            lead.name||"",lead.category||"",lead.address||"",lead.city||"",lead.region||"",lead.phone||"",
+            lead.emails||lead.email||"",lead.website||"",lead.google_maps_url||"",lead.place_id||"",
+            lead.review_count||0,lead.review_rating||lead.rating||0,lead.qualification?.score||0,
+            lead.acquisition_location||"",lead.acquisition_id||"","auto"
+          ].map(esc).join(","));
+        }
+        res.writeHead(200, {
+          "content-type":"text/csv; charset=utf-8",
+          "cache-control":"no-store, max-age=0",
+          "access-control-allow-origin":"*"
+        });
+        res.end(lines.join("\n"));
+      } catch (error) {
+        res.writeHead(500, {"content-type":"application/json"});
+        res.end(JSON.stringify({error:"us_hvac_export_failed",message:error?.message||"unknown"}));
       }
     })();
     return;
