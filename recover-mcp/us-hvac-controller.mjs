@@ -24,7 +24,6 @@ const states={"Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","Calif
 const profileJob={industry:"HVAC",require_no_website:true,require_contact:true,require_phone:false,require_email:false,include_no_website:true,min_score:30};
 
 async function bootstrapScopedLeads(redis, scopeSet){
-  if(await redis.sCard(scopeSet)>0) return await redis.sCard(scopeSet);
   const all=await redis.hGetAll("recover:leadstore:qualified");
   const expectedProfile=qualificationProfile(profileJob);
   const jobCache=new Map();
