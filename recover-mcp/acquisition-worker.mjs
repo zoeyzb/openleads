@@ -652,3 +652,5 @@ while (!shuttingDown) {
 
 try { await redis.quit(); } catch {}
 console.log("Acquisition worker stopped cleanly");
+
+// deployment trigger: ny-priority-fix
