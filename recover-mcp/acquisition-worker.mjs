@@ -496,11 +496,13 @@ async function processAcquisition(id) {
       job.phase="maps";
       await saveJob(job);
 
+      const fastNyDepthCap=isFastNyMilestone ? 6 : MAPS_ROUND_DEPTH_CAP;
+      const fastNyMaxTime=isFastNyMilestone ? 60 : MAPS_ROUND_MAX_TIME_SECONDS;
       const mapsPayload={
         name:`Recover acquisition ${id} round ${round+1}`,
         keywords:[variants[round]],
-        depth:Math.min(Number(job.depth||10), MAPS_ROUND_DEPTH_CAP),
-        max_time:MAPS_ROUND_MAX_TIME_SECONDS,
+        depth:Math.min(Number(job.depth||10), fastNyDepthCap),
+        max_time:fastNyMaxTime,
         extra_reviews:false,
         lang:"en"
       };
