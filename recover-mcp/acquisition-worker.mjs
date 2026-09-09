@@ -363,42 +363,55 @@ async function replaceList(key,values) {
   }
   await redis.expire(key,JOB_TTL);
 }
-function queueForJob(job) {
-  const location=String(job?.location||"");
+const NY_PRIORITY_QUEUE="recover:acquisition:queue:ny-priority";
+const ACTIVE_QUEUE="recover:acquisition:queue";
+const PAUSED_NATIONAL_QUEUE="recover:acquisition:queue:paused-national";
+const NY_SCOPE_SET="recover:leadstore:ny-home-comfort";
+const NY_FIRST_MILESTONE=Number(process.env.NY_FIRST_MILESTONE||1000);
+
+async function queueForJob(job) {
   const industry=String(job?.industry||"");
   const batchId=String(job?.batch_id||"");
-  const isNy=/\bNY\b|New York/i.test(location);
-  const isNyPriority=isNy && (
-    industry==="HOME_COMFORT_TRADES" ||
-    batchId==="ny-home-comfort-fast-1000-2026-09-09"
-  );
-  return isNyPriority
-    ? "recover:acquisition:queue:ny-priority"
-    : "recover:acquisition:queue";
+  const isFastNy=industry==="HOME_COMFORT_TRADES" ||
+    batchId==="ny-home-comfort-fast-1000-2026-09-09";
+
+  if (isFastNy) return NY_PRIORITY_QUEUE;
+
+  let nyScoped=0;
+  try { nyScoped=await redis.sCard(NY_SCOPE_SET); } catch {}
+  return nyScoped<NY_FIRST_MILESTONE ? PAUSED_NATIONAL_QUEUE : ACTIVE_QUEUE;
 }
 
 async function enqueueUnique(id, jobOverride=null) {
-  let job=jobOverride;
-  if (!job) {
-    const raw=await redis.get(jobKey(id));
-    if (raw) {
-      try { job=JSON.parse(raw); } catch {}
+  const lockKey=`recover:acquisition:enqueue-lock:${id}`;
+  const lockToken=randomUUID();
+  const locked=await redis.set(lockKey,lockToken,{NX:true,EX:15});
+  if (!locked) return false;
+
+  try {
+    let job=jobOverride;
+    if (!job) {
+      const raw=await redis.get(jobKey(id));
+      if (raw) {
+        try { job=JSON.parse(raw); } catch {}
+      }
     }
-  }
-  const queueKey=queueForJob(job);
-  const otherKey=queueKey==="recover:acquisition:queue"
-    ? "recover:acquisition:queue:ny-priority"
-    : "recover:acquisition:queue";
 
-  // Keep a queued acquisition in exactly one live queue.
-  await redis.lRem(otherKey,0,String(id));
+    const queueKey=await queueForJob(job);
+    const allQueues=[NY_PRIORITY_QUEUE,ACTIVE_QUEUE,PAUSED_NATIONAL_QUEUE];
 
-  const pos=await redis.lPos(queueKey,String(id));
-  if (pos===null) {
+    // A queued acquisition must exist in exactly one queue.
+    for (const key of allQueues) {
+      await redis.lRem(key,0,String(id));
+    }
     await redis.lPush(queueKey,String(id));
     return true;
+  } finally {
+    try {
+      const owner=await redis.get(lockKey);
+      if (owner===lockToken) await redis.del(lockKey);
+    } catch {}
   }
-  return false;
 }
 
 async function waitForMaps(jobId, acquisition, mapsBase) {
