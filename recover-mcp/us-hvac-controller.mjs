@@ -20,6 +20,8 @@ const LOOP_MS=Number(process.env.US_HVAC_CONTROLLER_LOOP_MS||15000);
 const TTL=Number(process.env.ACQUISITION_TTL_SECONDS||604800);
 const CONTROLLER_KEY="recover:controller:us-hvac-zip:v1";
 const BATCH_ID=process.env.US_HVAC_BATCH_ID||"us-hvac-zip-100k-2026-09-08";
+const PAUSED_NATIONAL_QUEUE="recover:acquisition:queue:paused-national";
+const ACTIVE_QUEUE=ACTIVE_QUEUE;
 
 const profileJob={
   industry:"HVAC",
@@ -161,6 +163,24 @@ console.log("US HVAC ZIP controller started",JSON.stringify({
   queueHighWater:QUEUE_HIGH_WATER
 }));
 
+async function resumePausedNational(maxToMove){
+  let moved=0, duplicates=0;
+  const limit=Math.max(0,Number(maxToMove||0));
+  while(moved<limit){
+    const id=await redis.rPop(PAUSED_NATIONAL_QUEUE);
+    if(!id) break;
+    const pos=await redis.lPos(ACTIVE_QUEUE,String(id));
+    if(pos===null){
+      await redis.lPush(ACTIVE_QUEUE,String(id));
+      moved++;
+    }else{
+      duplicates++;
+    }
+  }
+  const remaining=await redis.lLen(PAUSED_NATIONAL_QUEUE);
+  return {moved,duplicates,remaining};
+}
+
 async function seedOne(area){
   const id=randomUUID(), now=new Date().toISOString();
   const job={
@@ -204,8 +224,8 @@ async function seedOne(area){
   await redis.sAdd("recover:acq:index",id);
   await redis.sAdd("recover:batch:"+BATCH_ID+":jobs",id);
   await redis.expire("recover:batch:"+BATCH_ID+":jobs",TTL);
-  const pos=await redis.lPos("recover:acquisition:queue",id);
-  if(pos===null) await redis.lPush("recover:acquisition:queue",id);
+  const pos=await redis.lPos(ACTIVE_QUEUE,id);
+  if(pos===null) await redis.lPush(ACTIVE_QUEUE,id);
   return true;
 }
 
@@ -213,7 +233,8 @@ while(true){
   try{
     const scoped=await redis.sCard(scopeSet);
     const nyScoped=await redis.sCard(NY_SCOPE_SET);
-    const queue=await redis.lLen("recover:acquisition:queue");
+    const queue=await redis.lLen(ACTIVE_QUEUE);
+    const pausedNational=await redis.lLen(PAUSED_NATIONAL_QUEUE);
 
     await redis.hSet(CONTROLLER_KEY,{
       scoped_count:String(scoped),
@@ -224,11 +245,32 @@ while(true){
       milestone_1000:scoped>=FIRST_MILESTONE?"reached":"pending",
       ny_priority_count:String(nyScoped),
       ny_priority_milestone:nyScoped>=NY_FIRST_MILESTONE?"reached":"pending",
+      paused_national_count:String(pausedNational),
+      national_resume_state:nyScoped>=NY_FIRST_MILESTONE?(pausedNational>0?"draining_parked":"active"):"waiting_for_ny",
       target_100k:scoped>=TARGET_TOTAL?"reached":"pending"
     });
 
     if(nyScoped<NY_FIRST_MILESTONE){
-      console.log(JSON.stringify({event:"ny_priority_hold",nyScoped,nyTarget:NY_FIRST_MILESTONE,scoped,queue,cursor}));
+      console.log(JSON.stringify({event:"ny_priority_hold",nyScoped,nyTarget:NY_FIRST_MILESTONE,scoped,queue,pausedNational,cursor}));
+      await new Promise(r=>setTimeout(r,LOOP_MS));
+      continue;
+    }
+
+    if(pausedNational>0){
+      const capacity=Math.max(0,QUEUE_HIGH_WATER-queue);
+      if(capacity>0){
+        const resumed=await resumePausedNational(capacity);
+        console.log(JSON.stringify({
+          event:"national_resume_parked",
+          nyScoped,
+          nyTarget:NY_FIRST_MILESTONE,
+          queue_before:queue,
+          capacity,
+          ...resumed
+        }));
+      }else{
+        console.log(JSON.stringify({event:"national_resume_backpressure",nyScoped,queue,pausedNational}));
+      }
       await new Promise(r=>setTimeout(r,LOOP_MS));
       continue;
     }
