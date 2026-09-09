@@ -422,3 +422,5 @@ while(true){
   }
   await new Promise(r=>setTimeout(r,LOOP_MS));
 }
+
+// strict classifier controller refresh 2026-09-10
