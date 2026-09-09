@@ -1,7 +1,7 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { matchesRequestedLocation, upsertQualifiedLeads } from "./acquisition-persistence.mjs";
-import { markCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
+import { markCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";\nimport { isCoreHomeServiceLead, isCoreHomeServiceIndustry } from "./home-service-targeting.mjs";
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
