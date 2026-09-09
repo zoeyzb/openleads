@@ -987,8 +987,8 @@ const httpServer = createHttpServer((req, res) => {
             const explicitNY = /,\s*ny\b|new york\b/i.test(address) || /\bny\b|new york/.test(region) || /new york/.test(city);
             const fallbackNY = !address && !region && !city && /new york|\bny\b/.test(String(lead.acquisition_location||"").toLowerCase());
             const inNY = !explicitOtherState && (explicitNY || fallbackNY);
-            const hvac = /hvac|heating|air conditioning|cooling|mechanical/.test(String(lead.category||lead.industry||"").toLowerCase());
-            return noWebsite && contactable && inNY && hvac;
+            const homeComfort = /hvac|heating|air conditioning|cooling|mechanical|plumb|furnace|boiler|duct|ventilation|refrigeration/.test(String((lead.category||"")+" "+(lead.industry||"")+" "+(lead.name||"")).toLowerCase());
+            return noWebsite && contactable && inNY && homeComfort;
           })
           .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
         const esc = value => {
