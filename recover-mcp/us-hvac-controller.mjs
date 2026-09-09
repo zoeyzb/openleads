@@ -10,11 +10,12 @@ const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||
   "https://raw.githubusercontent.com/ReadyAPIs-com/curated-us-zips/main/data/us-zips.csv";
 const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||100000);
 const NY_FIRST_MILESTONE=Number(process.env.NY_HOME_COMFORT_FIRST_MILESTONE||1000);
+const ENFORCE_NY_FIRST=String(process.env.ENFORCE_NY_FIRST_MILESTONE||"0")==="1";
 const NY_SCOPE_SET="recover:leadstore:ny-home-comfort";
 const FIRST_MILESTONE=Number(process.env.US_HVAC_FIRST_MILESTONE||1000);
 const QUEUE_HIGH_WATER=Math.min(Number(process.env.US_HVAC_QUEUE_HIGH_WATER||72),72);
 const SEED_BATCH_SIZE=Math.min(Number(process.env.US_HVAC_SEED_BATCH_SIZE||18),18);
-const TARGET_PER_AREA=Number(process.env.US_HVAC_ZIP_TARGET_PER_AREA||18);
+const TARGET_PER_AREA=Math.min(Number(process.env.US_HVAC_ZIP_TARGET_PER_AREA||18),18);
 const DEPTH=Math.min(Number(process.env.US_HVAC_ZIP_DEPTH||6),6);
 const MAX_ROUNDS=1;
 const LOOP_MS=Number(process.env.US_HVAC_CONTROLLER_LOOP_MS||15000);
@@ -202,8 +203,9 @@ let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pas
 console.log("US HVAC ZIP controller started",JSON.stringify({
   areas:areas.length,target:TARGET_TOTAL,scopeSet,cursor,
   targetPerArea:TARGET_PER_AREA,maxRounds:MAX_ROUNDS,depth:DEPTH,
-  queueHighWater:QUEUE_HIGH_WATER,coveragePass,partitioning:"state>city>zip"
+  queueHighWater:QUEUE_HIGH_WATER,coveragePass,partitioning:"state>city>zip",enforceNyFirst:ENFORCE_NY_FIRST
 }));
+await upgradeQueuedNationalJobs();
 
 async function parkNySurplus(){
   let moved=0,missing=0,already=0;
@@ -237,6 +239,28 @@ async function resumePausedNational(maxToMove){
   }
   const remaining=await redis.lLen(PAUSED_NATIONAL_QUEUE);
   return {moved,duplicates,remaining};
+}
+
+async function upgradeQueuedNationalJobs(){
+  const ids=await redis.lRange(ACTIVE_QUEUE,0,-1);
+  let upgraded=0,skipped=0;
+  for(const id of ids){
+    const raw=await redis.get("recover:acq:"+id);
+    if(!raw){skipped++;continue;}
+    let job; try{job=JSON.parse(raw)}catch{skipped++;continue;}
+    if(String(job.status||"")!=="queued" || Number(job.round||0)>0){skipped++;continue;}
+    const industry=String(job.industry||"").toLowerCase();
+    if(!/hvac|home.comfort|home.service|heating|cooling|plumb/.test(industry)){skipped++;continue;}
+    job.search_profile="core-home-service";
+    job.max_rounds=1;
+    job.depth=Math.min(Number(job.depth||6),6);
+    job.target=Math.min(Number(job.target||18),18);
+    job.updated_at=new Date().toISOString();
+    await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});
+    upgraded++;
+  }
+  console.log(JSON.stringify({event:"legacy_queue_upgraded",queue:ids.length,upgraded,skipped}));
+  return upgraded;
 }
 
 async function seedOne(area){
@@ -315,18 +339,18 @@ while(true){
       ny_priority_count:String(nyScoped),
       ny_priority_milestone:nyScoped>=NY_FIRST_MILESTONE?"reached":"pending",
       paused_national_count:String(pausedNational),
-      national_resume_state:nyScoped>=NY_FIRST_MILESTONE?(pausedNational>0?"draining_parked":"active"):"waiting_for_ny",
+      national_resume_state:(!ENFORCE_NY_FIRST || nyScoped>=NY_FIRST_MILESTONE)?(pausedNational>0?"draining_parked":"active"):"waiting_for_ny",
       target_100k:scoped>=TARGET_TOTAL?"reached":"pending"
     });
 
-    if(nyScoped<NY_FIRST_MILESTONE){
+    if(ENFORCE_NY_FIRST && nyScoped<NY_FIRST_MILESTONE){
       console.log(JSON.stringify({event:"ny_priority_hold",nyScoped,nyTarget:NY_FIRST_MILESTONE,scoped,queue,pausedNational,cursor}));
       await new Promise(r=>setTimeout(r,LOOP_MS));
       continue;
     }
 
     const nyPriorityLen=await redis.lLen(NY_PRIORITY_QUEUE);
-    if(nyPriorityLen>0){
+    if(!ENFORCE_NY_FIRST && nyPriorityLen>0){
       const parkedNy=await parkNySurplus();
       console.log(JSON.stringify({event:"ny_surplus_parked",nyScoped,nyTarget:NY_FIRST_MILESTONE,...parkedNy}));
     }
