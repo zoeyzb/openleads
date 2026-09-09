@@ -510,8 +510,9 @@ async function processAcquisition(id) {
       const querySeed=`${String(job.location||job.id||"")}|${String(job.coverage_pass||"pass1")}`;
       for (const ch of querySeed) hash=(hash*31+ch.charCodeAt(0))>>>0;
       const start=hash % variants.length;
-      const spread=Math.max(1,Math.floor(variants.length/2));
-      variants=[variants[start],variants[(start+spread)%variants.length]];
+      const bundleCount=configuredMaxRounds===1 ? Math.min(3,variants.length) : Math.min(2,variants.length);
+      const spread=Math.max(1,Math.floor(variants.length/bundleCount));
+      variants=Array.from({length:bundleCount},(_,i)=>variants[(start+i*spread)%variants.length]);
     }
     const maxRounds=Math.min(isFastNyMilestone ? Math.min(2,configuredMaxRounds) : configuredMaxRounds,variants.length);
 
@@ -524,9 +525,10 @@ async function processAcquisition(id) {
 
       const fastNyDepthCap=isFastNyMilestone ? 6 : MAPS_ROUND_DEPTH_CAP;
       const fastNyMaxTime=isFastNyMilestone ? 60 : MAPS_ROUND_MAX_TIME_SECONDS;
+      const mapsKeywords=(isFastNyMilestone && configuredMaxRounds===1) ? variants : [variants[round]];
       const mapsPayload={
         name:`Recover acquisition ${id} round ${round+1}`,
-        keywords:[variants[round]],
+        keywords:mapsKeywords,
         depth:Math.min(Number(job.depth||10), fastNyDepthCap),
         max_time:fastNyMaxTime,
         extra_reviews:false,
