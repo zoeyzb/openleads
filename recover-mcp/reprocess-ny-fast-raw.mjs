@@ -82,9 +82,8 @@ for(const id of ids){
   const rawJob=await redis.get("recover:acq:"+id);
   if(!rawJob) continue;
   let job; try{job=JSON.parse(rawJob);}catch{continue;}
-  const fast=String(job.batch_id||"")==="ny-home-comfort-fast-1000-2026-09-09" ||
-    (String(job.industry||"")==="HOME_COMFORT_TRADES" && /\bny\b|new york/i.test(String(job.location||"")));
-  if(!fast) continue;
+  // Deep recovery: scan every historical acquisition raw list, then strictly
+  // keep only New York + home-comfort + no-website + contactable rows.
   stats.jobsScanned++;
   const rows=await redis.lRange("recover:acq:"+id+":raw",0,-1);
   for(const s of rows){
@@ -116,7 +115,7 @@ if(batch.length){
 const afterQualified=await redis.hLen("recover:leadstore:qualified");
 const afterNy=await redis.sCard("recover:leadstore:ny-home-comfort");
 console.log(JSON.stringify({
-  event:"ny_fast_raw_reprocess_complete",
+  event:"ny_all_history_raw_reprocess_complete",
   beforeQualified,afterQualified,qualifiedDelta:afterQualified-beforeQualified,
   beforeNy,afterNy,nyDelta:afterNy-beforeNy,
   jobsScanned:stats.jobsScanned,rawRows:stats.rawRows,nyRows:stats.ny,tradeRows:stats.trade,
