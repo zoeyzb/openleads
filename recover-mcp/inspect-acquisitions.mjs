@@ -71,3 +71,5 @@ console.log(JSON.stringify({
   recent:rows.slice(0,40)
 }));
 await redis.quit();
+
+// Trigger post-restart queue audit 2026-09-09T08:40Z
