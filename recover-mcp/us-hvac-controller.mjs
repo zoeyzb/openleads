@@ -21,7 +21,7 @@ const TTL=Number(process.env.ACQUISITION_TTL_SECONDS||604800);
 const CONTROLLER_KEY="recover:controller:us-hvac-zip:v1";
 const BATCH_ID=process.env.US_HVAC_BATCH_ID||"us-hvac-zip-100k-2026-09-08";
 const PAUSED_NATIONAL_QUEUE="recover:acquisition:queue:paused-national";
-const ACTIVE_QUEUE=ACTIVE_QUEUE;
+const ACTIVE_QUEUE="recover:acquisition:queue";
 
 const profileJob={
   industry:"HVAC",
