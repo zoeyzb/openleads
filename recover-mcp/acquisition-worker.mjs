@@ -410,9 +410,18 @@ async function queueForJob(job) {
   const industry=String(job?.industry||"");
   const batchId=String(job?.batch_id||"");
   const isFastNy=industry==="HOME_COMFORT_TRADES" ||
-    batchId==="ny-home-comfort-fast-1000-2026-09-09";
+    batchId==="ny-home-comfort-fast-1000-2026-09-09" ||
+    batchId==="ny-home-comfort-fast-pass2-2026-09-09";
 
   if (isFastNy) return NY_PRIORITY_QUEUE;
+
+  // Nationwide v2 is an explicit phase transition. Do not send its retries or
+  // recovered jobs back behind the obsolete NY-first milestone gate.
+  if (String(job?.search_profile||"")==="core-home-service" ||
+      String(job?.coverage_pass||"").startsWith("us-core-v2-") ||
+      String(batchId).startsWith("us-core-home-service-100k-v2")) {
+    return ACTIVE_QUEUE;
+  }
 
   let nyScoped=0;
   try { nyScoped=await redis.sCard(NY_SCOPE_SET); } catch {}
