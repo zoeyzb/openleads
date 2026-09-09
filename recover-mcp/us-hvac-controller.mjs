@@ -8,6 +8,8 @@ if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
 const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||
   "https://raw.githubusercontent.com/ReadyAPIs-com/curated-us-zips/main/data/us-zips.csv";
 const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||100000);
+const NY_FIRST_MILESTONE=Number(process.env.NY_HOME_COMFORT_FIRST_MILESTONE||1000);
+const NY_SCOPE_SET="recover:leadstore:ny-home-comfort";
 const FIRST_MILESTONE=Number(process.env.US_HVAC_FIRST_MILESTONE||1000);
 const QUEUE_HIGH_WATER=Number(process.env.US_HVAC_QUEUE_HIGH_WATER||96);
 const SEED_BATCH_SIZE=Number(process.env.US_HVAC_SEED_BATCH_SIZE||36);
@@ -28,6 +30,35 @@ const profileJob={
   include_no_website:true,
   min_score:30
 };
+
+function isNyLocation(value=""){
+  return /\\bny\\b|new york/i.test(String(value||""));
+}
+function isHomeComfortLead(lead={}){
+  const text=String([lead.industry,lead.category,lead.name,lead.title].filter(Boolean).join(" ")).toLowerCase();
+  return /hvac|heating|cooling|air conditioning|furnace|boiler|duct|ventilation|refrigeration|plumb/.test(text);
+}
+async function bootstrapNyScope(redis){
+  const existing=await redis.sCard(NY_SCOPE_SET);
+  if(existing>0) return existing;
+  const all=await redis.hGetAll("recover:leadstore:qualified");
+  const ids=[];
+  for(const [identity,raw] of Object.entries(all)){
+    let lead; try{lead=JSON.parse(raw)}catch{continue}
+    if(String(lead.website||"").trim()) continue;
+    const hasContact=String(lead.phone||"").trim() || (Array.isArray(lead.emails)&&lead.emails.length) || String(lead.email||"").trim();
+    if(!hasContact) continue;
+    if(!isNyLocation(lead.acquisition_location||lead.region||lead.state||lead.address||"")) continue;
+    if(!isHomeComfortLead(lead)) continue;
+    ids.push(identity);
+  }
+  if(ids.length) {
+    for(let i=0;i<ids.length;i+=500) await redis.sAdd(NY_SCOPE_SET,ids.slice(i,i+500));
+  }
+  const total=await redis.sCard(NY_SCOPE_SET);
+  console.log(JSON.stringify({event:"ny_scope_bootstrap",total}));
+  return total;
+}
 
 function parseCsvLine(line){
   const out=[]; let cell="", quoted=false;
@@ -122,6 +153,7 @@ await redis.connect();
 const areas=await fetchZipAreas();
 const scopeSet=campaignLeadSetKey(profileJob);
 await bootstrapScopedLeads(redis,scopeSet);
+await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0);
 console.log("US HVAC ZIP controller started",JSON.stringify({
   areas:areas.length,target:TARGET_TOTAL,scopeSet,cursor,
@@ -180,6 +212,7 @@ async function seedOne(area){
 while(true){
   try{
     const scoped=await redis.sCard(scopeSet);
+    const nyScoped=await redis.sCard(NY_SCOPE_SET);
     const queue=await redis.lLen("recover:acquisition:queue");
 
     await redis.hSet(CONTROLLER_KEY,{
@@ -189,8 +222,16 @@ while(true){
       area_count:String(areas.length),
       updated_at:new Date().toISOString(),
       milestone_1000:scoped>=FIRST_MILESTONE?"reached":"pending",
+      ny_priority_count:String(nyScoped),
+      ny_priority_milestone:nyScoped>=NY_FIRST_MILESTONE?"reached":"pending",
       target_100k:scoped>=TARGET_TOTAL?"reached":"pending"
     });
+
+    if(nyScoped<NY_FIRST_MILESTONE){
+      console.log(JSON.stringify({event:"ny_priority_hold",nyScoped,nyTarget:NY_FIRST_MILESTONE,scoped,queue,cursor}));
+      await new Promise(r=>setTimeout(r,LOOP_MS));
+      continue;
+    }
 
     if(scoped>=TARGET_TOTAL){
       console.log(JSON.stringify({event:"target_reached",scoped,queue,cursor}));
