@@ -1,6 +1,6 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
-import { claimCoverage, campaignLeadSetKey, qualificationProfile } from "./acquisition-coverage.mjs";
+import { claimCoverage, campaignLeadSetKey, qualificationProfile } from "./acquisition-coverage.mjs";\nimport { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||"";
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
@@ -106,11 +106,7 @@ async function bootstrapScopedLeads(redis, scopeSet){
       }
       if(job && String(job.industry||"").toLowerCase()==="hvac" && qualificationProfile(job)===expectedProfile) matches=true;
     }
-    if(!matches){
-      const hvacText=String(lead.industry||lead.category||"").toLowerCase();
-      if(/hvac|heating|air conditioning|cooling|mechanical|refrigeration/.test(hvacText)) matches=true;
-    }
-    if(matches) added+=await redis.sAdd(scopeSet,identity);
+    if(matches && isCoreHomeServiceLead(lead)) added+=await redis.sAdd(scopeSet,identity);
   }
   const total=await redis.sCard(scopeSet);
   console.log(JSON.stringify({event:"scope_bootstrap",added,total}));
