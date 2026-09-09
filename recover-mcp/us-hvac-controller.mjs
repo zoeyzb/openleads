@@ -1,6 +1,7 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
-import { claimCoverage, campaignLeadSetKey, qualificationProfile } from "./acquisition-coverage.mjs";\nimport { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
+import { claimCoverage, campaignLeadSetKey, qualificationProfile } from "./acquisition-coverage.mjs";
+import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||"";
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
