@@ -27,11 +27,25 @@ function mapsBaseFor(acquisitionId) {
   return MAPS_BASE_URLS[hash % MAPS_BASE_URLS.length];
 }
 
+function mapsLaneCooldownKey(url) {
+  return "recover:maps:lane:cooldown:"+Buffer.from(String(url||"")).toString("base64url");
+}
+async function markMapsLaneUnavailable(url, seconds=75) {
+  if (!url) return;
+  try { await redis.set(mapsLaneCooldownKey(url),"1",{EX:seconds}); } catch {}
+}
 async function nextMapsBase(acquisitionId) {
   if (MAPS_BASE_URLS.length <= 1) return MAPS_BASE_URLS[0];
   try {
-    const n=await redis.incr("recover:maps:round_robin");
-    return MAPS_BASE_URLS[(n-1) % MAPS_BASE_URLS.length];
+    let fallback=MAPS_BASE_URLS[0];
+    for (let attempt=0; attempt<MAPS_BASE_URLS.length; attempt++) {
+      const n=await redis.incr("recover:maps:round_robin");
+      const candidate=MAPS_BASE_URLS[(n-1) % MAPS_BASE_URLS.length];
+      fallback=candidate;
+      const cooling=await redis.exists(mapsLaneCooldownKey(candidate));
+      if (!cooling) return candidate;
+    }
+    return fallback;
   } catch {
     return mapsBaseFor(acquisitionId);
   }
@@ -61,6 +75,7 @@ async function createMapsJobWithFailover(acquisitionId, payload) {
       return {mapsBase,create};
     } catch (error) {
       lastError=error;
+      if (isRetryableError(error)) await markMapsLaneUnavailable(mapsBase);
       if (!isRetryableError(error) || attempt>=maxAttempts) throw error;
       const delay=500+Math.floor(Math.random()*500);
       console.warn("Maps create failover", "attempt", attempt, "failed via", mapsBase, "switching lane in", delay, "ms:", error.message);
@@ -216,6 +231,9 @@ function isFastNyMilestoneJob(job) {
 }
 function matchesAcquisitionLocation(lead, job) {
   return isFastNyMilestoneJob(job) ? matchesFastNyState(lead) : matchesRequestedLocation(lead,job.location);
+}
+function isFastHomeServiceJob(job) {
+  return isFastNyMilestoneJob(job) || String(job?.search_profile||"")==="core-home-service";
 }
 
 function matchesRequestedIndustry(lead, industry) {
@@ -450,7 +468,7 @@ async function waitForMaps(jobId, acquisition, mapsBase) {
     await saveJob(acquisition);
     if (mapsTerminal(status)) return status;
     if (mapsFailed(status)) throw new Error(`Maps job ${jobId} failed: ${mapsStatus(status)}`);
-    await sleep(POLL_MS);
+    await sleep(String(acquisition?.search_profile||'')==='core-home-service' ? Math.min(POLL_MS,3000) : POLL_MS);
   }
   throw new Error(`Maps job ${jobId} timed out`);
 }
@@ -503,9 +521,8 @@ async function processAcquisition(id) {
   try {
     let variants=queryVariants(job.industry,job.location);
     const configuredMaxRounds=Number(job.max_rounds||12);
-    const isFastNyMilestone=String(job.batch_id||"")==="ny-home-comfort-fast-1000-2026-09-09" ||
-      String(job.industry||"")==="HOME_COMFORT_TRADES";
-    if (isFastNyMilestone && variants.length>2) {
+    const isFastHomeService=isFastHomeServiceJob(job);
+    if (isFastHomeService && variants.length>2) {
       let hash=0;
       const querySeed=`${String(job.location||job.id||"")}|${String(job.coverage_pass||"pass1")}`;
       for (const ch of querySeed) hash=(hash*31+ch.charCodeAt(0))>>>0;
@@ -514,7 +531,7 @@ async function processAcquisition(id) {
       const spread=Math.max(1,Math.floor(variants.length/bundleCount));
       variants=Array.from({length:bundleCount},(_,i)=>variants[(start+i*spread)%variants.length]);
     }
-    const maxRounds=Math.min(isFastNyMilestone ? Math.min(2,configuredMaxRounds) : configuredMaxRounds,variants.length);
+    const maxRounds=Math.min(isFastHomeService ? Math.min(2,configuredMaxRounds) : configuredMaxRounds,variants.length);
 
     for (let round=Number(job.round||0); round<maxRounds; round++) {
       job.round=round;
@@ -523,9 +540,9 @@ async function processAcquisition(id) {
       job.phase="maps";
       await saveJob(job);
 
-      const fastNyDepthCap=isFastNyMilestone ? 6 : MAPS_ROUND_DEPTH_CAP;
-      const fastNyMaxTime=isFastNyMilestone ? 60 : MAPS_ROUND_MAX_TIME_SECONDS;
-      const mapsKeywords=(isFastNyMilestone && configuredMaxRounds===1) ? variants : [variants[round]];
+      const fastNyDepthCap=isFastHomeService ? 6 : MAPS_ROUND_DEPTH_CAP;
+      const fastNyMaxTime=isFastHomeService ? 60 : MAPS_ROUND_MAX_TIME_SECONDS;
+      const mapsKeywords=(isFastHomeService && configuredMaxRounds===1) ? variants : [variants[round]];
       const mapsPayload={
         name:`Recover acquisition ${id} round ${round+1}`,
         keywords:mapsKeywords,
@@ -551,6 +568,7 @@ async function processAcquisition(id) {
         if (/timed out|lost after runtime restart|Maps job .* failed:/i.test(mapsError) || transportFailed) {
           const lost=/lost after runtime restart/i.test(mapsError);
           const backendFailed=/Maps job .* failed:/i.test(mapsError) || transportFailed;
+          if (backendFailed || lost) await markMapsLaneUnavailable(mapsBase);
           job.maps_jobs[job.maps_jobs.length-1].status=lost?"lost_after_restart":backendFailed?"backend_unavailable":"timed_out";
           job.maps_jobs[job.maps_jobs.length-1].error=mapsError;
           job.phase=lost?"maps_restart_continue":backendFailed?"maps_backend_unavailable_continue":"maps_timeout_continue";
@@ -561,6 +579,13 @@ async function processAcquisition(id) {
             "Acquisition maps timeout; continuing next round",
             id,mapsJobId
           );
+          job.round_retry_counts=job.round_retry_counts||{};
+          const retryCount=Number(job.round_retry_counts[String(round)]||0);
+          if (isFastHomeService && retryCount<1) {
+            job.round_retry_counts[String(round)]=retryCount+1;
+            await saveJob(job);
+            round--;
+          }
           continue;
         }
         throw error;
@@ -571,11 +596,19 @@ async function processAcquisition(id) {
         csv=await withRetry("Maps CSV download", () => fetchText(`${mapsBase}/api/v1/jobs/${encodeURIComponent(mapsJobId)}/download`,{},60000));
       } catch (error) {
         if (!isRetryableError(error)) throw error;
+        await markMapsLaneUnavailable(mapsBase);
         job.maps_jobs[job.maps_jobs.length-1].status="download_unavailable";
         job.maps_jobs[job.maps_jobs.length-1].error=String(error?.message||error);
         job.phase="maps_download_unavailable_continue";
         await saveJob(job);
         console.warn("Acquisition Maps download unavailable; continuing next round",id,mapsJobId,error.message);
+        job.round_retry_counts=job.round_retry_counts||{};
+        const retryCount=Number(job.round_retry_counts[String(round)]||0);
+        if (isFastHomeService && retryCount<1) {
+          job.round_retry_counts[String(round)]=retryCount+1;
+          await saveJob(job);
+          round--;
+        }
         continue;
       }
       const roundRows=parseCsv(csv);
