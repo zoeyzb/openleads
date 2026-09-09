@@ -96,3 +96,5 @@ console.log(JSON.stringify({
 }));
 
 await redis.quit();
+
+// Trigger queue normalization run 2026-09-09T08:36Z
