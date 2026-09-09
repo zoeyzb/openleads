@@ -26,6 +26,7 @@ const PAUSED_NATIONAL_QUEUE="recover:acquisition:queue:paused-national";
 const ACTIVE_QUEUE="recover:acquisition:queue";
 const NY_PRIORITY_QUEUE="recover:acquisition:queue:ny-priority";
 const PAUSED_NY_SURPLUS_QUEUE="recover:acquisition:queue:paused-ny-surplus";
+const PAUSED_LEGACY_NATIONAL_QUEUE="recover:acquisition:queue:paused-legacy-national-v1";
 
 const profileJob={
   industry:"HVAC",
@@ -206,6 +207,7 @@ console.log("US HVAC ZIP controller started",JSON.stringify({
   queueHighWater:QUEUE_HIGH_WATER,coveragePass,partitioning:"state>city>zip",enforceNyFirst:ENFORCE_NY_FIRST
 }));
 await upgradeQueuedNationalJobs();
+await parkLegacyNationalForV2();
 
 async function parkNySurplus(){
   let moved=0,missing=0,already=0;
@@ -239,6 +241,33 @@ async function resumePausedNational(maxToMove){
   }
   const remaining=await redis.lLen(PAUSED_NATIONAL_QUEUE);
   return {moved,duplicates,remaining};
+}
+
+async function parkLegacyNationalForV2(){
+  const ids=await redis.lRange(ACTIVE_QUEUE,0,-1);
+  let parked=0,keptV2=0,skipped=0;
+  for(const id of ids){
+    const raw=await redis.get("recover:acq:"+id);
+    if(!raw){skipped++;continue;}
+    let job; try{job=JSON.parse(raw)}catch{skipped++;continue;}
+    if(String(job.status||"")!=="queued"){skipped++;continue;}
+    const isV2=String(job.batch_id||"").startsWith("us-core-home-service-100k-v2") ||
+      String(job.coverage_pass||"").startsWith("us-core-v2-");
+    if(isV2){keptV2++;continue;}
+    const removed=await redis.lRem(ACTIVE_QUEUE,1,String(id));
+    if(!removed){skipped++;continue;}
+    const pos=await redis.lPos(PAUSED_LEGACY_NATIONAL_QUEUE,String(id));
+    if(pos===null) await redis.lPush(PAUSED_LEGACY_NATIONAL_QUEUE,String(id));
+    parked++;
+  }
+  const result={
+    event:"legacy_national_parked_for_v2",
+    snapshot:ids.length,parked,keptV2,skipped,
+    activeAfter:await redis.lLen(ACTIVE_QUEUE),
+    pausedLegacy:await redis.lLen(PAUSED_LEGACY_NATIONAL_QUEUE)
+  };
+  console.log(JSON.stringify(result));
+  return result;
 }
 
 async function upgradeQueuedNationalJobs(){
