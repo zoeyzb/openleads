@@ -363,8 +363,36 @@ async function replaceList(key,values) {
   }
   await redis.expire(key,JOB_TTL);
 }
-async function enqueueUnique(id) {
-  const queueKey="recover:acquisition:queue";
+function queueForJob(job) {
+  const location=String(job?.location||"");
+  const industry=String(job?.industry||"");
+  const batchId=String(job?.batch_id||"");
+  const isNy=/\bNY\b|New York/i.test(location);
+  const isNyPriority=isNy && (
+    industry==="HOME_COMFORT_TRADES" ||
+    batchId==="ny-home-comfort-fast-1000-2026-09-09"
+  );
+  return isNyPriority
+    ? "recover:acquisition:queue:ny-priority"
+    : "recover:acquisition:queue";
+}
+
+async function enqueueUnique(id, jobOverride=null) {
+  let job=jobOverride;
+  if (!job) {
+    const raw=await redis.get(jobKey(id));
+    if (raw) {
+      try { job=JSON.parse(raw); } catch {}
+    }
+  }
+  const queueKey=queueForJob(job);
+  const otherKey=queueKey==="recover:acquisition:queue"
+    ? "recover:acquisition:queue:ny-priority"
+    : "recover:acquisition:queue";
+
+  // Keep a queued acquisition in exactly one live queue.
+  await redis.lRem(otherKey,0,String(id));
+
   const pos=await redis.lPos(queueKey,String(id));
   if (pos===null) {
     await redis.lPush(queueKey,String(id));
@@ -626,7 +654,7 @@ async function processAcquisition(id) {
       job.phase="interrupted_requeued";
       job.error=null;
       await saveJob(job);
-      await enqueueUnique(id);
+      await enqueueUnique(id,job);
       console.warn("Acquisition interrupted and requeued", id);
     } else {
       job.status="failed";
@@ -659,7 +687,7 @@ async function recoverInterrupted() {
         job.status="queued";
         job.phase="requeued_after_restart";
         await saveJob(job);
-        await enqueueUnique(id);
+        await enqueueUnique(id,job);
       }
     } catch {}
   }
