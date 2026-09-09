@@ -1,0 +1,39 @@
+function normalize(value=""){
+  return String(value||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+}
+
+const REJECT_CATEGORY=/\b(pest control|exterminat|auto repair|automotive|car dealer|vehicle repair|appliance parts|appliance store|parts supplier|equipment supplier|wholesal|manufacturer|hardware store|retail|restaurant|cafe|food|hotel|motel|lawyer|attorney|dentist|doctor|medical|insurance|real estate|beauty|salon|school|church|marketing|software|computer repair)\b/;
+
+const STRONG_CATEGORY=/\b(hvac contractor|heating contractor|air conditioning contractor|air conditioning repair service|ac repair service|cooling contractor|plumber|plumbing contractor|plumbing service|furnace repair service|furnace contractor|boiler repair service|boiler contractor|air duct cleaning service|duct cleaning service|air duct contractor|ventilation contractor|refrigeration contractor|refrigeration service)\b/;
+
+const SERVICE_SIGNAL=/\b(hvac|heating|cooling|air conditioning|ac repair|furnace|boiler|air duct|duct cleaning|ventilation|plumb|refrigeration)\b/;
+
+export function isCoreHomeServiceLead(lead={}){
+  const category=normalize(lead.category||lead.industry||"");
+  const name=normalize(lead.name||lead.title||"");
+  const desc=normalize(lead.description||lead.descriptions||"");
+  const categoryAndName=[category,name].filter(Boolean).join(" ");
+  const evidence=[name,desc].filter(Boolean).join(" ");
+
+  if(REJECT_CATEGORY.test(category)) return false;
+  if(/\b(supplier|wholesale|manufacturer|parts|retail store|equipment store)\b/.test(category)) return false;
+  if(STRONG_CATEGORY.test(category)) return true;
+
+  // Mechanical / generic contractor categories only qualify when the company itself
+  // clearly advertises one of the website-fit service trades.
+  if(/\b(mechanical contractor|mechanical service|contractor|home service)\b/.test(category)){
+    return SERVICE_SIGNAL.test(evidence);
+  }
+
+  // Sparse Maps categories can still qualify from a strong business-name signal,
+  // but never let an explicitly unrelated category be overridden by the name.
+  if(!category || /\b(service establishment|business to business service)\b/.test(category)){
+    return SERVICE_SIGNAL.test(categoryAndName);
+  }
+
+  return false;
+}
+
+export function isCoreHomeServiceIndustry(value=""){
+  return /\b(hvac|heating|cooling|air conditioning|home comfort|plumb|furnace|boiler|duct|ventilation|refrigeration)\b/.test(normalize(value));
+}
