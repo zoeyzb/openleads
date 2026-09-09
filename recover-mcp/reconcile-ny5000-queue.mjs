@@ -5,14 +5,8 @@ const batchId=process.env.NY5000_BATCH_ID||"ny-hvac-no-website-5000-2026-09-07";
 const ttl=Number(process.env.ACQUISITION_TTL_SECONDS||604800);
 const ids=await redis.sMembers("recover:batch:"+batchId+":jobs");
 const batchSet=new Set(ids);
-const existingQueue=await redis.lRange("recover:acquisition:queue",0,-1);
+const existingQueue=await redis.lRange("recover:acquisition:queue:ny-priority",0,-1);
 const uniqueNonBatch=[];
-const seenNonBatch=new Set();
-for(const id of existingQueue){
-  if(batchSet.has(id)) continue;
-  if(seenNonBatch.has(id)) continue;
-  seenNonBatch.add(id); uniqueNonBatch.push(id);
-}
 const enqueue=[];
 const now=new Date().toISOString();
 let orphanedRunning=0, liveRunning=0, queued=0, terminal=0;
@@ -36,18 +30,17 @@ for(const id of ids){
   }
 }
 const uniqBatch=[...new Set(enqueue)];
-await redis.del("recover:acquisition:queue");
-for(let i=uniqueNonBatch.length-1;i>=0;i--) await redis.lPush("recover:acquisition:queue",uniqueNonBatch[i]);
-for(let i=uniqBatch.length-1;i>=0;i--) await redis.lPush("recover:acquisition:queue",uniqBatch[i]);
+await redis.del("recover:acquisition:queue:ny-priority");
+for(let i=uniqBatch.length-1;i>=0;i--) await redis.lPush("recover:acquisition:queue:ny-priority",uniqBatch[i]);
 console.log(JSON.stringify({
   ok:true,batch_id:batchId,
   before_queue_len:existingQueue.length,
-  after_queue_len:await redis.lLen("recover:acquisition:queue"),
+  after_queue_len:await redis.lLen("recover:acquisition:queue:ny-priority"),
   batch_queue_unique:uniqBatch.length,
   orphaned_running_requeued:orphanedRunning,
   live_running_preserved:liveRunning,
   queued_jobs:queued,
   terminal_jobs:terminal,
-  non_batch_preserved:uniqueNonBatch.length
+  non_batch_preserved:0
 }));
 await redis.quit();
