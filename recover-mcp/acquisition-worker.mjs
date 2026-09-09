@@ -200,6 +200,24 @@ function matchesHomeComfortTrade(lead) {
   }
   return false;
 }
+function matchesFastNyState(lead) {
+  const address=String(lead.address||lead.full_address||lead.formatted_address||"").toLowerCase();
+  const region=String(lead.region||lead.state||lead.state_code||lead.province||"").toLowerCase().trim();
+  const city=String(lead.city||lead.locality||lead.town||"").toLowerCase().trim();
+  const explicitOther=/,\s*(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy)\b/i.test(address);
+  if (explicitOther) return false;
+  if (/^(ny|new york)$/.test(region)) return true;
+  if (/,\s*ny\b|new york\b/i.test(address)) return true;
+  return /new york/.test(city) && !region;
+}
+function isFastNyMilestoneJob(job) {
+  return String(job?.batch_id||"")==="ny-home-comfort-fast-1000-2026-09-09" ||
+    (String(job?.industry||"")==="HOME_COMFORT_TRADES" && /\bny\b|new york/i.test(String(job?.location||"")));
+}
+function matchesAcquisitionLocation(lead, job) {
+  return isFastNyMilestoneJob(job) ? matchesFastNyState(lead) : matchesRequestedLocation(lead,job.location);
+}
+
 function matchesRequestedIndustry(lead, industry) {
   const target=normalizeText(industry||"");
   const hay=normalizeText((lead.category||"")+" "+(lead.title||lead.name||"")+" "+(lead.descriptions||""));
@@ -606,7 +624,7 @@ async function processAcquisition(id) {
       }
 
       leads=leads
-        .filter(lead=>matchesRequestedLocation(lead,job.location))
+        .filter(lead=>matchesAcquisitionLocation(lead,job))
         .filter(lead=>matchesRequestedIndustry(lead,job.industry))
         .filter(lead=>!job.require_no_website||!lead.website)
         .filter(lead=>!job.require_phone||!!lead.phone)
@@ -660,7 +678,7 @@ async function processAcquisition(id) {
     }
 
     let leads=allRaw
-      .filter(lead=>matchesRequestedLocation(lead,job.location))
+      .filter(lead=>matchesAcquisitionLocation(lead,job))
       .filter(lead=>matchesRequestedIndustry(lead,job.industry))
       .map(lead=>({...lead,qualification:scoreLead(lead)}))
       .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
