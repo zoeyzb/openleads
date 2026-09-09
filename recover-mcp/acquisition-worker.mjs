@@ -37,6 +37,39 @@ async function nextMapsBase(acquisitionId) {
   }
 }
 
+async function createMapsJobWithFailover(acquisitionId, payload) {
+  const maxAttempts=Math.max(1,Math.min(MAPS_BASE_URLS.length,RETRY_ATTEMPTS+1));
+  const tried=new Set();
+  let lastError;
+
+  for (let attempt=1; attempt<=maxAttempts; attempt++) {
+    let mapsBase=await nextMapsBase(acquisitionId);
+    if (tried.has(mapsBase) && tried.size<MAPS_BASE_URLS.length) {
+      for (let i=0;i<MAPS_BASE_URLS.length;i++) {
+        const candidate=await nextMapsBase(acquisitionId);
+        if (!tried.has(candidate)) { mapsBase=candidate; break; }
+      }
+    }
+    tried.add(mapsBase);
+
+    try {
+      const create=await fetchJson(`${mapsBase}/api/v1/jobs`,{
+        method:"POST",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify(payload)
+      },30000);
+      return {mapsBase,create};
+    } catch (error) {
+      lastError=error;
+      if (!isRetryableError(error) || attempt>=maxAttempts) throw error;
+      const delay=500+Math.floor(Math.random()*500);
+      console.warn("Maps create failover", "attempt", attempt, "failed via", mapsBase, "switching lane in", delay, "ms:", error.message);
+      await sleep(delay);
+    }
+  }
+  throw lastError;
+}
+
 const redis = createClient({ url: REDIS_URL });
 redis.on("error", err => console.error("Redis error", err));
 
@@ -417,21 +450,17 @@ async function processAcquisition(id) {
       job.phase="maps";
       await saveJob(job);
 
-      const mapsBase=await nextMapsBase(id);
+      const mapsPayload={
+        name:`Recover acquisition ${id} round ${round+1}`,
+        keywords:[variants[round]],
+        depth:Math.min(Number(job.depth||10), MAPS_ROUND_DEPTH_CAP),
+        max_time:MAPS_ROUND_MAX_TIME_SECONDS,
+        extra_reviews:false,
+        lang:"en"
+      };
+      const {mapsBase,create}=await createMapsJobWithFailover(id,mapsPayload);
       job.current_maps_base_url=mapsBase;
       console.log("Acquisition maps start", id, "round", round+1, variants[round], "via", mapsBase);
-      const create=await withRetry("Maps create job", () => fetchJson(`${mapsBase}/api/v1/jobs`,{
-        method:"POST",
-        headers:{"content-type":"application/json"},
-        body:JSON.stringify({
-          name:`Recover acquisition ${id} round ${round+1}`,
-          keywords:[variants[round]],
-          depth:Math.min(Number(job.depth||10), MAPS_ROUND_DEPTH_CAP),
-          max_time:MAPS_ROUND_MAX_TIME_SECONDS,
-          extra_reviews:false,
-          lang:"en"
-        })
-      },30000));
       const mapsJobId=String(create?.id||create?.job_id||create?.job?.id||"");
       if (!mapsJobId) throw new Error("Maps backend did not return a job id");
       job.current_maps_job_id=mapsJobId;
@@ -442,16 +471,17 @@ async function processAcquisition(id) {
         await waitForMaps(mapsJobId,job,mapsBase);
       } catch (error) {
         const mapsError=String(error?.message||error);
-        if (/timed out|lost after runtime restart|Maps job .* failed:/i.test(mapsError)) {
+        const transportFailed=isRetryableError(error);
+        if (/timed out|lost after runtime restart|Maps job .* failed:/i.test(mapsError) || transportFailed) {
           const lost=/lost after runtime restart/i.test(mapsError);
-          const backendFailed=/Maps job .* failed:/i.test(mapsError);
-          job.maps_jobs[job.maps_jobs.length-1].status=lost?"lost_after_restart":backendFailed?"backend_failed":"timed_out";
+          const backendFailed=/Maps job .* failed:/i.test(mapsError) || transportFailed;
+          job.maps_jobs[job.maps_jobs.length-1].status=lost?"lost_after_restart":backendFailed?"backend_unavailable":"timed_out";
           job.maps_jobs[job.maps_jobs.length-1].error=mapsError;
-          job.phase=lost?"maps_restart_continue":backendFailed?"maps_failed_continue":"maps_timeout_continue";
+          job.phase=lost?"maps_restart_continue":backendFailed?"maps_backend_unavailable_continue":"maps_timeout_continue";
           await saveJob(job);
           console.warn(
             lost?"Acquisition Maps state reset; continuing next round":
-            backendFailed?"Acquisition Maps backend failed; continuing next round":
+            backendFailed?"Acquisition Maps lane unavailable; continuing next round":
             "Acquisition maps timeout; continuing next round",
             id,mapsJobId
           );
@@ -460,7 +490,18 @@ async function processAcquisition(id) {
         throw error;
       }
       console.log("Acquisition maps done", id, mapsJobId);
-      const csv=await withRetry("Maps CSV download", () => fetchText(`${mapsBase}/api/v1/jobs/${encodeURIComponent(mapsJobId)}/download`,{},60000));
+      let csv;
+      try {
+        csv=await withRetry("Maps CSV download", () => fetchText(`${mapsBase}/api/v1/jobs/${encodeURIComponent(mapsJobId)}/download`,{},60000));
+      } catch (error) {
+        if (!isRetryableError(error)) throw error;
+        job.maps_jobs[job.maps_jobs.length-1].status="download_unavailable";
+        job.maps_jobs[job.maps_jobs.length-1].error=String(error?.message||error);
+        job.phase="maps_download_unavailable_continue";
+        await saveJob(job);
+        console.warn("Acquisition Maps download unavailable; continuing next round",id,mapsJobId,error.message);
+        continue;
+      }
       const roundRows=parseCsv(csv);
       console.log("Acquisition CSV parsed", id, "rows", roundRows.length);
       allRaw.push(...roundRows);
