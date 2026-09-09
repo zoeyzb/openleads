@@ -11,15 +11,15 @@ const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||100000);
 const NY_FIRST_MILESTONE=Number(process.env.NY_HOME_COMFORT_FIRST_MILESTONE||1000);
 const NY_SCOPE_SET="recover:leadstore:ny-home-comfort";
 const FIRST_MILESTONE=Number(process.env.US_HVAC_FIRST_MILESTONE||1000);
-const QUEUE_HIGH_WATER=Number(process.env.US_HVAC_QUEUE_HIGH_WATER||96);
-const SEED_BATCH_SIZE=Number(process.env.US_HVAC_SEED_BATCH_SIZE||36);
-const TARGET_PER_AREA=Number(process.env.US_HVAC_ZIP_TARGET_PER_AREA||25);
-const DEPTH=Number(process.env.US_HVAC_ZIP_DEPTH||20);
-const MAX_ROUNDS=Number(process.env.US_HVAC_ZIP_MAX_ROUNDS||3);
+const QUEUE_HIGH_WATER=Math.min(Number(process.env.US_HVAC_QUEUE_HIGH_WATER||72),72);
+const SEED_BATCH_SIZE=Math.min(Number(process.env.US_HVAC_SEED_BATCH_SIZE||18),18);
+const TARGET_PER_AREA=Number(process.env.US_HVAC_ZIP_TARGET_PER_AREA||18);
+const DEPTH=Math.min(Number(process.env.US_HVAC_ZIP_DEPTH||6),6);
+const MAX_ROUNDS=1;
 const LOOP_MS=Number(process.env.US_HVAC_CONTROLLER_LOOP_MS||15000);
 const TTL=Number(process.env.ACQUISITION_TTL_SECONDS||604800);
-const CONTROLLER_KEY="recover:controller:us-hvac-zip:v1";
-const BATCH_ID=process.env.US_HVAC_BATCH_ID||"us-hvac-zip-100k-2026-09-08";
+const CONTROLLER_KEY="recover:controller:us-core-home-service:v2";
+const BATCH_ID=process.env.US_HVAC_BATCH_ID||"us-core-home-service-100k-v2-2026-09-10";
 const PAUSED_NATIONAL_QUEUE="recover:acquisition:queue:paused-national";
 const ACTIVE_QUEUE="recover:acquisition:queue";
 const NY_PRIORITY_QUEUE="recover:acquisition:queue:ny-priority";
@@ -140,9 +140,8 @@ async function fetchZipAreas(){
     });
   }
 
-  out.sort((a,b)=>b.population-a.population || a.zip.localeCompare(b.zip));
   if(!out.length) throw new Error("zip source parsed zero areas");
-  return out;
+  return partitionNationwideAreas(out);
 }
 
 const redis=createClient({url:REDIS_URL});
@@ -154,6 +153,7 @@ const scopeSet=campaignLeadSetKey(profileJob);
 await bootstrapScopedLeads(redis,scopeSet);
 await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0);
+let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pass")||1));
 console.log("US HVAC ZIP controller started",JSON.stringify({
   areas:areas.length,target:TARGET_TOTAL,scopeSet,cursor,
   targetPerArea:TARGET_PER_AREA,maxRounds:MAX_ROUNDS,depth:DEPTH,
@@ -200,6 +200,11 @@ async function seedOne(area){
     id,
     batch_id:BATCH_ID,
     industry:"HVAC",
+    search_profile:"core-home-service",
+    coverage_pass:`us-core-v2-p${coveragePass}`,
+    partition_state:area.partition_state||area.state,
+    partition_city:area.partition_city||area.city,
+    partition_zip:area.partition_zip||area.zip,
     location:area.location,
     target:TARGET_PER_AREA,
     min_score:30,
@@ -219,7 +224,7 @@ async function seedOne(area){
     qualified_count:0,
     stored_count:0,
     maps_jobs:[],
-    source:"us_zip_controller",
+    source:"us_core_partition_controller_v2",
     source_zip:area.zip,
     source_population:area.population,
     created_at:now,
@@ -227,9 +232,12 @@ async function seedOne(area){
   };
 
   const claim=await claimCoverage(redis,job,{
-    source:"us_zip_controller",
+    source:"us_core_partition_controller_v2",
     source_zip:area.zip,
-    source_population:area.population
+    source_population:area.population,
+    partition_state:job.partition_state,
+    partition_city:job.partition_city,
+    coverage_pass:job.coverage_pass
   });
   if(!claim.claimed) return false;
 
@@ -253,6 +261,9 @@ while(true){
       scoped_count:String(scoped),
       queue_len:String(queue),
       cursor:String(cursor),
+      coverage_pass:String(coveragePass),
+      partition_state:String(areas[cursor]?.partition_state||areas[cursor]?.state||""),
+      partition_city:String(areas[cursor]?.partition_city||areas[cursor]?.city||""),
       area_count:String(areas.length),
       updated_at:new Date().toISOString(),
       milestone_1000:scoped>=FIRST_MILESTONE?"reached":"pending",
@@ -300,6 +311,13 @@ while(true){
       continue;
     }
 
+    if(cursor>=areas.length && scoped<TARGET_TOTAL){
+      coveragePass++;
+      cursor=0;
+      await redis.hSet(CONTROLLER_KEY,{cursor:"0",coverage_pass:String(coveragePass)});
+      console.log(JSON.stringify({event:"coverage_pass_advanced",coveragePass,scoped,area_count:areas.length}));
+    }
+
     if(queue>=QUEUE_HIGH_WATER){
       console.log(JSON.stringify({event:"backpressure",scoped,queue,cursor}));
       await new Promise(r=>setTimeout(r,LOOP_MS));
@@ -321,11 +339,14 @@ while(true){
       checked,
       seeded,
       cursor,
+      coveragePass,
+      partition_state:String(areas[Math.max(0,cursor-1)]?.partition_state||""),
+      partition_city:String(areas[Math.max(0,cursor-1)]?.partition_city||""),
       area_count:areas.length
     }));
 
     if(cursor>=areas.length){
-      console.log(JSON.stringify({event:"source_exhausted",scoped,cursor,area_count:areas.length}));
+      console.log(JSON.stringify({event:"coverage_pass_complete",scoped,cursor,coveragePass,area_count:areas.length}));
     }
   }catch(error){
     console.error("Controller loop error",error);
