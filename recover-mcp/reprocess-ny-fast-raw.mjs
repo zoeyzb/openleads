@@ -124,3 +124,5 @@ console.log(JSON.stringify({
   uniqueCandidateKeys:stats.uniqueKeys.size,reject:stats.reject
 },null,2));
 await redis.quit();
+
+// deployment trigger: force Railway branch rebuild
