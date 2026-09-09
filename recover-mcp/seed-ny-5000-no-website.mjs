@@ -95,7 +95,7 @@ const jobs=[];
 for(const location of areas){
   const id=randomUUID();
   const job={
-    id,batch_id:batchId,industry:"HVAC",location,
+    id,batch_id:batchId,industry:"HOME_COMFORT_TRADES",location,
     target:targetPerArea,min_score:30,
     require_phone:false,require_email:false,require_contact:true,
     require_no_website:true,include_no_website:true,
@@ -108,13 +108,13 @@ for(const location of areas){
   await redis.sAdd("recover:acq:index",id);
   await redis.sAdd("recover:batch:"+batchId+":jobs",id);
   await redis.expire("recover:batch:"+batchId+":jobs",TTL);
-  await redis.lPush("recover:acquisition:queue",id);
+  await redis.lPush("recover:acquisition:queue:ny-priority",id);
   jobs.push({id,location,target:targetPerArea});
 }
 await redis.set("recover:batch:"+batchId+":meta",JSON.stringify({
-  batch_id:batchId,industry:"HVAC",region:"New York State",
+  batch_id:batchId,industry:"HOME_COMFORT_TRADES",region:"New York State",
   rule:"no_website AND (phone OR email)",
-  goal_new_unique:5000,
+  first_milestone:1000,goal_new_unique:5000,
   baseline_permanent_store_count:permanentBefore,
   requested_area_slots:areas.length*targetPerArea,
   area_count:areas.length,target_per_area:targetPerArea,
@@ -123,7 +123,7 @@ await redis.set("recover:batch:"+batchId+":meta",JSON.stringify({
 console.log(JSON.stringify({
   ok:true,batch_id:batchId,area_count:areas.length,
   target_per_area:targetPerArea,requested_area_slots:areas.length*targetPerArea,
-  goal_new_unique:5000,baseline_permanent_store_count:permanentBefore,
+  first_milestone:1000,goal_new_unique:5000,baseline_permanent_store_count:permanentBefore,
   depth,max_rounds:maxRounds
 }));
 await redis.quit();
