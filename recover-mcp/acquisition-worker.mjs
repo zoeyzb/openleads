@@ -145,13 +145,34 @@ function dedupeRecords(records) {
   }
   return out;
 }
+function isHomeComfortTarget(industry="") {
+  return /hvac|heating|cooling|air conditioning|home comfort|home service|plumb|furnace|boiler|duct|ventilation|refrigeration/.test(normalizeText(industry));
+}
+function matchesHomeComfortTrade(lead) {
+  const category=normalizeText(lead.category||lead.industry||"");
+  const name=normalizeText(lead.title||lead.name||"");
+  const desc=normalizeText(lead.descriptions||lead.description||"");
+  const hay=[category,name,desc].filter(Boolean).join(" ");
+
+  // Explicitly exclude common unrelated Maps categories even when names contain generic words like "service".
+  if (/restaurant|cafe|food|retail|grocery|hotel|motel|lawyer|attorney|dentist|doctor|medical|insurance|real estate|auto repair|car dealer|beauty|salon|school|church|marketing|software|computer repair/.test(category)) return false;
+
+  // Strong service-trade signals. These are the concepts we want, not one literal keyword.
+  if (/hvac|heating contractor|air conditioning contractor|air conditioning repair|heating repair|cooling contractor|furnace repair|furnace contractor|boiler repair|boiler contractor|duct cleaning|air duct|ventilation|refrigeration contractor|plumbing contractor|plumber|plumbing service/.test(hay)) return true;
+
+  // Generic mechanical contractors/suppliers only qualify when the business text independently proves
+  // that it actually works in heating/cooling/plumbing rather than being an unrelated mechanical firm.
+  if (/mechanical contractor|mechanical service|heating equipment supplier|air conditioning equipment supplier/.test(category)) {
+    return /hvac|heating|cooling|air conditioning|furnace|boiler|duct|ventilation|refrigeration|plumb/.test(name+" "+desc);
+  }
+  return false;
+}
 function matchesRequestedIndustry(lead, industry) {
   const target=normalizeText(industry||"");
   const hay=normalizeText((lead.category||"")+" "+(lead.title||lead.name||"")+" "+(lead.descriptions||""));
   if (!target) return true;
-  if (/hvac|heating|air conditioning|cooling/.test(target)) return /hvac|heating|cooling|air conditioning|mechanical contractor/.test(hay);
+  if (isHomeComfortTarget(target)) return matchesHomeComfortTrade(lead);
   if (/roof/.test(target)) return /roof/.test(hay);
-  if (/plumb/.test(target)) return /plumb/.test(hay);
   if (/electric/.test(target)) return /electric/.test(hay);
   if (/landscap/.test(target)) return /landscap|lawn|tree service/.test(hay);
   if (/dent/.test(target)) return /dent/.test(hay);
@@ -230,7 +251,12 @@ async function persistPermanentQualified(redis, job, leads) {
   }
   if (entries.length) await redis.hSet("recover:leadstore:qualified", entries);
   const uniqueIdentities=[...new Set(identities)];
-  if (uniqueIdentities.length) await redis.sAdd(campaignLeadSetKey(job), uniqueIdentities);
+  if (uniqueIdentities.length) {
+    await redis.sAdd(campaignLeadSetKey(job), uniqueIdentities);
+    if (/\\bny\\b|new york/i.test(String(job.location||"")) && isHomeComfortTarget(job.industry||"")) {
+      await redis.sAdd("recover:leadstore:ny-home-comfort", uniqueIdentities);
+    }
+  }
   return uniqueIdentities.length;
 }
 function mapsStatus(job) {
@@ -239,28 +265,38 @@ function mapsStatus(job) {
 function mapsTerminal(job) { return ["ok","completed","complete","done","finished","success","succeeded"].some(x=>mapsStatus(job).includes(x)); }
 function mapsFailed(job) { return ["failed","error","cancelled","canceled"].some(x=>mapsStatus(job).includes(x)); }
 
-const queryVariants=(industry,location)=>[
-  `${industry} in ${location}`,
-  `${industry} contractor in ${location}`,
-  `${industry} service company in ${location}`,
-  `${industry} near ${location}`,
-  `${industry} company ${location}`,
-  `${industry} services ${location}`,
-  `${industry} repair in ${location}`,
-  `${industry} installation in ${location}`,
-  `commercial ${industry} in ${location}`,
-  `residential ${industry} in ${location}`,
-  `emergency ${industry} in ${location}`,
-  `local ${industry} in ${location}`,
-  `${industry} maintenance in ${location}`,
-  `${industry} specialists in ${location}`,
-  `${industry} technicians in ${location}`,
-  `${industry} business in ${location}`,
-  `${industry} providers in ${location}`,
-  `${industry} contractors near ${location}`,
-  `${industry} service near ${location}`,
-  `${industry} repair near ${location}`
+const HOME_COMFORT_QUERIES=[
+  "heating and cooling contractor",
+  "air conditioning repair service",
+  "HVAC contractor",
+  "heating contractor",
+  "AC repair service",
+  "furnace repair service",
+  "boiler repair service",
+  "air duct contractor",
+  "ventilation contractor",
+  "plumbing contractor",
+  "plumber",
+  "refrigeration contractor",
+  "residential heating and cooling",
+  "commercial heating and cooling",
+  "emergency plumbing and HVAC",
+  "heating cooling plumbing contractor",
+  "furnace boiler contractor",
+  "air conditioning installation",
+  "heating repair service",
+  "duct cleaning service"
 ];
+const queryVariants=(industry,location)=>{
+  if (isHomeComfortTarget(industry)) return HOME_COMFORT_QUERIES.map(q=>`${q} in ${location}`);
+  return [
+    `${industry} in ${location}`,
+    `${industry} contractor in ${location}`,
+    `${industry} service company in ${location}`,
+    `${industry} repair in ${location}`,
+    `${industry} installation in ${location}`
+  ];
+};
 
 async function dataforgeScrape(urls) {
   if (!DATAFORGE_BASE_URL || !urls.length) return [];
@@ -602,7 +638,7 @@ await recoverInterrupted();
 
 while (!shuttingDown) {
   try {
-    const item=await redis.brPop("recover:acquisition:queue",5);
+    const item=await redis.brPop(["recover:acquisition:queue:ny-priority","recover:acquisition:queue"],5);
     if (shuttingDown) break;
     const id=item?.element||item;
     if (!id) continue;
