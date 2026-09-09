@@ -5,7 +5,8 @@ import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import * as z from "zod/v4";
 import { orchestrate as enrichEmail } from "email-enrich";
-import { campaignLeadSetKey } from "./acquisition-coverage.mjs";\nimport { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
+import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
+import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
