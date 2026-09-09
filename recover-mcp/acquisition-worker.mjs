@@ -484,7 +484,10 @@ async function processAcquisition(id) {
 
   try {
     const variants=queryVariants(job.industry,job.location);
-    const maxRounds=Math.min(Number(job.max_rounds||12),variants.length);
+    const configuredMaxRounds=Number(job.max_rounds||12);
+    const isFastNyMilestone=String(job.batch_id||"")==="ny-home-comfort-fast-1000-2026-09-09" ||
+      String(job.industry||"")==="HOME_COMFORT_TRADES";
+    const maxRounds=Math.min(isFastNyMilestone ? 2 : configuredMaxRounds,variants.length);
 
     for (let round=Number(job.round||0); round<maxRounds; round++) {
       job.round=round;
