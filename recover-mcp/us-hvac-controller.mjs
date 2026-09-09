@@ -41,8 +41,7 @@ function isHomeComfortLead(lead={}){
   return /hvac|heating|cooling|air conditioning|furnace|boiler|duct|ventilation|refrigeration|plumb/.test(text);
 }
 async function bootstrapNyScope(redis){
-  const existing=await redis.sCard(NY_SCOPE_SET);
-  if(existing>0) return existing;
+  const before=await redis.sCard(NY_SCOPE_SET);
   const all=await redis.hGetAll("recover:leadstore:qualified");
   const ids=[];
   for(const [identity,raw] of Object.entries(all)){
@@ -58,7 +57,7 @@ async function bootstrapNyScope(redis){
     for(let i=0;i<ids.length;i+=500) await redis.sAdd(NY_SCOPE_SET,ids.slice(i,i+500));
   }
   const total=await redis.sCard(NY_SCOPE_SET);
-  console.log(JSON.stringify({event:"ny_scope_bootstrap",total}));
+  console.log(JSON.stringify({event:"ny_scope_bootstrap",before,total,added:total-before}));
   return total;
 }
 
