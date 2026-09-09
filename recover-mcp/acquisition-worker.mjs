@@ -195,26 +195,10 @@ function dedupeRecords(records) {
   return out;
 }
 function isHomeComfortTarget(industry="") {
-  return /hvac|heating|cooling|air conditioning|home comfort|home service|plumb|furnace|boiler|duct|ventilation|refrigeration/.test(normalizeText(industry));
+  return isCoreHomeServiceIndustry(industry);
 }
 function matchesHomeComfortTrade(lead) {
-  const category=normalizeText(lead.category||lead.industry||"");
-  const name=normalizeText(lead.title||lead.name||"");
-  const desc=normalizeText(lead.descriptions||lead.description||"");
-  const hay=[category,name,desc].filter(Boolean).join(" ");
-
-  // Explicitly exclude common unrelated Maps categories even when names contain generic words like "service".
-  if (/restaurant|cafe|food|retail|grocery|hotel|motel|lawyer|attorney|dentist|doctor|medical|insurance|real estate|auto repair|car dealer|beauty|salon|school|church|marketing|software|computer repair/.test(category)) return false;
-
-  // Strong service-trade signals. These are the concepts we want, not one literal keyword.
-  if (/hvac|heating contractor|air conditioning contractor|air conditioning repair|heating repair|cooling contractor|furnace repair|furnace contractor|boiler repair|boiler contractor|duct cleaning|air duct|ventilation|refrigeration contractor|plumbing contractor|plumber|plumbing service/.test(hay)) return true;
-
-  // Generic mechanical contractors/suppliers only qualify when the business text independently proves
-  // that it actually works in heating/cooling/plumbing rather than being an unrelated mechanical firm.
-  if (/mechanical contractor|mechanical service|heating equipment supplier|air conditioning equipment supplier/.test(category)) {
-    return /hvac|heating|cooling|air conditioning|furnace|boiler|duct|ventilation|refrigeration|plumb/.test(name+" "+desc);
-  }
-  return false;
+  return isCoreHomeServiceLead(lead);
 }
 function matchesFastNyState(lead) {
   const address=String(lead.address||lead.full_address||lead.formatted_address||"").toLowerCase();
