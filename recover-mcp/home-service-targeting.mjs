@@ -7,6 +7,7 @@ const REJECT_CATEGORY=/\b(pest control|exterminator|extermination|auto repair|au
 const STRONG_CATEGORY=/\b(hvac contractor|heating contractor|air conditioning contractor|air conditioning repair service|ac repair service|cooling contractor|plumber|plumbing contractor|plumbing service|furnace repair service|furnace contractor|boiler repair service|boiler contractor|air duct cleaning service|duct cleaning service|air duct contractor|ventilation contractor|refrigeration contractor|refrigeration service)\b/;
 
 const SERVICE_SIGNAL=/\b(hvac|heating|cooling|air conditioning|ac repair|furnace|boiler|air duct|duct cleaning|ventilation|plumb|refrigeration)\b/;
+const REJECT_ANYWHERE=/\b(pest control|exterminator|extermination|appliance repair|appliance parts|appliance store|wholesale|wholesaler|hvac filters?|filter supply|auto repair|automotive|auto parts|automobile parts|car parts|car dealer|vehicle repair|auto body|body shop|tire shop|tire service|oil change)\b/;
 
 export function isCoreHomeServiceLead(lead={}){
   const category=normalize(lead.category||lead.industry||"");
@@ -16,6 +17,7 @@ export function isCoreHomeServiceLead(lead={}){
   const evidence=[name,desc].filter(Boolean).join(" ");
 
   if(REJECT_CATEGORY.test(category)) return false;
+  if(REJECT_ANYWHERE.test([category,name,desc].join(" "))) return false;
   if(/\b(supplier|wholesale|manufacturer|parts|retail store|equipment store)\b/.test(category)) return false;
   if(STRONG_CATEGORY.test(category)) return true;
 
