@@ -479,6 +479,8 @@ async function processAcquisition(id) {
 
   let allRaw=await loadList(rawKey(id));
   const enrichmentCache=new Map();
+  let previousStored=(await loadList(resultsKey(id))).length;
+  let stagnantRounds=0;
 
   try {
     const variants=queryVariants(job.industry,job.location);
@@ -619,7 +621,10 @@ async function processAcquisition(id) {
       await replaceList(resultsKey(id),persisted);
       await persistPermanentQualified(redis, job, leads);
       job.stored_count=persisted.length;
-      console.log("Acquisition qualified", id, "count", leads.length, "stored", job.stored_count, "target", job.target);
+      const addedThisRound=Math.max(0,job.stored_count-previousStored);
+      stagnantRounds=addedThisRound===0 ? stagnantRounds+1 : 0;
+      previousStored=job.stored_count;
+      console.log("Acquisition qualified", id, "count", leads.length, "stored", job.stored_count, "added", addedThisRound, "target", job.target);
       await saveJob(job);
 
       if (leads.length>=Number(job.target)) {
@@ -632,6 +637,19 @@ async function processAcquisition(id) {
         await saveJob(job);
         await markCoverage(redis, job, "target_reached", {reason:"target_reached"});
         console.log("Acquisition complete", id, "stored", finalLeads.length);
+        return;
+      }
+
+      // Fast NY milestone mode: do not waste rounds on a ZIP that has stopped yielding.
+      // Require at least two completed rounds so the first query still gets one follow-up.
+      if (round>=1 && stagnantRounds>=1) {
+        job.status="partial_complete";
+        job.phase="complete";
+        job.reason="stagnant_round_exit";
+        job.completed_at=new Date().toISOString();
+        await saveJob(job);
+        await markCoverage(redis, job, "exhausted", {reason:"stagnant_round_exit"});
+        console.log("Acquisition early exit stagnant", id, "stored", job.stored_count, "after_round", round+1);
         return;
       }
     }
