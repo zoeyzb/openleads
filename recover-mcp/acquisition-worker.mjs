@@ -818,3 +818,5 @@ console.log("Acquisition worker stopped cleanly");
 // restart trigger after NY milestone queue switch 2026-09-10
 
 // classifier refresh trigger 2026-09-10
+
+// recycle workers to release stale NY round-2 jobs and prioritize nationwide v2 2026-09-10
