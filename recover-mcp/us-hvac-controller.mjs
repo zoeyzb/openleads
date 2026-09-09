@@ -22,6 +22,8 @@ const CONTROLLER_KEY="recover:controller:us-hvac-zip:v1";
 const BATCH_ID=process.env.US_HVAC_BATCH_ID||"us-hvac-zip-100k-2026-09-08";
 const PAUSED_NATIONAL_QUEUE="recover:acquisition:queue:paused-national";
 const ACTIVE_QUEUE="recover:acquisition:queue";
+const NY_PRIORITY_QUEUE="recover:acquisition:queue:ny-priority";
+const PAUSED_NY_SURPLUS_QUEUE="recover:acquisition:queue:paused-ny-surplus";
 
 const profileJob={
   industry:"HVAC",
@@ -162,6 +164,22 @@ console.log("US HVAC ZIP controller started",JSON.stringify({
   queueHighWater:QUEUE_HIGH_WATER
 }));
 
+async function parkNySurplus(){
+  let moved=0,missing=0,already=0;
+  while(true){
+    const id=await redis.rPop(NY_PRIORITY_QUEUE);
+    if(!id) break;
+    const raw=await redis.get("recover:acq:"+id);
+    if(!raw){missing++;continue;}
+    let job; try{job=JSON.parse(raw)}catch{missing++;continue;}
+    if(String(job.status||"")!=="queued") continue;
+    const pos=await redis.lPos(PAUSED_NY_SURPLUS_QUEUE,String(id));
+    if(pos===null){await redis.lPush(PAUSED_NY_SURPLUS_QUEUE,String(id));moved++;}
+    else already++;
+  }
+  return {moved,missing,already,remainingPriority:await redis.lLen(NY_PRIORITY_QUEUE),pausedNySurplus:await redis.lLen(PAUSED_NY_SURPLUS_QUEUE)};
+}
+
 async function resumePausedNational(maxToMove){
   let moved=0, duplicates=0;
   const limit=Math.max(0,Number(maxToMove||0));
@@ -253,6 +271,12 @@ while(true){
       console.log(JSON.stringify({event:"ny_priority_hold",nyScoped,nyTarget:NY_FIRST_MILESTONE,scoped,queue,pausedNational,cursor}));
       await new Promise(r=>setTimeout(r,LOOP_MS));
       continue;
+    }
+
+    const nyPriorityLen=await redis.lLen(NY_PRIORITY_QUEUE);
+    if(nyPriorityLen>0){
+      const parkedNy=await parkNySurplus();
+      console.log(JSON.stringify({event:"ny_surplus_parked",nyScoped,nyTarget:NY_FIRST_MILESTONE,...parkedNy}));
     }
 
     if(pausedNational>0){
