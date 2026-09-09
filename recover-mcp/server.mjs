@@ -1092,3 +1092,5 @@ const httpServer = createHttpServer((req, res) => {
 httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`Recover Scrape MCP listening on 0.0.0.0:${PORT}`);
 });
+
+// Trigger live NY export route redeploy 2026-09-09T09:08Z
