@@ -5,7 +5,7 @@ import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import * as z from "zod/v4";
 import { orchestrate as enrichEmail } from "email-enrich";
-import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
+import { campaignLeadSetKey } from "./acquisition-coverage.mjs";\nimport { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -938,7 +938,7 @@ const httpServer = createHttpServer((req, res) => {
             const noWebsite = !String(lead.website||"").trim();
             const emails = Array.isArray(lead.emails) ? lead.emails : String(lead.email||lead.emails||"").split(/[;,\s]+/).filter(Boolean);
             const contactable = !!String(lead.phone||"").trim() || emails.length>0;
-            return noWebsite && contactable;
+            return noWebsite && contactable && isCoreHomeServiceLead(lead);
           })
           .sort((a,b)=>String(a.acquisition_location||a.address||"").localeCompare(String(b.acquisition_location||b.address||"")) || String(a.name||"").localeCompare(String(b.name||"")));
 
@@ -987,8 +987,7 @@ const httpServer = createHttpServer((req, res) => {
             const explicitNY = /,\s*ny\b|new york\b/i.test(address) || /\bny\b|new york/.test(region) || /new york/.test(city);
             const fallbackNY = !address && !region && !city && /new york|\bny\b/.test(String(lead.acquisition_location||"").toLowerCase());
             const inNY = !explicitOtherState && (explicitNY || fallbackNY);
-            const homeComfort = /hvac|heating|air conditioning|cooling|mechanical|plumb|furnace|boiler|duct|ventilation|refrigeration/.test(String((lead.category||"")+" "+(lead.industry||"")+" "+(lead.name||"")).toLowerCase());
-            return noWebsite && contactable && inNY && homeComfort;
+            return noWebsite && contactable && inNY && isCoreHomeServiceLead(lead);
           })
           .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
         const esc = value => {
