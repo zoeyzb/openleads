@@ -507,12 +507,13 @@ async function processAcquisition(id) {
       String(job.industry||"")==="HOME_COMFORT_TRADES";
     if (isFastNyMilestone && variants.length>2) {
       let hash=0;
-      for (const ch of String(job.location||job.id||"")) hash=(hash*31+ch.charCodeAt(0))>>>0;
+      const querySeed=`${String(job.location||job.id||"")}|${String(job.coverage_pass||"pass1")}`;
+      for (const ch of querySeed) hash=(hash*31+ch.charCodeAt(0))>>>0;
       const start=hash % variants.length;
       const spread=Math.max(1,Math.floor(variants.length/2));
       variants=[variants[start],variants[(start+spread)%variants.length]];
     }
-    const maxRounds=Math.min(isFastNyMilestone ? 2 : configuredMaxRounds,variants.length);
+    const maxRounds=Math.min(isFastNyMilestone ? Math.min(2,configuredMaxRounds) : configuredMaxRounds,variants.length);
 
     for (let round=Number(job.round||0); round<maxRounds; round++) {
       job.round=round;
