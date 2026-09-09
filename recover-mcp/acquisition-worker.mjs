@@ -501,10 +501,17 @@ async function processAcquisition(id) {
   let stagnantRounds=0;
 
   try {
-    const variants=queryVariants(job.industry,job.location);
+    let variants=queryVariants(job.industry,job.location);
     const configuredMaxRounds=Number(job.max_rounds||12);
     const isFastNyMilestone=String(job.batch_id||"")==="ny-home-comfort-fast-1000-2026-09-09" ||
       String(job.industry||"")==="HOME_COMFORT_TRADES";
+    if (isFastNyMilestone && variants.length>2) {
+      let hash=0;
+      for (const ch of String(job.location||job.id||"")) hash=(hash*31+ch.charCodeAt(0))>>>0;
+      const start=hash % variants.length;
+      const spread=Math.max(1,Math.floor(variants.length/2));
+      variants=[variants[start],variants[(start+spread)%variants.length]];
+    }
     const maxRounds=Math.min(isFastNyMilestone ? 2 : configuredMaxRounds,variants.length);
 
     for (let round=Number(job.round||0); round<maxRounds; round++) {
