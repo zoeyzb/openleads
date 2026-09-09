@@ -787,3 +787,5 @@ try { await redis.quit(); } catch {}
 console.log("Acquisition worker stopped cleanly");
 
 // deployment trigger: ny-priority-fix
+
+// restart trigger after NY milestone queue switch 2026-09-10
