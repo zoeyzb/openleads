@@ -1051,9 +1051,18 @@ const httpServer = createHttpServer((req, res) => {
         }
       }
       const required = ["maps","crawl4ai","yozh"];
-      const ok = required.every(name => backends[name]?.reachable === true);
-      res.writeHead(ok ? 200 : 503, {"content-type":"application/json"});
-      res.end(JSON.stringify({ok,name:"recover-scrape-mcp",backends}));
+      const dependenciesOk = required.every(name => backends[name]?.reachable === true);
+      // Railway health checks should prove the MCP process is alive, not couple
+      // deployment viability to every downstream scraper dependency. Expose
+      // dependency degradation in the payload so Recover can surface it.
+      res.writeHead(200, {"content-type":"application/json"});
+      res.end(JSON.stringify({
+        ok:true,
+        degraded:!dependenciesOk,
+        dependencies_ok:dependenciesOk,
+        name:"recover-scrape-mcp",
+        backends
+      }));
     })();
     return;
   }
