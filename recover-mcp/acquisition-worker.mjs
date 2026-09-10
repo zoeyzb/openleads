@@ -447,7 +447,8 @@ async function enqueueUnique(id, jobOverride=null) {
 }
 
 async function waitForMaps(jobId, acquisition, mapsBase) {
-  const deadline=Date.now()+20*60*1000;
+  const fastProfile=isFastHomeServiceJob(acquisition);
+  const deadline=Date.now()+(fastProfile ? 90*1000 : 20*60*1000);
   while (Date.now()<deadline) {
     if (shuttingDown) throw new Error("worker shutting down");
     let status;
@@ -466,6 +467,7 @@ async function waitForMaps(jobId, acquisition, mapsBase) {
     if (mapsFailed(status)) throw new Error(`Maps job ${jobId} failed: ${mapsStatus(status)}`);
     await sleep(String(acquisition?.search_profile||'')==='core-home-service' ? Math.min(POLL_MS,3000) : POLL_MS);
   }
+  if (fastProfile) await markMapsLaneUnavailable(mapsBase,75);
   throw new Error(`Maps job ${jobId} timed out`);
 }
 
