@@ -249,28 +249,68 @@ async function resumePausedNational(maxToMove){
 
 async function parkLegacyNationalForV2(){
   const ids=await redis.lRange(ACTIVE_QUEUE,0,-1);
-  let parked=0,keptV2=0,skipped=0;
+  const now=Date.now();
+  let parked=0,keptV2=0,keptLeased=0,keptFresh=0,removedTerminal=0,missing=0;
+
   for(const id of ids){
     const raw=await redis.get("recover:acq:"+id);
-    if(!raw){skipped++;continue;}
-    let job; try{job=JSON.parse(raw)}catch{skipped++;continue;}
-    if(String(job.status||"")!=="queued"){skipped++;continue;}
+    if(!raw){
+      await redis.lRem(ACTIVE_QUEUE,0,String(id));
+      missing++;
+      continue;
+    }
+
+    let job;
+    try{job=JSON.parse(raw)}catch{
+      await redis.lRem(ACTIVE_QUEUE,0,String(id));
+      missing++;
+      continue;
+    }
+
     const isV2=String(job.batch_id||"").startsWith("us-core-home-service-100k-v2") ||
       String(job.coverage_pass||"").startsWith("us-core-v2-");
     if(isV2){keptV2++;continue;}
-    const removed=await redis.lRem(ACTIVE_QUEUE,1,String(id));
-    if(!removed){skipped++;continue;}
+
+    const status=String(job.status||"");
+    const updated=Date.parse(job.updated_at||job.started_at||job.created_at||0);
+    const ageMs=updated?Math.max(0,now-updated):Number.POSITIVE_INFINITY;
+    const leased=Boolean(await redis.exists("recover:acq:"+id+":lease"));
+
+    if(leased){
+      keptLeased++;
+      continue;
+    }
+
+    if(["complete","partial_complete","failed","error","parked"].includes(status)){
+      await redis.lRem(ACTIVE_QUEUE,0,String(id));
+      if(status==="parked"){
+        const pos=await redis.lPos(PAUSED_LEGACY_NATIONAL_QUEUE,String(id));
+        if(pos===null) await redis.lPush(PAUSED_LEGACY_NATIONAL_QUEUE,String(id));
+      }
+      removedTerminal++;
+      continue;
+    }
+
+    const stale = status==="queued" || (status==="running" && ageMs>180000);
+    if(!stale){
+      keptFresh++;
+      continue;
+    }
+
+    await redis.lRem(ACTIVE_QUEUE,0,String(id));
     job.status="parked";
-    job.phase="parked_legacy_national_v1";
+    job.phase=status==="running"?"parked_stale_legacy_no_lease":"parked_legacy_national_v1";
     job.updated_at=new Date().toISOString();
     await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});
     const pos=await redis.lPos(PAUSED_LEGACY_NATIONAL_QUEUE,String(id));
     if(pos===null) await redis.lPush(PAUSED_LEGACY_NATIONAL_QUEUE,String(id));
     parked++;
   }
+
   const result={
-    event:"legacy_national_parked_for_v2",
-    snapshot:ids.length,parked,keptV2,skipped,
+    event:"legacy_national_reconciled_for_v2",
+    snapshot:ids.length,
+    parked,keptV2,keptLeased,keptFresh,removedTerminal,missing,
     activeAfter:await redis.lLen(ACTIVE_QUEUE),
     pausedLegacy:await redis.lLen(PAUSED_LEGACY_NATIONAL_QUEUE)
   };
