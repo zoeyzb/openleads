@@ -218,6 +218,10 @@ async function parkNySurplus(){
     if(!raw){missing++;continue;}
     let job; try{job=JSON.parse(raw)}catch{missing++;continue;}
     if(String(job.status||"")!=="queued") continue;
+    job.status="parked";
+    job.phase="parked_ny_surplus";
+    job.updated_at=new Date().toISOString();
+    await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});
     const pos=await redis.lPos(PAUSED_NY_SURPLUS_QUEUE,String(id));
     if(pos===null){await redis.lPush(PAUSED_NY_SURPLUS_QUEUE,String(id));moved++;}
     else already++;
@@ -256,6 +260,10 @@ async function parkLegacyNationalForV2(){
     if(isV2){keptV2++;continue;}
     const removed=await redis.lRem(ACTIVE_QUEUE,1,String(id));
     if(!removed){skipped++;continue;}
+    job.status="parked";
+    job.phase="parked_legacy_national_v1";
+    job.updated_at=new Date().toISOString();
+    await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});
     const pos=await redis.lPos(PAUSED_LEGACY_NATIONAL_QUEUE,String(id));
     if(pos===null) await redis.lPush(PAUSED_LEGACY_NATIONAL_QUEUE,String(id));
     parked++;
