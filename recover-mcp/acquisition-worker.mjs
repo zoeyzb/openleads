@@ -387,6 +387,8 @@ async function replaceList(key,values) {
 const NY_PRIORITY_QUEUE="recover:acquisition:queue:ny-priority";
 const ACTIVE_QUEUE="recover:acquisition:queue";
 const PAUSED_NATIONAL_QUEUE="recover:acquisition:queue:paused-national";
+const PAUSED_NY_SURPLUS_QUEUE="recover:acquisition:queue:paused-ny-surplus";
+const PAUSED_LEGACY_NATIONAL_QUEUE="recover:acquisition:queue:paused-legacy-national-v1";
 const NY_SCOPE_SET="recover:leadstore:ny-home-comfort";
 const NY_FIRST_MILESTONE=Number(process.env.NY_FIRST_MILESTONE||1000);
 
@@ -767,11 +769,28 @@ async function processAcquisition(id) {
 async function recoverInterrupted() {
   const ids=await redis.sMembers("recover:acq:index");
   const now=Date.now();
+  const [pausedNational,pausedNySurplus,pausedLegacy]=await Promise.all([
+    redis.lRange(PAUSED_NATIONAL_QUEUE,0,-1),
+    redis.lRange(PAUSED_NY_SURPLUS_QUEUE,0,-1),
+    redis.lRange(PAUSED_LEGACY_NATIONAL_QUEUE,0,-1)
+  ]);
+  const parked=new Set([...pausedNational,...pausedNySurplus,...pausedLegacy].map(String));
+
+  let recovered=0, skippedParked=0;
   for (const id of ids) {
     const raw=await redis.get(jobKey(id));
     if (!raw) continue;
     try {
       const job=JSON.parse(raw);
+      if (parked.has(String(id))) {
+        if (["queued","running"].includes(String(job.status||""))) {
+          job.status="parked";
+          job.phase="parked_queue_preserved";
+          await saveJob(job);
+        }
+        skippedParked++;
+        continue;
+      }
       if (!["queued","running"].includes(job.status)) continue;
       const updated=Date.parse(job.updated_at||job.created_at||0);
       if (!updated || now-updated>120000) {
@@ -779,9 +798,11 @@ async function recoverInterrupted() {
         job.phase="requeued_after_restart";
         await saveJob(job);
         await enqueueUnique(id,job);
+        recovered++;
       }
     } catch {}
   }
+  console.log(JSON.stringify({event:"recover_interrupted_complete",recovered,skippedParked,parkedSnapshot:parked.size}));
 }
 
 function beginShutdown(signal) {
