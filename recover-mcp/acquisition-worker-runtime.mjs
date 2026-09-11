@@ -4,12 +4,49 @@ import { pathToFileURL } from "node:url";
 export const LEGACY_FAST_WAIT = "const deadline=Date.now()+(fastProfile ? 90*1000 : 20*60*1000);";
 export const RESILIENT_FAST_WAIT = "const requestedMaxSeconds=Number(acquisition?.maps_round_max_time_seconds||acquisition?.max_time_seconds||60);\n  const fastWaitMs=(Math.max(180,requestedMaxSeconds)+45)*1000;\n  const deadline=Date.now()+(fastProfile ? fastWaitMs : 20*60*1000);";
 
+export const LEGACY_LANE_COOLDOWN = `function mapsLaneCooldownKey(url) {
+  return "recover:maps:lane:cooldown:"+Buffer.from(String(url||"")).toString("base64url");
+}
+async function markMapsLaneUnavailable(url, seconds=75) {
+  if (!url) return;
+  try { await redis.set(mapsLaneCooldownKey(url),"1",{EX:seconds}); } catch {}
+}`;
+
+export const ADAPTIVE_LANE_COOLDOWN = `function mapsLaneCooldownKey(url) {
+  return "recover:maps:lane:cooldown:"+Buffer.from(String(url||"")).toString("base64url");
+}
+function mapsLaneFailureKey(url) {
+  return "recover:maps:lane:failures:"+Buffer.from(String(url||"")).toString("base64url");
+}
+async function markMapsLaneUnavailable(url, seconds=null) {
+  if (!url) return;
+  try {
+    const failures=await redis.incr(mapsLaneFailureKey(url));
+    await redis.expire(mapsLaneFailureKey(url),1800);
+    const adaptiveSeconds=seconds==null ? Math.min(900,75*(2**Math.min(4,Math.max(0,failures-1)))) : seconds;
+    await redis.set(mapsLaneCooldownKey(url),"1",{EX:adaptiveSeconds});
+    console.warn("Maps lane cooldown",url,"failures",failures,"seconds",adaptiveSeconds);
+  } catch {}
+}
+async function clearMapsLaneFailure(url) {
+  if (!url) return;
+  try { await redis.del(mapsLaneFailureKey(url),mapsLaneCooldownKey(url)); } catch {}
+}`;
+
+export const LEGACY_MAPS_DONE = `console.log("Acquisition maps done", id, mapsJobId);`;
+export const RESILIENT_MAPS_DONE = `await clearMapsLaneFailure(mapsBase);\n      console.log("Acquisition maps done", id, mapsJobId);`;
+
 export function patchAcquisitionWorkerSource(source) {
-  const matches = source.split(LEGACY_FAST_WAIT).length - 1;
-  if (matches !== 1) {
-    throw new Error(`expected exactly one legacy fast Maps wait expression, found ${matches}`);
-  }
-  return source.replace(LEGACY_FAST_WAIT, RESILIENT_FAST_WAIT);
+  const waitMatches = source.split(LEGACY_FAST_WAIT).length - 1;
+  const cooldownMatches = source.split(LEGACY_LANE_COOLDOWN).length - 1;
+  const doneMatches = source.split(LEGACY_MAPS_DONE).length - 1;
+  if (waitMatches !== 1) throw new Error(`expected exactly one legacy fast Maps wait expression, found ${waitMatches}`);
+  if (cooldownMatches !== 1) throw new Error(`expected exactly one legacy Maps cooldown block, found ${cooldownMatches}`);
+  if (doneMatches !== 1) throw new Error(`expected exactly one Maps completion marker, found ${doneMatches}`);
+  return source
+    .replace(LEGACY_FAST_WAIT, RESILIENT_FAST_WAIT)
+    .replace(LEGACY_LANE_COOLDOWN, ADAPTIVE_LANE_COOLDOWN)
+    .replace(LEGACY_MAPS_DONE, RESILIENT_MAPS_DONE);
 }
 
 export async function runPatchedWorker() {
