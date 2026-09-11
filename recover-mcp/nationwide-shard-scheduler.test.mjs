@@ -12,10 +12,24 @@ test("derives 144/36 capacity from four workers and six maps lanes",()=>{
   });
 });
 
-test("respects explicit lower overrides and clamps unsafe values",()=>{
-  assert.equal(deriveSchedulerCapacity({workerCount:4,mapsLaneCount:6,queueHighWater:96,seedBatchSize:24}).queueHighWater,96);
-  assert.equal(deriveSchedulerCapacity({workerCount:40,mapsLaneCount:40,queueHighWater:999,seedBatchSize:999}).queueHighWater,288);
-  assert.equal(deriveSchedulerCapacity({workerCount:40,mapsLaneCount:40,queueHighWater:999,seedBatchSize:999}).seedBatchSize,72);
+test("uses the worker/maps bottleneck and respects explicit lower overrides",()=>{
+  assert.deepEqual(deriveSchedulerCapacity({workerCount:2,mapsLaneCount:10}),{
+    workerCount:2,
+    mapsLaneCount:10,
+    queueHighWater:72,
+    seedBatchSize:18,
+    shardCount:10,
+  });
+  const lowered=deriveSchedulerCapacity({workerCount:4,mapsLaneCount:6,queueHighWater:96,seedBatchSize:24});
+  assert.equal(lowered.queueHighWater,96);
+  assert.equal(lowered.seedBatchSize,24);
+});
+
+test("clamps unsafe values to operational limits",()=>{
+  const capacity=deriveSchedulerCapacity({workerCount:40,mapsLaneCount:40,queueHighWater:999,seedBatchSize:999});
+  assert.equal(capacity.queueHighWater,288);
+  assert.equal(capacity.seedBatchSize,72);
+  assert.equal(capacity.shardCount,32);
 });
 
 test("assigns an area to a stable shard",()=>{
