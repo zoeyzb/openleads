@@ -2,6 +2,7 @@ import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { claimCoverage, campaignLeadSetKey, qualificationProfile } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
+import { deriveSchedulerCapacity, shardIdForArea } from "./nationwide-shard-scheduler.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||"";
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
@@ -13,8 +14,19 @@ const NY_FIRST_MILESTONE=Number(process.env.NY_HOME_COMFORT_FIRST_MILESTONE||100
 const ENFORCE_NY_FIRST=String(process.env.ENFORCE_NY_FIRST_MILESTONE||"0")==="1";
 const NY_SCOPE_SET="recover:leadstore:ny-home-comfort";
 const FIRST_MILESTONE=Number(process.env.US_HVAC_FIRST_MILESTONE||1000);
-const QUEUE_HIGH_WATER=Math.min(Number(process.env.US_HVAC_QUEUE_HIGH_WATER||72),72);
-const SEED_BATCH_SIZE=Math.min(Number(process.env.US_HVAC_SEED_BATCH_SIZE||18),18);
+const SCHEDULER_CAPACITY=deriveSchedulerCapacity({
+  workerCount:process.env.US_HVAC_WORKER_COUNT,
+  mapsLaneCount:process.env.US_HVAC_MAPS_LANE_COUNT,
+  queueHighWater:process.env.US_HVAC_QUEUE_HIGH_WATER,
+  seedBatchSize:process.env.US_HVAC_SEED_BATCH_SIZE
+});
+const {
+  workerCount:WORKER_COUNT,
+  mapsLaneCount:MAPS_LANE_COUNT,
+  queueHighWater:QUEUE_HIGH_WATER,
+  seedBatchSize:SEED_BATCH_SIZE,
+  shardCount:SHARD_COUNT
+}=SCHEDULER_CAPACITY;
 const TARGET_PER_AREA=Math.min(Number(process.env.US_HVAC_ZIP_TARGET_PER_AREA||18),18);
 const DEPTH=Math.min(Number(process.env.US_HVAC_ZIP_DEPTH||6),6);
 const MAX_ROUNDS=1;
@@ -39,7 +51,7 @@ const profileJob={
 };
 
 function isNyLocation(value=""){
-  return /\\bny\\b|new york/i.test(String(value||""));
+  return /\bny\b|new york/i.test(String(value||""));
 }
 function isHomeComfortLead(lead={}){
   return isCoreHomeServiceLead(lead);
@@ -204,7 +216,9 @@ let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pas
 console.log("US HVAC ZIP controller started",JSON.stringify({
   areas:areas.length,target:TARGET_TOTAL,scopeSet,cursor,
   targetPerArea:TARGET_PER_AREA,maxRounds:MAX_ROUNDS,depth:DEPTH,
-  queueHighWater:QUEUE_HIGH_WATER,coveragePass,partitioning:"state>city>zip",enforceNyFirst:ENFORCE_NY_FIRST
+  workerCount:WORKER_COUNT,mapsLaneCount:MAPS_LANE_COUNT,
+  queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,shardCount:SHARD_COUNT,
+  coveragePass,partitioning:"state>city>zip",enforceNyFirst:ENFORCE_NY_FIRST
 }));
 await upgradeQueuedNationalJobs();
 await parkLegacyNationalForV2();
@@ -342,12 +356,14 @@ async function upgradeQueuedNationalJobs(){
 
 async function seedOne(area){
   const id=randomUUID(), now=new Date().toISOString();
+  const shardId=shardIdForArea(area,SHARD_COUNT);
   const job={
     id,
     batch_id:BATCH_ID,
     industry:"HVAC",
     search_profile:"core-home-service",
     coverage_pass:`us-core-v2-p${coveragePass}`,
+    shard_id:shardId,
     partition_state:area.partition_state||area.state,
     partition_city:area.partition_city||area.city,
     partition_zip:area.partition_zip||area.zip,
@@ -383,7 +399,8 @@ async function seedOne(area){
     source_population:area.population,
     partition_state:job.partition_state,
     partition_city:job.partition_city,
-    coverage_pass:job.coverage_pass
+    coverage_pass:job.coverage_pass,
+    shard_id:job.shard_id
   });
   if(!claim.claimed) return false;
 
@@ -402,14 +419,21 @@ while(true){
     const nyScoped=await redis.sCard(NY_SCOPE_SET);
     const queue=await redis.lLen(ACTIVE_QUEUE);
     const pausedNational=await redis.lLen(PAUSED_NATIONAL_QUEUE);
+    const currentArea=areas[cursor];
 
     await redis.hSet(CONTROLLER_KEY,{
       scoped_count:String(scoped),
       queue_len:String(queue),
       cursor:String(cursor),
       coverage_pass:String(coveragePass),
-      partition_state:String(areas[cursor]?.partition_state||areas[cursor]?.state||""),
-      partition_city:String(areas[cursor]?.partition_city||areas[cursor]?.city||""),
+      partition_state:String(currentArea?.partition_state||currentArea?.state||""),
+      partition_city:String(currentArea?.partition_city||currentArea?.city||""),
+      current_shard:String(currentArea?shardIdForArea(currentArea,SHARD_COUNT):""),
+      worker_count:String(WORKER_COUNT),
+      maps_lane_count:String(MAPS_LANE_COUNT),
+      queue_high_water:String(QUEUE_HIGH_WATER),
+      seed_batch_size:String(SEED_BATCH_SIZE),
+      shard_count:String(SHARD_COUNT),
       area_count:String(areas.length),
       updated_at:new Date().toISOString(),
       milestone_1000:scoped>=FIRST_MILESTONE?"reached":"pending",
@@ -465,7 +489,7 @@ while(true){
     }
 
     if(queue>=QUEUE_HIGH_WATER){
-      console.log(JSON.stringify({event:"backpressure",scoped,queue,cursor}));
+      console.log(JSON.stringify({event:"backpressure",scoped,queue,cursor,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,workerCount:WORKER_COUNT,mapsLaneCount:MAPS_LANE_COUNT}));
       await new Promise(r=>setTimeout(r,LOOP_MS));
       continue;
     }
@@ -482,12 +506,18 @@ while(true){
       event:"seed_cycle",
       scoped,
       queue_before:queue,
+      queue_high_water:QUEUE_HIGH_WATER,
+      seed_batch_size:SEED_BATCH_SIZE,
+      worker_count:WORKER_COUNT,
+      maps_lane_count:MAPS_LANE_COUNT,
+      shard_count:SHARD_COUNT,
       checked,
       seeded,
       cursor,
       coveragePass,
       partition_state:String(areas[Math.max(0,cursor-1)]?.partition_state||""),
       partition_city:String(areas[Math.max(0,cursor-1)]?.partition_city||""),
+      shard_id:String(areas[Math.max(0,cursor-1)]?shardIdForArea(areas[Math.max(0,cursor-1)],SHARD_COUNT):""),
       area_count:areas.length
     }));
 
