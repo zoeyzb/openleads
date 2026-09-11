@@ -15,13 +15,15 @@ export function deriveSchedulerCapacity({
   const workers=clampInt(workerCount,1,32,4);
   const lanes=clampInt(mapsLaneCount,1,32,6);
   const shardCount=Math.max(workers,lanes);
-  const derivedQueue=Math.min(288,Math.max(72,shardCount*24));
-  const derivedSeed=Math.min(72,Math.max(18,shardCount*6));
+  const derivedQueue=Math.min(288,workers*36,lanes*24);
+  const derivedSeed=Math.min(72,workers*9,lanes*6);
+  const requestedQueue=clampInt(queueHighWater,1,288,derivedQueue);
+  const requestedSeed=clampInt(seedBatchSize,1,72,derivedSeed);
   return {
     workerCount:workers,
     mapsLaneCount:lanes,
-    queueHighWater:clampInt(queueHighWater,1,288,derivedQueue),
-    seedBatchSize:clampInt(seedBatchSize,1,72,derivedSeed),
+    queueHighWater:Math.min(requestedQueue,derivedQueue),
+    seedBatchSize:Math.min(requestedSeed,derivedSeed),
     shardCount,
   };
 }
