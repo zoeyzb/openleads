@@ -1,3 +1,4 @@
+// Railway watches this runtime shim so acquisition resilience fixes deploy immediately.
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
