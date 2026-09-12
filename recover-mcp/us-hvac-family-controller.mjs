@@ -9,8 +9,8 @@ if(!REDIS_URL) throw new Error('ACQUISITION_REDIS_URL required');
 
 const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||'https://raw.githubusercontent.com/ReadyAPIs-com/curated-us-zips/main/data/us-zips.csv';
 const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||100000);
-const QUEUE_HIGH_WATER=Math.max(288,Number(process.env.US_FAMILY_QUEUE_HIGH_WATER||576));
-const SEED_BATCH_SIZE=Math.max(24,Number(process.env.US_FAMILY_SEED_BATCH_SIZE||96));
+const QUEUE_HIGH_WATER=Math.max(288,Number(process.env.US_FAMILY_QUEUE_HIGH_WATER||768));
+const SEED_BATCH_SIZE=Math.max(24,Number(process.env.US_FAMILY_SEED_BATCH_SIZE||128));
 const COVERAGE_SHARE=Math.min(0.95,Math.max(0.5,Number(process.env.US_FAMILY_COVERAGE_SHARE||0.70)));
 const TARGET_PER_JOB=Math.max(8,Math.min(25,Number(process.env.US_FAMILY_TARGET_PER_JOB||18)));
 const DEPTH=Math.max(6,Math.min(12,Number(process.env.US_FAMILY_DEPTH||6)));
@@ -19,6 +19,7 @@ const YIELD_SAMPLE_SIZE=Math.max(100,Math.min(2000,Number(process.env.US_FAMILY_
 const YIELD_REFRESH_MS=Math.max(15000,Number(process.env.US_FAMILY_YIELD_REFRESH_MS||60000));
 const TTL=Number(process.env.ACQUISITION_TTL_SECONDS||604800);
 const ACTIVE_QUEUE='recover:acquisition:queue';
+const CITY_PRIORITY_QUEUE='recover:acquisition:queue:us-city-priority';
 const CONTROLLER_KEY='recover:controller:us-core-family:v6';
 const PREVIOUS_CONTROLLER_KEY='recover:controller:us-core-family:v5';
 const BATCH_ID=process.env.US_FAMILY_BATCH_ID||'us-core-home-service-100k-family-v4-2026-09-12';
@@ -90,6 +91,11 @@ let lastYieldRefresh=0;
 
 console.log('US city-first adaptive family controller started',JSON.stringify({zipAreas:sourceAreas.length,uniqueCities,families:FAMILY_SHARDS.length,totalWorkUnits,coverageCursors,yieldCursors,coverageShare:COVERAGE_SHARE,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,target:TARGET_TOTAL}));
 
+async function pendingQueueDepth(){
+  const [general,city]=await Promise.all([redis.lLen(ACTIVE_QUEUE),redis.lLen(CITY_PRIORITY_QUEUE)]);
+  return {general,city,total:general+city};
+}
+
 async function refreshYieldStats(){
   if(Date.now()-lastYieldRefresh<YIELD_REFRESH_MS) return yieldStats;
   lastYieldRefresh=Date.now();
@@ -134,7 +140,7 @@ async function enqueueUnit(area,family,mode){
   await redis.sAdd('recover:acq:index',id);
   await redis.sAdd(BATCH_JOB_SET,id);
   await redis.expire(BATCH_JOB_SET,TTL);
-  await redis.lPush(ACTIVE_QUEUE,id);
+  await redis.lPush(mode==='coverage'?CITY_PRIORITY_QUEUE:ACTIVE_QUEUE,id);
   return true;
 }
 
@@ -173,8 +179,8 @@ while(true){
       await new Promise(r=>setTimeout(r,60000));
       continue;
     }
-    const queue=await redis.lLen(ACTIVE_QUEUE);
-    if(queue>=QUEUE_HIGH_WATER){
+    const queue=await pendingQueueDepth();
+    if(queue.total>=QUEUE_HIGH_WATER){
       console.log(JSON.stringify({event:'family_backpressure',scoped,queue,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
       await new Promise(r=>setTimeout(r,LOOP_MS));
       continue;
@@ -184,7 +190,7 @@ while(true){
     const ranked=rankFamilies(familyKeys,yieldStats);
     const schedule=buildCoverageYieldSchedule(familyKeys,ranked,Math.max(SEED_BATCH_SIZE*2,familyKeys.length),COVERAGE_SHARE);
     let seeded=0,checked=0,coverageSeeded=0,yieldSeeded=0;
-    while(seeded<SEED_BATCH_SIZE && (await redis.lLen(ACTIVE_QUEUE))<QUEUE_HIGH_WATER && !allWorkExhausted()){
+    while(seeded<SEED_BATCH_SIZE && (await pendingQueueDepth()).total<QUEUE_HIGH_WATER && !allWorkExhausted()){
       const slot=schedule[scheduleCursor%schedule.length];
       scheduleCursor++;
       const result=await enqueueNext(slot.mode,slot.family);
@@ -195,7 +201,8 @@ while(true){
       }
     }
     await persistControllerState();
-    console.log(JSON.stringify({event:'family_city_coverage_seed_cycle',scoped,queue_before:queue,checked,seeded,coverageSeeded,yieldSeeded,ranked,yieldStats,uniqueCities,coverageCursors,yieldCursors,totalWorkUnits}));
+    const queueAfter=await pendingQueueDepth();
+    console.log(JSON.stringify({event:'family_city_coverage_seed_cycle',scoped,queue_before:queue,queue_after:queueAfter,checked,seeded,coverageSeeded,yieldSeeded,ranked,yieldStats,uniqueCities,coverageCursors,yieldCursors,totalWorkUnits}));
     if(allWorkExhausted()){
       console.log(JSON.stringify({event:'family_pass_complete',scoped,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
       await new Promise(r=>setTimeout(r,60000));
