@@ -2,7 +2,7 @@ import { createClient } from 'redis';
 import { randomUUID } from 'node:crypto';
 import { claimCoverage, campaignLeadSetKey } from './acquisition-coverage.mjs';
 import { FAMILY_SHARDS, queryPassForIndex } from './national-family-sharding.mjs';
-import { buildYieldStats, rankFamilies, prioritizeAreas, buildCoverageYieldSchedule, buildCityFirstCoverageAreas, searchLocationForMode } from './national-yield-priority.mjs';
+import { buildYieldStats, rankFamilies, buildProductiveFamilySchedule, prioritizeAreas, buildCoverageYieldSchedule, buildCityFirstCoverageAreas, searchLocationForMode } from './national-yield-priority.mjs';
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||'';
 if(!REDIS_URL) throw new Error('ACQUISITION_REDIS_URL required');
@@ -174,10 +174,11 @@ async function persistControllerState(){
   await redis.hSet(CONTROLLER_KEY,state);
 }
 
-async function maintainCityPriorityFloor(queue){
+async function maintainCityPriorityFloor(queue,ranked){
   let seeded=0,checked=0;
+  const productive=buildProductiveFamilySchedule(ranked,CITY_PRIORITY_TARGET*2,0.20,coverageFloorCursor);
   while(queue.city<CITY_PRIORITY_TARGET && seeded<SEED_BATCH_SIZE){
-    const family=familyKeys[coverageFloorCursor%familyKeys.length];
+    const family=productive[coverageFloorCursor%productive.length]||ranked[0]||familyKeys[0];
     coverageFloorCursor++;
     const result=await enqueueNext('coverage',family);
     checked+=result.checked;
@@ -186,7 +187,7 @@ async function maintainCityPriorityFloor(queue){
   }
   if(seeded){
     await persistControllerState();
-    console.log(JSON.stringify({event:'family_city_priority_floor_refill',seeded,checked,city_after:queue.city,total_after:queue.total,cityPriorityTarget:CITY_PRIORITY_TARGET,coverageCursors}));
+    console.log(JSON.stringify({event:'family_city_priority_floor_refill',seeded,checked,city_after:queue.city,total_after:queue.total,cityPriorityTarget:CITY_PRIORITY_TARGET,ranked,coverageCursors}));
   }
   return seeded;
 }
@@ -199,18 +200,18 @@ while(true){
       await new Promise(r=>setTimeout(r,60000));
       continue;
     }
+    await refreshYieldStats();
+    const ranked=rankFamilies(familyKeys,yieldStats);
     const queue=await pendingQueueDepth();
     if(queue.city<CITY_PRIORITY_TARGET){
-      await maintainCityPriorityFloor(queue);
+      await maintainCityPriorityFloor(queue,ranked);
     }
     if(queue.total>=QUEUE_HIGH_WATER){
-      console.log(JSON.stringify({event:'family_backpressure',scoped,queue,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
+      console.log(JSON.stringify({event:'family_backpressure',scoped,queue,ranked,yieldStats,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
       await new Promise(r=>setTimeout(r,LOOP_MS));
       continue;
     }
 
-    await refreshYieldStats();
-    const ranked=rankFamilies(familyKeys,yieldStats);
     const schedule=buildCoverageYieldSchedule(familyKeys,ranked,Math.max(SEED_BATCH_SIZE*2,familyKeys.length),COVERAGE_SHARE);
     let seeded=0,checked=0,coverageSeeded=0,yieldSeeded=0;
     while(seeded<SEED_BATCH_SIZE && (await pendingQueueDepth()).total<QUEUE_HIGH_WATER && !allWorkExhausted()){
