@@ -2,7 +2,7 @@ import { createClient } from 'redis';
 import { randomUUID } from 'node:crypto';
 import { claimCoverage, campaignLeadSetKey } from './acquisition-coverage.mjs';
 import { FAMILY_SHARDS, queryPassForIndex } from './national-family-sharding.mjs';
-import { buildYieldStats, rankFamilies, prioritizeAreas, buildCoverageYieldSchedule, buildCityFirstCoverageAreas } from './national-yield-priority.mjs';
+import { buildYieldStats, rankFamilies, prioritizeAreas, buildCoverageYieldSchedule, buildCityFirstCoverageAreas, searchLocationForMode } from './national-yield-priority.mjs';
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||'';
 if(!REDIS_URL) throw new Error('ACQUISITION_REDIS_URL required');
@@ -20,8 +20,8 @@ const YIELD_REFRESH_MS=Math.max(15000,Number(process.env.US_FAMILY_YIELD_REFRESH
 const TTL=Number(process.env.ACQUISITION_TTL_SECONDS||604800);
 const ACTIVE_QUEUE='recover:acquisition:queue';
 const CITY_PRIORITY_QUEUE='recover:acquisition:queue:us-city-priority';
-const CONTROLLER_KEY='recover:controller:us-core-family:v6';
-const PREVIOUS_CONTROLLER_KEY='recover:controller:us-core-family:v5';
+const CONTROLLER_KEY='recover:controller:us-core-family:v7';
+const PREVIOUS_CONTROLLER_KEY='recover:controller:us-core-family:v6';
 const BATCH_ID=process.env.US_FAMILY_BATCH_ID||'us-core-home-service-100k-family-v4-2026-09-12';
 const BATCH_JOB_SET=`recover:batch:${BATCH_ID}:jobs`;
 
@@ -82,14 +82,14 @@ for(const family of FAMILY_SHARDS){
   const storedCoverage=await redis.hGet(CONTROLLER_KEY,`coverage_cursor:${family.key}`);
   coverageCursors[family.key]=storedCoverage===null?0:Math.max(0,Number(storedCoverage)||0);
   const storedYield=await redis.hGet(CONTROLLER_KEY,`yield_cursor:${family.key}`);
-  const previous=await redis.hGet(PREVIOUS_CONTROLLER_KEY,`cursor:${family.key}`);
+  const previous=await redis.hGet(PREVIOUS_CONTROLLER_KEY,`yield_cursor:${family.key}`);
   yieldCursors[family.key]=storedYield===null?Math.max(0,Number(previous)||0):Math.max(0,Number(storedYield)||0);
 }
 let scheduleCursor=Math.max(0,Number(await redis.hGet(CONTROLLER_KEY,'schedule_cursor')||0));
 let yieldStats={};
 let lastYieldRefresh=0;
 
-console.log('US city-first adaptive family controller started',JSON.stringify({zipAreas:sourceAreas.length,uniqueCities,families:FAMILY_SHARDS.length,totalWorkUnits,coverageCursors,yieldCursors,coverageShare:COVERAGE_SHARE,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,target:TARGET_TOTAL}));
+console.log('US city-first adaptive family controller started',JSON.stringify({zipAreas:sourceAreas.length,uniqueCities,families:FAMILY_SHARDS.length,totalWorkUnits,coverageCursors,yieldCursors,coverageShare:COVERAGE_SHARE,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,target:TARGET_TOTAL,coverageQueryMode:'city-state'}));
 
 async function pendingQueueDepth(){
   const [general,city]=await Promise.all([redis.lLen(ACTIVE_QUEUE),redis.lLen(CITY_PRIORITY_QUEUE)]);
@@ -121,18 +121,19 @@ async function refreshYieldStats(){
 }
 
 async function enqueueUnit(area,family,mode){
-  const coveragePass=queryPassForIndex(area.location,family.queryIndex,`us-core-family-v4-${family.key}`);
+  const searchLocation=searchLocationForMode(area,mode);
+  const coveragePass=queryPassForIndex(searchLocation,family.queryIndex,`us-core-family-v5-${mode}-${family.key}`);
   const id=randomUUID(); const now=new Date().toISOString();
   const job={
     id,batch_id:BATCH_ID,industry:'HVAC',search_profile:'core-home-service',coverage_pass:coveragePass,
     partition_state:area.state,partition_city:area.city,partition_zip:area.zip,
     service_family:family.key,service_query_index:family.queryIndex,service_query_label:family.label,
-    location:area.location,target:TARGET_PER_JOB,min_score:30,
+    location:searchLocation,target:TARGET_PER_JOB,min_score:30,
     require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,
     max_rounds:1,depth:DEPTH,status:'queued',phase:'queued',round:0,rounds_completed:0,
     raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],
-    source:'us_core_family_partition_controller_v4',source_zip:area.zip,source_population:area.population,
-    scheduler_mode:mode,created_at:now,updated_at:now
+    source:'us_core_family_partition_controller_v5',source_zip:area.zip,source_population:area.population,
+    scheduler_mode:mode,search_location_mode:mode==='coverage'?'city-state':'zip-city-state',created_at:now,updated_at:now
   };
   const claim=await claimCoverage(redis,job,{source:job.source,service_family:family.key,query_index:family.queryIndex});
   if(!claim.claimed) return false;
