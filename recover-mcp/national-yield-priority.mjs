@@ -75,13 +75,22 @@ export function buildCoverageYieldSchedule(coverageFamilies=[],rankedFamilies=[]
   const share=Math.min(1,Math.max(0,Number(coverageShare)||0));
   const coverageSlots=coverage.length?Math.min(total,Math.max(1,Math.ceil(total*share))):0;
   const yieldSlots=total-coverageSlots;
+  const weighted=ranked.length?weightedFamilySchedule(ranked,Math.max(1,yieldSlots)):[];
   const out=[];
-  for(let i=0;i<coverageSlots;i++) out.push({mode:'coverage',family:coverage[i%coverage.length]});
-  if(ranked.length){
-    const weighted=weightedFamilySchedule(ranked,Math.max(1,yieldSlots));
-    for(let i=0;i<yieldSlots;i++) out.push({mode:'yield',family:weighted[i%weighted.length]});
-  }else{
-    for(let i=0;i<yieldSlots;i++) out.push({mode:'coverage',family:coverage[(coverageSlots+i)%coverage.length]});
+  let coverageUsed=0,yieldUsed=0;
+  for(let i=0;i<total;i++){
+    const targetCoverage=Math.min(coverageSlots,Math.ceil((i+1)*share));
+    const useCoverage=coverageUsed<coverageSlots && (yieldUsed>=yieldSlots || coverageUsed<targetCoverage);
+    if(useCoverage){
+      out.push({mode:'coverage',family:coverage[coverageUsed%coverage.length]});
+      coverageUsed++;
+    }else if(ranked.length && yieldUsed<yieldSlots){
+      out.push({mode:'yield',family:weighted[yieldUsed%weighted.length]});
+      yieldUsed++;
+    }else{
+      out.push({mode:'coverage',family:coverage[coverageUsed%coverage.length]});
+      coverageUsed++;
+    }
   }
   return out;
 }
