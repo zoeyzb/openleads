@@ -73,3 +73,5 @@ for(const id of ids){
 await redis.set(REPAIR_KEY,JSON.stringify({applied_at:now,inspected,matched,requeued,byStatus}),{EX:TTL});
 console.log(JSON.stringify({event:'browser_zero_retry_applied',window:{start:new Date(START).toISOString(),end:new Date(END).toISOString()},inspected,matched,requeued,byStatus,sample}));
 await redis.quit();
+
+// One-shot repair is idempotent through REPAIR_KEY; this comment also triggers the maintenance watcher after the watch pattern update.
