@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildYieldStats, rankFamilies, weightedFamilySchedule, prioritizeAreas, buildCoverageYieldSchedule, buildCityFirstCoverageAreas, searchLocationForMode } from './national-yield-priority.mjs';
+import { buildYieldStats, rankFamilies, weightedFamilySchedule, buildProductiveFamilySchedule, prioritizeAreas, buildCoverageYieldSchedule, buildCityFirstCoverageAreas, searchLocationForMode } from './national-yield-priority.mjs';
 
 test('ranks high-yield families ahead of zero-yield families after enough evidence',()=>{
   const jobs=[];
@@ -18,6 +18,15 @@ test('keeps exploration for low-yield families instead of starving them',()=>{
   assert.ok(schedule.filter(x=>x==='hvac').length > schedule.filter(x=>x==='duct').length);
   assert.ok(schedule.includes('duct'));
   assert.ok(schedule.includes('ventilation'));
+});
+
+test('productive schedule heavily favors top families while rotating exploration through every family',()=>{
+  const ranked=['hvac','plumbing','furnace','heating','ac','boiler','refrigeration','duct','ventilation','emergency'];
+  const first=buildProductiveFamilySchedule(ranked,50,0.2,0);
+  const second=buildProductiveFamilySchedule(ranked,50,0.2,10);
+  assert.ok(first.filter(x=>x==='hvac').length > first.filter(x=>x==='ventilation').length);
+  assert.ok(first.filter(x=>['hvac','plumbing','furnace'].includes(x)).length >= 25);
+  assert.ok(new Set([...first,...second]).size===ranked.length);
 });
 
 test('prioritizes dense ZIPs while still interleaving states',()=>{
