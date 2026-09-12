@@ -87,7 +87,7 @@ async function refreshYieldStats(){
   if(Date.now()-lastYieldRefresh<YIELD_REFRESH_MS) return yieldStats;
   lastYieldRefresh=Date.now();
   try{
-    const sampled=await redis.sRandMember(BATCH_JOB_SET,YIELD_SAMPLE_SIZE);
+    const sampled=await redis.sendCommand(['SRANDMEMBER',BATCH_JOB_SET,String(YIELD_SAMPLE_SIZE)]);
     const ids=Array.isArray(sampled)?sampled:(sampled?[sampled]:[]);
     if(!ids.length){ yieldStats={}; return yieldStats; }
     const payloads=await redis.mGet(ids.map(id=>`recover:acq:${id}`));
