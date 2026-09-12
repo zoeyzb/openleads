@@ -123,3 +123,12 @@ export function buildCityFirstCoverageAreas(rows=[]){
   const remaining=prioritizeAreas(rows.filter(x=>!primaryKeys.has(`${x.state}|${String(x.city).toLowerCase()}|${x.zip}`)));
   return [...primary,...remaining];
 }
+
+export function searchLocationForMode(area,mode){
+  if(String(mode)==='coverage'){
+    const city=String(area?.city||'').trim();
+    const state=String(area?.state||'').trim();
+    if(city&&state) return `${city}, ${state}`;
+  }
+  return String(area?.location||[area?.zip,area?.city,area?.state].filter(Boolean).join(' ')).trim();
+}
