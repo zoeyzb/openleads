@@ -11,6 +11,7 @@ const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||'https://raw.githubuserconte
 const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||100000);
 const QUEUE_HIGH_WATER=Math.max(288,Number(process.env.US_FAMILY_QUEUE_HIGH_WATER||768));
 const SEED_BATCH_SIZE=Math.max(24,Number(process.env.US_FAMILY_SEED_BATCH_SIZE||128));
+const CITY_PRIORITY_TARGET=Math.max(16,Math.min(256,Number(process.env.US_FAMILY_CITY_PRIORITY_TARGET||64)));
 const COVERAGE_SHARE=Math.min(0.95,Math.max(0.5,Number(process.env.US_FAMILY_COVERAGE_SHARE||0.70)));
 const TARGET_PER_JOB=Math.max(8,Math.min(25,Number(process.env.US_FAMILY_TARGET_PER_JOB||18)));
 const DEPTH=Math.max(6,Math.min(12,Number(process.env.US_FAMILY_DEPTH||6)));
@@ -86,10 +87,11 @@ for(const family of FAMILY_SHARDS){
   yieldCursors[family.key]=storedYield===null?Math.max(0,Number(previous)||0):Math.max(0,Number(storedYield)||0);
 }
 let scheduleCursor=Math.max(0,Number(await redis.hGet(CONTROLLER_KEY,'schedule_cursor')||0));
+let coverageFloorCursor=Math.max(0,Number(await redis.hGet(CONTROLLER_KEY,'coverage_floor_cursor')||0));
 let yieldStats={};
 let lastYieldRefresh=0;
 
-console.log('US city-first adaptive family controller started',JSON.stringify({zipAreas:sourceAreas.length,uniqueCities,families:FAMILY_SHARDS.length,totalWorkUnits,coverageCursors,yieldCursors,coverageShare:COVERAGE_SHARE,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,target:TARGET_TOTAL,coverageQueryMode:'city-state'}));
+console.log('US city-first adaptive family controller started',JSON.stringify({zipAreas:sourceAreas.length,uniqueCities,families:FAMILY_SHARDS.length,totalWorkUnits,coverageCursors,yieldCursors,coverageShare:COVERAGE_SHARE,cityPriorityTarget:CITY_PRIORITY_TARGET,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,target:TARGET_TOTAL,coverageQueryMode:'city-state'}));
 
 async function pendingQueueDepth(){
   const [general,city]=await Promise.all([redis.lLen(ACTIVE_QUEUE),redis.lLen(CITY_PRIORITY_QUEUE)]);
@@ -100,7 +102,7 @@ async function refreshYieldStats(){
   if(Date.now()-lastYieldRefresh<YIELD_REFRESH_MS) return yieldStats;
   lastYieldRefresh=Date.now();
   try{
-    const sampled=await redis.sRandMember('recover:acq:index',YIELD_SAMPLE_SIZE);
+    const sampled=await redis.sRandMember(BATCH_JOB_SET,YIELD_SAMPLE_SIZE);
     const ids=Array.isArray(sampled)?sampled:(sampled?[sampled]:[]);
     if(!ids.length){ yieldStats={}; return yieldStats; }
     const payloads=await redis.mGet(ids.map(id=>`recover:acq:${id}`));
@@ -164,12 +166,29 @@ function allWorkExhausted(){
 }
 
 async function persistControllerState(){
-  const state={updated_at:new Date().toISOString(),total_work_units:String(totalWorkUnits),unique_cities:String(uniqueCities),schedule_cursor:String(scheduleCursor),coverage_share:String(COVERAGE_SHARE)};
+  const state={updated_at:new Date().toISOString(),total_work_units:String(totalWorkUnits),unique_cities:String(uniqueCities),schedule_cursor:String(scheduleCursor),coverage_floor_cursor:String(coverageFloorCursor),coverage_share:String(COVERAGE_SHARE)};
   for(const family of FAMILY_SHARDS){
     state[`coverage_cursor:${family.key}`]=String(coverageCursors[family.key]);
     state[`yield_cursor:${family.key}`]=String(yieldCursors[family.key]);
   }
   await redis.hSet(CONTROLLER_KEY,state);
+}
+
+async function maintainCityPriorityFloor(queue){
+  let seeded=0,checked=0;
+  while(queue.city<CITY_PRIORITY_TARGET && seeded<SEED_BATCH_SIZE){
+    const family=familyKeys[coverageFloorCursor%familyKeys.length];
+    coverageFloorCursor++;
+    const result=await enqueueNext('coverage',family);
+    checked+=result.checked;
+    if(result.seeded){ seeded++; queue.city++; queue.total++; }
+    if(result.exhausted && FAMILY_SHARDS.every(f=>coverageCursors[f.key]>=coverageAreas.length)) break;
+  }
+  if(seeded){
+    await persistControllerState();
+    console.log(JSON.stringify({event:'family_city_priority_floor_refill',seeded,checked,city_after:queue.city,total_after:queue.total,cityPriorityTarget:CITY_PRIORITY_TARGET,coverageCursors}));
+  }
+  return seeded;
 }
 
 while(true){
@@ -181,6 +200,9 @@ while(true){
       continue;
     }
     const queue=await pendingQueueDepth();
+    if(queue.city<CITY_PRIORITY_TARGET){
+      await maintainCityPriorityFloor(queue);
+    }
     if(queue.total>=QUEUE_HIGH_WATER){
       console.log(JSON.stringify({event:'family_backpressure',scoped,queue,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
       await new Promise(r=>setTimeout(r,LOOP_MS));
