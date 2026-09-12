@@ -65,3 +65,52 @@ export function prioritizeAreas(rows=[]){
   }
   return out;
 }
+
+export function buildCoverageYieldSchedule(coverageFamilies=[],rankedFamilies=[],size=48,coverageShare=0.7){
+  const total=Math.max(0,Math.floor(Number(size)||0));
+  if(!total) return [];
+  const coverage=[...coverageFamilies];
+  const ranked=[...rankedFamilies];
+  if(!coverage.length && !ranked.length) return [];
+  const share=Math.min(1,Math.max(0,Number(coverageShare)||0));
+  const coverageSlots=coverage.length?Math.min(total,Math.max(1,Math.ceil(total*share))):0;
+  const yieldSlots=total-coverageSlots;
+  const out=[];
+  for(let i=0;i<coverageSlots;i++) out.push({mode:'coverage',family:coverage[i%coverage.length]});
+  if(ranked.length){
+    const weighted=weightedFamilySchedule(ranked,Math.max(1,yieldSlots));
+    for(let i=0;i<yieldSlots;i++) out.push({mode:'yield',family:weighted[i%weighted.length]});
+  }else{
+    for(let i=0;i<yieldSlots;i++) out.push({mode:'coverage',family:coverage[(coverageSlots+i)%coverage.length]});
+  }
+  return out;
+}
+
+export function buildCityFirstCoverageAreas(rows=[]){
+  const states=new Map();
+  for(const row of rows){
+    const state=String(row?.state||'').trim();
+    const city=String(row?.city||'').trim().toLowerCase();
+    if(!state||!city) continue;
+    if(!states.has(state)) states.set(state,new Map());
+    const cities=states.get(state);
+    if(!cities.has(city)) cities.set(city,[]);
+    cities.get(city).push(row);
+  }
+  const stateQueues=[...states.entries()].map(([state,cities])=>{
+    const groups=[...cities.entries()].map(([city,items])=>({city,items:[...items].sort((a,b)=>Number(b.population||0)-Number(a.population||0)||String(a.zip).localeCompare(String(b.zip)))}));
+    groups.sort((a,b)=>Number(b.items[0]?.population||0)-Number(a.items[0]?.population||0)||a.city.localeCompare(b.city));
+    return {state,groups,cursor:0};
+  }).sort((a,b)=>a.state.localeCompare(b.state));
+  const primary=[];
+  for(;;){
+    let added=0;
+    for(const q of stateQueues){
+      if(q.cursor<q.groups.length){ primary.push(q.groups[q.cursor++].items[0]); added++; }
+    }
+    if(!added) break;
+  }
+  const primaryKeys=new Set(primary.map(x=>`${x.state}|${String(x.city).toLowerCase()}|${x.zip}`));
+  const remaining=prioritizeAreas(rows.filter(x=>!primaryKeys.has(`${x.state}|${String(x.city).toLowerCase()}|${x.zip}`)));
+  return [...primary,...remaining];
+}
