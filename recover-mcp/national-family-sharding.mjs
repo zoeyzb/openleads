@@ -1,11 +1,24 @@
 export const FAMILY_SHARDS=[
+  {key:'heating_cooling',queryIndex:0,label:'heating and cooling contractor'},
+  {key:'ac_repair',queryIndex:1,label:'air conditioning repair service'},
   {key:'hvac',queryIndex:2,label:'HVAC contractor'},
-  {key:'plumbing',queryIndex:9,label:'plumbing contractor'},
+  {key:'heating_contractor',queryIndex:3,label:'heating contractor'},
+  {key:'ac_service',queryIndex:4,label:'AC repair service'},
   {key:'furnace',queryIndex:5,label:'furnace repair service'},
   {key:'boiler',queryIndex:6,label:'boiler repair service'},
-  {key:'refrigeration',queryIndex:11,label:'refrigeration contractor'},
   {key:'duct',queryIndex:7,label:'air duct contractor'},
   {key:'ventilation',queryIndex:8,label:'ventilation contractor'},
+  {key:'plumbing',queryIndex:9,label:'plumbing contractor'},
+  {key:'plumber',queryIndex:10,label:'plumber'},
+  {key:'refrigeration',queryIndex:11,label:'refrigeration contractor'},
+  {key:'residential_hvac',queryIndex:12,label:'residential heating and cooling'},
+  {key:'commercial_hvac',queryIndex:13,label:'commercial heating and cooling'},
+  {key:'emergency_hvac_plumbing',queryIndex:14,label:'emergency plumbing and HVAC'},
+  {key:'hvac_plumbing',queryIndex:15,label:'heating cooling plumbing contractor'},
+  {key:'furnace_boiler',queryIndex:16,label:'furnace boiler contractor'},
+  {key:'ac_installation',queryIndex:17,label:'air conditioning installation'},
+  {key:'heating_repair',queryIndex:18,label:'heating repair service'},
+  {key:'duct_cleaning',queryIndex:19,label:'duct cleaning service'},
 ];
 
 function workerHash(value){
