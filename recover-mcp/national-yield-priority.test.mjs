@@ -38,6 +38,14 @@ test('guarantees most batch slots remain reserved for nationwide coverage',()=>{
   assert.ok(out.filter(x=>x.mode==='yield').length<=4);
 });
 
+test('coverage and yield slots stay interleaved during partial queue refills',()=>{
+  const out=buildCoverageYieldSchedule(['hvac','plumbing'],['hvac','plumbing'],20,0.7);
+  for(let start=0;start<out.length;start+=4){
+    const window=out.slice(start,start+4);
+    assert.ok(window.some(x=>x.mode==='coverage'),`window ${start} missing coverage`);
+  }
+});
+
 test('coverage lane round-robins every family rather than starving low-yield families',()=>{
   const out=buildCoverageYieldSchedule(['hvac','plumbing','duct'],['hvac','plumbing','duct'],9,0.67);
   const coverage=out.filter(x=>x.mode==='coverage').map(x=>x.family);
