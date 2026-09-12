@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { claimCoverage, campaignLeadSetKey } from './acquisition-coverage.mjs';
 import { FAMILY_SHARDS, queryPassForIndex } from './national-family-sharding.mjs';
 import { buildYieldStats, rankFamilies, buildProductiveFamilySchedule, prioritizeAreas, buildCoverageYieldSchedule, buildCityFirstCoverageAreas, searchLocationForMode } from './national-yield-priority.mjs';
+import { sampleSetMembers } from './redis-sampling.mjs';
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||'';
 if(!REDIS_URL) throw new Error('ACQUISITION_REDIS_URL required');
@@ -102,8 +103,7 @@ async function refreshYieldStats(){
   if(Date.now()-lastYieldRefresh<YIELD_REFRESH_MS) return yieldStats;
   lastYieldRefresh=Date.now();
   try{
-    const sampled=await redis.sRandMember(BATCH_JOB_SET,YIELD_SAMPLE_SIZE);
-    const ids=Array.isArray(sampled)?sampled:(sampled?[sampled]:[]);
+    const ids=await sampleSetMembers(redis,BATCH_JOB_SET,YIELD_SAMPLE_SIZE);
     if(!ids.length){ yieldStats={}; return yieldStats; }
     const payloads=await redis.mGet(ids.map(id=>`recover:acq:${id}`));
     const jobs=[];
