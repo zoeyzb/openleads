@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildYieldStats, rankFamilies, weightedFamilySchedule, prioritizeAreas, buildCoverageYieldSchedule, buildCityFirstCoverageAreas } from './national-yield-priority.mjs';
+import { buildYieldStats, rankFamilies, weightedFamilySchedule, prioritizeAreas, buildCoverageYieldSchedule, buildCityFirstCoverageAreas, searchLocationForMode } from './national-yield-priority.mjs';
 
 test('ranks high-yield families ahead of zero-yield families after enough evidence',()=>{
   const jobs=[];
@@ -67,4 +67,10 @@ test('city-first coverage visits every city before secondary ZIPs in a city',()=
   const firstFour=new Set(out.slice(0,4).map(x=>`${x.state}:${x.city}`));
   assert.equal(firstFour.size,4);
   assert.equal(out.length,6);
+});
+
+test('coverage mode searches broad city/state while yield mode keeps ZIP precision',()=>{
+  const area={zip:'35601',city:'Decatur',state:'AL',location:'35601 Decatur, AL'};
+  assert.equal(searchLocationForMode(area,'coverage'),'Decatur, AL');
+  assert.equal(searchLocationForMode(area,'yield'),'35601 Decatur, AL');
 });
