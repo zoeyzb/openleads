@@ -1,4 +1,9 @@
-const PRIOR={hvac:7,plumbing:6,furnace:5,boiler:4,refrigeration:3,duct:2,ventilation:1};
+const PRIOR={
+  hvac:20,plumbing:19,furnace:18,heating_repair:17,heating_cooling:16,
+  ac_repair:15,ac_service:14,plumber:13,heating_contractor:12,ac_installation:11,
+  residential_hvac:10,commercial_hvac:9,hvac_plumbing:8,furnace_boiler:7,boiler:6,
+  refrigeration:5,duct:4,duct_cleaning:3,ventilation:2,emergency_hvac_plumbing:1
+};
 
 export function buildYieldStats(jobs=[]){
   const stats={};
