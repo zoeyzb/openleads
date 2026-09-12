@@ -37,22 +37,52 @@ async function clearMapsLaneFailure(url) {
 export const LEGACY_MAPS_DONE = `console.log("Acquisition maps done", id, mapsJobId);`;
 export const RESILIENT_MAPS_DONE = `await clearMapsLaneFailure(mapsBase);\n      console.log("Acquisition maps done", id, mapsJobId);`;
 export const LEGACY_QUEUE_POLL = `const item=await redis.brPop(["recover:acquisition:queue:ny-priority","recover:acquisition:queue"],5);`;
-export const CITY_PRIORITY_QUEUE_POLL = `const item=await redis.brPop(["recover:acquisition:queue:ny-priority","recover:acquisition:queue:us-city-priority","recover:acquisition:queue"],5);`;
+
+export const LEGACY_WORKER_LOOP = `while (!shuttingDown) {
+  try {
+    const item=await redis.brPop(["recover:acquisition:queue:ny-priority","recover:acquisition:queue"],5);
+    if (shuttingDown) break;
+    const id=item?.element||item;
+    if (!id) continue;
+    await processAcquisition(String(id));
+  } catch (error) {
+    console.error("Worker loop error",error);
+    await sleep(5000);
+  }
+}`;
+
+export const CONCURRENT_WORKER_LOOP = `const workerConcurrency=Math.max(1,Math.min(4,Number(process.env.ACQUISITION_WORKER_CONCURRENCY||2)));
+console.log("Acquisition worker concurrency",workerConcurrency);
+async function acquisitionWorkerLoop(slot){
+  while (!shuttingDown) {
+    try {
+      const item=await redis.brPop(["recover:acquisition:queue:ny-priority","recover:acquisition:queue:us-city-priority","recover:acquisition:queue"],5);
+      if (shuttingDown) break;
+      const id=item?.element||item;
+      if (!id) continue;
+      await processAcquisition(String(id));
+    } catch (error) {
+      console.error("Worker loop error","worker slot",slot,error);
+      await sleep(5000);
+    }
+  }
+}
+await Promise.all(Array.from({length:workerConcurrency},(_,slot)=>acquisitionWorkerLoop(slot+1)));`;
 
 export function patchAcquisitionWorkerSource(source) {
   const waitMatches = source.split(LEGACY_FAST_WAIT).length - 1;
   const cooldownMatches = source.split(LEGACY_LANE_COOLDOWN).length - 1;
   const doneMatches = source.split(LEGACY_MAPS_DONE).length - 1;
-  const queueMatches = source.split(LEGACY_QUEUE_POLL).length - 1;
+  const loopMatches = source.split(LEGACY_WORKER_LOOP).length - 1;
   if (waitMatches !== 1) throw new Error(`expected exactly one legacy fast Maps wait expression, found ${waitMatches}`);
   if (cooldownMatches !== 1) throw new Error(`expected exactly one legacy Maps cooldown block, found ${cooldownMatches}`);
   if (doneMatches !== 1) throw new Error(`expected exactly one Maps completion marker, found ${doneMatches}`);
-  if (queueMatches !== 1) throw new Error(`expected exactly one legacy acquisition queue poll, found ${queueMatches}`);
+  if (loopMatches !== 1) throw new Error(`expected exactly one legacy worker loop, found ${loopMatches}`);
   return source
     .replace(LEGACY_FAST_WAIT, RESILIENT_FAST_WAIT)
     .replace(LEGACY_LANE_COOLDOWN, ADAPTIVE_LANE_COOLDOWN)
     .replace(LEGACY_MAPS_DONE, RESILIENT_MAPS_DONE)
-    .replace(LEGACY_QUEUE_POLL, CITY_PRIORITY_QUEUE_POLL);
+    .replace(LEGACY_WORKER_LOOP, CONCURRENT_WORKER_LOOP);
 }
 
 export async function runPatchedWorker() {
