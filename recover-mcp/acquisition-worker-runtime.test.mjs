@@ -5,11 +5,12 @@ import {
   LEGACY_LANE_COOLDOWN,
   LEGACY_MAPS_DONE,
   LEGACY_QUEUE_POLL,
+  LEGACY_WORKER_LOOP,
   patchAcquisitionWorkerSource,
 } from "./acquisition-worker-runtime.mjs";
 
 function fixture(){
-  return `before\n${LEGACY_FAST_WAIT}\n${LEGACY_LANE_COOLDOWN}\n${LEGACY_MAPS_DONE}\n${LEGACY_QUEUE_POLL}\nafter`;
+  return `before\n${LEGACY_FAST_WAIT}\n${LEGACY_LANE_COOLDOWN}\n${LEGACY_MAPS_DONE}\n${LEGACY_WORKER_LOOP}\nafter`;
 }
 
 test("extends fast Maps status budget beyond backend 180-second minimum",()=>{
@@ -31,6 +32,13 @@ test("prioritizes US city coverage ahead of the general nationwide queue",()=>{
   const general=patched.lastIndexOf('recover:acquisition:queue"');
   assert.ok(city>=0);
   assert.ok(general>city);
+});
+
+test("runs multiple acquisition loops inside each worker process",()=>{
+  const patched=patchAcquisitionWorkerSource(fixture());
+  assert.match(patched,/ACQUISITION_WORKER_CONCURRENCY/);
+  assert.match(patched,/Promise\.all\(Array\.from\(\{length:workerConcurrency\}/);
+  assert.match(patched,/worker slot/);
 });
 
 test("refuses to start if upstream worker no longer matches expected contract",()=>{
