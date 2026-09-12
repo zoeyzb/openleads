@@ -2,7 +2,7 @@ import { createClient } from 'redis';
 import { randomUUID } from 'node:crypto';
 import { claimCoverage, campaignLeadSetKey } from './acquisition-coverage.mjs';
 import { FAMILY_SHARDS, queryPassForIndex } from './national-family-sharding.mjs';
-import { buildYieldStats, rankFamilies, weightedFamilySchedule, prioritizeAreas } from './national-yield-priority.mjs';
+import { buildYieldStats, rankFamilies, prioritizeAreas, buildCoverageYieldSchedule, buildCityFirstCoverageAreas } from './national-yield-priority.mjs';
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||'';
 if(!REDIS_URL) throw new Error('ACQUISITION_REDIS_URL required');
@@ -11,6 +11,7 @@ const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||'https://raw.githubuserconte
 const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||100000);
 const QUEUE_HIGH_WATER=Math.max(288,Number(process.env.US_FAMILY_QUEUE_HIGH_WATER||576));
 const SEED_BATCH_SIZE=Math.max(24,Number(process.env.US_FAMILY_SEED_BATCH_SIZE||96));
+const COVERAGE_SHARE=Math.min(0.95,Math.max(0.5,Number(process.env.US_FAMILY_COVERAGE_SHARE||0.70)));
 const TARGET_PER_JOB=Math.max(8,Math.min(25,Number(process.env.US_FAMILY_TARGET_PER_JOB||18)));
 const DEPTH=Math.max(6,Math.min(12,Number(process.env.US_FAMILY_DEPTH||6)));
 const LOOP_MS=Math.max(3000,Number(process.env.US_FAMILY_CONTROLLER_LOOP_MS||5000));
@@ -18,13 +19,14 @@ const YIELD_SAMPLE_SIZE=Math.max(100,Math.min(2000,Number(process.env.US_FAMILY_
 const YIELD_REFRESH_MS=Math.max(15000,Number(process.env.US_FAMILY_YIELD_REFRESH_MS||60000));
 const TTL=Number(process.env.ACQUISITION_TTL_SECONDS||604800);
 const ACTIVE_QUEUE='recover:acquisition:queue';
-const CONTROLLER_KEY='recover:controller:us-core-family:v5';
-const LEGACY_CONTROLLER_KEY='recover:controller:us-core-family:v4';
+const CONTROLLER_KEY='recover:controller:us-core-family:v6';
+const PREVIOUS_CONTROLLER_KEY='recover:controller:us-core-family:v5';
 const BATCH_ID=process.env.US_FAMILY_BATCH_ID||'us-core-home-service-100k-family-v4-2026-09-12';
 const BATCH_JOB_SET=`recover:batch:${BATCH_ID}:jobs`;
 
 const profileJob={industry:'HVAC',require_no_website:true,require_contact:true,require_phone:false,require_email:false,include_no_website:true,min_score:30};
 const familyByKey=new Map(FAMILY_SHARDS.map(f=>[f.key,f]));
+const familyKeys=FAMILY_SHARDS.map(f=>f.key);
 
 function parseCsvLine(line){
   const out=[]; let cell='',quoted=false;
@@ -43,7 +45,7 @@ function parseCsvLine(line){
   out.push(cell); return out;
 }
 
-async function fetchZipAreas(){
+async function fetchZipRows(){
   const res=await fetch(ZIP_SOURCE_URL,{headers:{'user-agent':'Recover-Scrape/1.0'}});
   if(!res.ok) throw new Error(`zip source failed ${res.status}`);
   const lines=(await res.text()).split(/\r?\n/).filter(Boolean);
@@ -61,40 +63,48 @@ async function fetchZipAreas(){
     out.push({zip,city,state,population,location:`${zip} ${city}, ${state}`});
   }
   if(!out.length) throw new Error('zip source parsed zero areas');
-  return prioritizeAreas(out);
+  return out;
 }
 
 const redis=createClient({url:REDIS_URL});
 redis.on('error',e=>console.error('Redis error',e));
 await redis.connect();
-const areas=await fetchZipAreas();
-const totalWorkUnits=areas.length*FAMILY_SHARDS.length;
+const sourceAreas=await fetchZipRows();
+const coverageAreas=buildCityFirstCoverageAreas(sourceAreas);
+const yieldAreas=prioritizeAreas(sourceAreas);
+const uniqueCities=new Set(sourceAreas.map(x=>`${x.state}|${x.city.toLowerCase()}`)).size;
+const totalWorkUnits=sourceAreas.length*FAMILY_SHARDS.length;
 const scopeSet=campaignLeadSetKey(profileJob);
-const legacyCursor=Math.max(0,Number(await redis.hGet(LEGACY_CONTROLLER_KEY,'cursor')||0));
-const legacyAreaCursor=Math.floor(legacyCursor/FAMILY_SHARDS.length);
-const familyCursors={};
+const coverageCursors={};
+const yieldCursors={};
 for(const family of FAMILY_SHARDS){
-  const stored=await redis.hGet(CONTROLLER_KEY,`cursor:${family.key}`);
-  familyCursors[family.key]=stored===null?legacyAreaCursor:Math.max(0,Number(stored)||0);
+  const storedCoverage=await redis.hGet(CONTROLLER_KEY,`coverage_cursor:${family.key}`);
+  coverageCursors[family.key]=storedCoverage===null?0:Math.max(0,Number(storedCoverage)||0);
+  const storedYield=await redis.hGet(CONTROLLER_KEY,`yield_cursor:${family.key}`);
+  const previous=await redis.hGet(PREVIOUS_CONTROLLER_KEY,`cursor:${family.key}`);
+  yieldCursors[family.key]=storedYield===null?Math.max(0,Number(previous)||0):Math.max(0,Number(storedYield)||0);
 }
 let scheduleCursor=Math.max(0,Number(await redis.hGet(CONTROLLER_KEY,'schedule_cursor')||0));
 let yieldStats={};
 let lastYieldRefresh=0;
 
-console.log('US adaptive family shard controller started',JSON.stringify({areas:areas.length,families:FAMILY_SHARDS.length,totalWorkUnits,legacyAreaCursor,familyCursors,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,target:TARGET_TOTAL}));
+console.log('US city-first adaptive family controller started',JSON.stringify({zipAreas:sourceAreas.length,uniqueCities,families:FAMILY_SHARDS.length,totalWorkUnits,coverageCursors,yieldCursors,coverageShare:COVERAGE_SHARE,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,target:TARGET_TOTAL}));
 
 async function refreshYieldStats(){
   if(Date.now()-lastYieldRefresh<YIELD_REFRESH_MS) return yieldStats;
   lastYieldRefresh=Date.now();
   try{
-    const sampled=await redis.sendCommand(['SRANDMEMBER',BATCH_JOB_SET,String(YIELD_SAMPLE_SIZE)]);
+    const sampled=await redis.sRandMember('recover:acq:index',YIELD_SAMPLE_SIZE);
     const ids=Array.isArray(sampled)?sampled:(sampled?[sampled]:[]);
     if(!ids.length){ yieldStats={}; return yieldStats; }
     const payloads=await redis.mGet(ids.map(id=>`recover:acq:${id}`));
     const jobs=[];
     for(const payload of payloads){
       if(!payload) continue;
-      try{ jobs.push(JSON.parse(payload)); }catch{}
+      try{
+        const job=JSON.parse(payload);
+        if(String(job?.search_profile||'')==='core-home-service' && String(job?.service_family||'')) jobs.push(job);
+      }catch{}
     }
     yieldStats=buildYieldStats(jobs);
     console.log(JSON.stringify({event:'family_yield_refresh',sampled:jobs.length,stats:yieldStats}));
@@ -104,7 +114,7 @@ async function refreshYieldStats(){
   return yieldStats;
 }
 
-async function enqueueUnit(area,family){
+async function enqueueUnit(area,family,mode){
   const coveragePass=queryPassForIndex(area.location,family.queryIndex,`us-core-family-v4-${family.key}`);
   const id=randomUUID(); const now=new Date().toISOString();
   const job={
@@ -116,7 +126,7 @@ async function enqueueUnit(area,family){
     max_rounds:1,depth:DEPTH,status:'queued',phase:'queued',round:0,rounds_completed:0,
     raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],
     source:'us_core_family_partition_controller_v4',source_zip:area.zip,source_population:area.population,
-    created_at:now,updated_at:now
+    scheduler_mode:mode,created_at:now,updated_at:now
   };
   const claim=await claimCoverage(redis,job,{source:job.source,service_family:family.key,query_index:family.queryIndex});
   if(!claim.claimed) return false;
@@ -128,25 +138,30 @@ async function enqueueUnit(area,family){
   return true;
 }
 
-async function enqueueNextForFamily(familyKey){
+async function enqueueNext(mode,familyKey){
   const family=familyByKey.get(familyKey);
   if(!family) return {seeded:false,checked:0,exhausted:true};
+  const areas=mode==='coverage'?coverageAreas:yieldAreas;
+  const cursors=mode==='coverage'?coverageCursors:yieldCursors;
   let checked=0;
-  while(familyCursors[familyKey]<areas.length){
-    const area=areas[familyCursors[familyKey]++];
+  while(cursors[familyKey]<areas.length){
+    const area=areas[cursors[familyKey]++];
     checked++;
-    if(await enqueueUnit(area,family)) return {seeded:true,checked,exhausted:false};
+    if(await enqueueUnit(area,family,mode)) return {seeded:true,checked,exhausted:false};
   }
   return {seeded:false,checked,exhausted:true};
 }
 
-function allFamiliesExhausted(){
-  return FAMILY_SHARDS.every(f=>familyCursors[f.key]>=areas.length);
+function allWorkExhausted(){
+  return FAMILY_SHARDS.every(f=>coverageCursors[f.key]>=coverageAreas.length && yieldCursors[f.key]>=yieldAreas.length);
 }
 
 async function persistControllerState(){
-  const state={updated_at:new Date().toISOString(),total_work_units:String(totalWorkUnits),schedule_cursor:String(scheduleCursor)};
-  for(const family of FAMILY_SHARDS) state[`cursor:${family.key}`]=String(familyCursors[family.key]);
+  const state={updated_at:new Date().toISOString(),total_work_units:String(totalWorkUnits),unique_cities:String(uniqueCities),schedule_cursor:String(scheduleCursor),coverage_share:String(COVERAGE_SHARE)};
+  for(const family of FAMILY_SHARDS){
+    state[`coverage_cursor:${family.key}`]=String(coverageCursors[family.key]);
+    state[`yield_cursor:${family.key}`]=String(yieldCursors[family.key]);
+  }
   await redis.hSet(CONTROLLER_KEY,state);
 }
 
@@ -154,32 +169,35 @@ while(true){
   try{
     const scoped=await redis.sCard(scopeSet);
     if(scoped>=TARGET_TOTAL){
-      console.log(JSON.stringify({event:'family_target_reached',scoped,target:TARGET_TOTAL,totalWorkUnits,familyCursors}));
+      console.log(JSON.stringify({event:'family_target_reached',scoped,target:TARGET_TOTAL,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
       await new Promise(r=>setTimeout(r,60000));
       continue;
     }
     const queue=await redis.lLen(ACTIVE_QUEUE);
     if(queue>=QUEUE_HIGH_WATER){
-      console.log(JSON.stringify({event:'family_backpressure',scoped,queue,totalWorkUnits,familyCursors}));
+      console.log(JSON.stringify({event:'family_backpressure',scoped,queue,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
       await new Promise(r=>setTimeout(r,LOOP_MS));
       continue;
     }
 
     await refreshYieldStats();
-    const ranked=rankFamilies(FAMILY_SHARDS.map(f=>f.key),yieldStats);
-    const schedule=weightedFamilySchedule(ranked,Math.max(SEED_BATCH_SIZE*2,ranked.length));
-    let seeded=0,checked=0;
-    while(seeded<SEED_BATCH_SIZE && (await redis.lLen(ACTIVE_QUEUE))<QUEUE_HIGH_WATER && !allFamiliesExhausted()){
-      const familyKey=schedule[scheduleCursor%schedule.length];
+    const ranked=rankFamilies(familyKeys,yieldStats);
+    const schedule=buildCoverageYieldSchedule(familyKeys,ranked,Math.max(SEED_BATCH_SIZE*2,familyKeys.length),COVERAGE_SHARE);
+    let seeded=0,checked=0,coverageSeeded=0,yieldSeeded=0;
+    while(seeded<SEED_BATCH_SIZE && (await redis.lLen(ACTIVE_QUEUE))<QUEUE_HIGH_WATER && !allWorkExhausted()){
+      const slot=schedule[scheduleCursor%schedule.length];
       scheduleCursor++;
-      const result=await enqueueNextForFamily(familyKey);
+      const result=await enqueueNext(slot.mode,slot.family);
       checked+=result.checked;
-      if(result.seeded) seeded++;
+      if(result.seeded){
+        seeded++;
+        if(slot.mode==='coverage') coverageSeeded++; else yieldSeeded++;
+      }
     }
     await persistControllerState();
-    console.log(JSON.stringify({event:'family_adaptive_seed_cycle',scoped,queue_before:queue,checked,seeded,ranked,yieldStats,familyCursors,totalWorkUnits}));
-    if(allFamiliesExhausted()){
-      console.log(JSON.stringify({event:'family_pass_complete',scoped,totalWorkUnits,familyCursors}));
+    console.log(JSON.stringify({event:'family_city_coverage_seed_cycle',scoped,queue_before:queue,checked,seeded,coverageSeeded,yieldSeeded,ranked,yieldStats,uniqueCities,coverageCursors,yieldCursors,totalWorkUnits}));
+    if(allWorkExhausted()){
+      console.log(JSON.stringify({event:'family_pass_complete',scoped,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
       await new Promise(r=>setTimeout(r,60000));
     }else{
       await new Promise(r=>setTimeout(r,LOOP_MS));
