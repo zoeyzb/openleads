@@ -46,6 +46,25 @@ export function weightedFamilySchedule(ranked=[],size=48){
   return schedule;
 }
 
+export function buildProductiveFamilySchedule(ranked=[],size=64,explorationShare=0.2,explorationOffset=0){
+  const total=Math.max(0,Math.floor(Number(size)||0));
+  if(!total||!ranked.length) return [];
+  const share=Math.min(0.5,Math.max(0.05,Number(explorationShare)||0.2));
+  const exploreSlots=Math.max(1,Math.floor(total*share));
+  const exploitSlots=total-exploreSlots;
+  const topCount=Math.max(1,Math.min(ranked.length,Math.ceil(ranked.length*0.30)));
+  const exploit=weightedFamilySchedule(ranked.slice(0,topCount),Math.max(1,exploitSlots));
+  const explore=[];
+  for(let i=0;i<exploreSlots;i++) explore.push(ranked[(Math.max(0,Number(explorationOffset)||0)+i)%ranked.length]);
+  const out=[];
+  let e=0,x=0;
+  while(out.length<total){
+    if(e<exploit.length) out.push(exploit[e++]);
+    if(out.length<total&&x<explore.length) out.push(explore[x++]);
+  }
+  return out.slice(0,total);
+}
+
 export function prioritizeAreas(rows=[]){
   const tiers=[[],[],[],[]];
   for(const row of rows){
