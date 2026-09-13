@@ -22,9 +22,14 @@ function mapsLaneFailureKey(url) {
 async function markMapsLaneUnavailable(url, seconds=null) {
   if (!url) return;
   try {
-    const failures=await redis.incr(mapsLaneFailureKey(url));
-    await redis.expire(mapsLaneFailureKey(url),1800);
-    const adaptiveSeconds=seconds==null ? Math.min(900,75*(2**Math.min(4,Math.max(0,failures-1)))) : seconds;
+    if (await redis.exists(mapsLaneCooldownKey(url))) return;
+    let failures=Number(await redis.get(mapsLaneFailureKey(url))||0);
+    let adaptiveSeconds=seconds;
+    if (seconds==null) {
+      failures=await redis.incr(mapsLaneFailureKey(url));
+      await redis.expire(mapsLaneFailureKey(url),900);
+      adaptiveSeconds=Math.min(120,15*(2**Math.min(3,Math.max(0,failures-1))));
+    }
     await redis.set(mapsLaneCooldownKey(url),"1",{EX:adaptiveSeconds});
     console.warn("Maps lane cooldown",url,"failures",failures,"seconds",adaptiveSeconds);
   } catch {}
