@@ -19,10 +19,12 @@ test("extends fast Maps status budget beyond backend 180-second minimum",()=>{
   assert.doesNotMatch(patched,/fastProfile \? 90\*1000/);
 });
 
-test("adds adaptive exponential cooldown and clears it after a healthy job",()=>{
+test("caps transient Maps lane cooldown at two minutes and avoids duplicate escalation while cooling",()=>{
   const patched=patchAcquisitionWorkerSource(fixture());
   assert.match(patched,/mapsLaneFailureKey/);
-  assert.match(patched,/Math\.min\(900,75\*\(2\*\*Math\.min\(4/);
+  assert.match(patched,/if \(await redis\.exists\(mapsLaneCooldownKey\(url\)\)\) return/);
+  assert.match(patched,/Math\.min\(120,15\*\(2\*\*Math\.min\(3/);
+  assert.doesNotMatch(patched,/Math\.min\(900,75\*/);
   assert.match(patched,/await clearMapsLaneFailure\(mapsBase\)/);
 });
 
