@@ -5,12 +5,13 @@ import {
   LEGACY_LANE_COOLDOWN,
   LEGACY_MAPS_DONE,
   LEGACY_QUEUE_POLL,
+  LEGACY_STATUS_FAILURE,
   LEGACY_WORKER_LOOP,
   patchAcquisitionWorkerSource,
 } from "./acquisition-worker-runtime.mjs";
 
 function fixture(){
-  return `before\n${LEGACY_FAST_WAIT}\n${LEGACY_LANE_COOLDOWN}\n${LEGACY_MAPS_DONE}\n${LEGACY_WORKER_LOOP}\nafter`;
+  return `before\n${LEGACY_FAST_WAIT}\n${LEGACY_LANE_COOLDOWN}\n${LEGACY_MAPS_DONE}\n${LEGACY_STATUS_FAILURE}\n${LEGACY_WORKER_LOOP}\nafter`;
 }
 
 test("extends fast Maps status budget beyond backend 180-second minimum",()=>{
@@ -26,6 +27,14 @@ test("caps transient Maps lane cooldown at two minutes and avoids duplicate esca
   assert.match(patched,/Math\.min\(120,15\*\(2\*\*Math\.min\(3/);
   assert.doesNotMatch(patched,/Math\.min\(900,75\*/);
   assert.match(patched,/await clearMapsLaneFailure\(mapsBase\)/);
+});
+
+test("keeps an existing Maps job alive when status reads fail transiently",()=>{
+  const patched=patchAcquisitionWorkerSource(fixture());
+  assert.match(patched,/Maps status temporarily unavailable; keeping job alive/);
+  assert.match(patched,/if \(isRetryableError\(error\)\)/);
+  assert.match(patched,/await sleep\(2000\);\s*continue;/);
+  assert.doesNotMatch(patched,/if \(\/\\b404\\b\|not found\/i\.test\(msg\)\) \{[\s\S]*?\}\s*throw error;/);
 });
 
 test("prioritizes US city coverage ahead of the general nationwide queue",()=>{
