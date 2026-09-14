@@ -43,6 +43,31 @@ export const LEGACY_MAPS_DONE = `console.log("Acquisition maps done", id, mapsJo
 export const RESILIENT_MAPS_DONE = `await clearMapsLaneFailure(mapsBase);\n      console.log("Acquisition maps done", id, mapsJobId);`;
 export const LEGACY_QUEUE_POLL = `const item=await redis.brPop(["recover:acquisition:queue:ny-priority","recover:acquisition:queue"],5);`;
 
+export const LEGACY_STATUS_FAILURE = [
+  "    } catch (error) {",
+  "      const msg=String(error?.message||error);",
+  "      if (/\\b404\\b|not found/i.test(msg)) {",
+  "        throw new Error(`Maps job ${jobId} lost after runtime restart`);",
+  "      }",
+  "      throw error;",
+  "    }",
+].join("\n");
+
+export const RESILIENT_STATUS_FAILURE = [
+  "    } catch (error) {",
+  "      const msg=String(error?.message||error);",
+  "      if (/\\b404\\b|not found/i.test(msg)) {",
+  "        throw new Error(`Maps job ${jobId} lost after runtime restart`);",
+  "      }",
+  "      if (isRetryableError(error)) {",
+  "        console.warn(\"Maps status temporarily unavailable; keeping job alive\",jobId,msg);",
+  "        await sleep(2000);",
+  "        continue;",
+  "      }",
+  "      throw error;",
+  "    }",
+].join("\n");
+
 export const LEGACY_WORKER_LOOP = `while (!shuttingDown) {
   try {
     const item=await redis.brPop(["recover:acquisition:queue:ny-priority","recover:acquisition:queue"],5);
@@ -78,15 +103,18 @@ export function patchAcquisitionWorkerSource(source) {
   const waitMatches = source.split(LEGACY_FAST_WAIT).length - 1;
   const cooldownMatches = source.split(LEGACY_LANE_COOLDOWN).length - 1;
   const doneMatches = source.split(LEGACY_MAPS_DONE).length - 1;
+  const statusFailureMatches = source.split(LEGACY_STATUS_FAILURE).length - 1;
   const loopMatches = source.split(LEGACY_WORKER_LOOP).length - 1;
   if (waitMatches !== 1) throw new Error(`expected exactly one legacy fast Maps wait expression, found ${waitMatches}`);
   if (cooldownMatches !== 1) throw new Error(`expected exactly one legacy Maps cooldown block, found ${cooldownMatches}`);
   if (doneMatches !== 1) throw new Error(`expected exactly one Maps completion marker, found ${doneMatches}`);
+  if (statusFailureMatches !== 1) throw new Error(`expected exactly one Maps status failure block, found ${statusFailureMatches}`);
   if (loopMatches !== 1) throw new Error(`expected exactly one legacy worker loop, found ${loopMatches}`);
   return source
     .replace(LEGACY_FAST_WAIT, RESILIENT_FAST_WAIT)
     .replace(LEGACY_LANE_COOLDOWN, ADAPTIVE_LANE_COOLDOWN)
     .replace(LEGACY_MAPS_DONE, RESILIENT_MAPS_DONE)
+    .replace(LEGACY_STATUS_FAILURE, RESILIENT_STATUS_FAILURE)
     .replace(LEGACY_WORKER_LOOP, CONCURRENT_WORKER_LOOP);
 }
 
