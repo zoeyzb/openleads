@@ -99,6 +99,23 @@ async function acquisitionWorkerLoop(slot){
 }
 await Promise.all(Array.from({length:workerConcurrency},(_,slot)=>acquisitionWorkerLoop(slot+1)));`;
 
+function patchRawRetention(source) {
+  const signature = "async function replaceList(key,values) {";
+  const expiry = "await redis.expire(key,JOB_TTL);";
+  const rawWrite = "await replaceList(rawKey(id),allRaw);";
+  const present = [signature, expiry, rawWrite].map(marker => source.includes(marker));
+  if (!present.some(Boolean)) return source;
+  if (!present.every(Boolean)) throw new Error("acquisition raw retention contract is only partially present");
+
+  return source
+    .replace(
+      signature,
+      "const RAW_TTL=Number(process.env.ACQUISITION_RAW_TTL_SECONDS||7200);\nasync function replaceList(key,values,ttlSeconds=JOB_TTL) {"
+    )
+    .replace(expiry, "await redis.expire(key,ttlSeconds);")
+    .replace(rawWrite, "await replaceList(rawKey(id),allRaw,RAW_TTL);");
+}
+
 export function patchAcquisitionWorkerSource(source) {
   const waitMatches = source.split(LEGACY_FAST_WAIT).length - 1;
   const cooldownMatches = source.split(LEGACY_LANE_COOLDOWN).length - 1;
@@ -110,12 +127,13 @@ export function patchAcquisitionWorkerSource(source) {
   if (doneMatches !== 1) throw new Error(`expected exactly one Maps completion marker, found ${doneMatches}`);
   if (statusFailureMatches !== 1) throw new Error(`expected exactly one Maps status failure block, found ${statusFailureMatches}`);
   if (loopMatches !== 1) throw new Error(`expected exactly one legacy worker loop, found ${loopMatches}`);
-  return source
+  const resilient = source
     .replace(LEGACY_FAST_WAIT, RESILIENT_FAST_WAIT)
     .replace(LEGACY_LANE_COOLDOWN, ADAPTIVE_LANE_COOLDOWN)
     .replace(LEGACY_MAPS_DONE, RESILIENT_MAPS_DONE)
     .replace(LEGACY_STATUS_FAILURE, RESILIENT_STATUS_FAILURE)
     .replace(LEGACY_WORKER_LOOP, CONCURRENT_WORKER_LOOP);
+  return patchRawRetention(resilient);
 }
 
 export async function runPatchedWorker() {
