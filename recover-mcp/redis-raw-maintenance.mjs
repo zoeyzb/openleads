@@ -3,6 +3,7 @@ import { rawRetentionAction } from "./redis-retention.mjs";
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const SCAN_COUNT = Number(process.env.REDIS_RAW_MAINTENANCE_SCAN_COUNT || 200);
+const DRY_RUN = /^(1|true|yes)$/i.test(String(process.env.REDIS_RAW_MAINTENANCE_DRY_RUN || ""));
 const RAW_PATTERN = "recover:acq:*:raw";
 
 if (!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL is required");
@@ -12,6 +13,7 @@ redis.on("error", error => console.error("Redis error", error));
 await redis.connect();
 
 const totals = {
+  dry_run: DRY_RUN,
   scanned: 0,
   deleted: 0,
   expired: 0,
@@ -34,7 +36,7 @@ try {
 
     const jobKeys = rawKeys.map(key => String(key).replace(/:raw$/, ""));
     const jobValues = await redis.mGet(jobKeys);
-    const tx = redis.multi();
+    const tx = DRY_RUN ? null : redis.multi();
 
     for (let i = 0; i < rawKeys.length; i++) {
       const rawKey = rawKeys[i];
@@ -53,15 +55,15 @@ try {
       note(decision.reason);
 
       if (decision.action === "delete") {
-        tx.del(rawKey);
+        if (!DRY_RUN) tx.del(rawKey);
         totals.deleted += 1;
       } else {
-        tx.expire(rawKey, decision.ttlSeconds);
+        if (!DRY_RUN) tx.expire(rawKey, decision.ttlSeconds);
         totals.expired += 1;
       }
     }
 
-    await tx.exec();
+    if (!DRY_RUN) await tx.exec();
 
     if (totals.batches % 10 === 0) {
       console.log(JSON.stringify({ event: "redis_raw_maintenance_progress", ...totals }));
