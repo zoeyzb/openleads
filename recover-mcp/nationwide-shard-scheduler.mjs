@@ -33,3 +33,5 @@ export function shardIdForArea(area={},shardCount=1){
   const bucket=digest.readUInt32BE(0)%count;
   return `shard-${String(bucket+1).padStart(2,"0")}-of-${String(count).padStart(2,"0")}`;
 }
+
+// 2026-09-16: trigger clean v3 controller restart after retiring legacy family-v4 producer.
