@@ -4,4 +4,4 @@ ENV NODE_ENV=production
 COPY package.json ./
 RUN npm install --omit=dev
 COPY . ./
-CMD ["node","redis-raw-maintenance.mjs"]
+CMD ["node","audit-active-queue.mjs"]
