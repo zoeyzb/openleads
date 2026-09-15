@@ -4,4 +4,4 @@ ENV NODE_ENV=production
 COPY package.json ./
 RUN npm install --omit=dev
 COPY . ./
-CMD ["node","audit-active-queue.mjs"]
+CMD ["node","reconcile-acquisition-queue-global.mjs"]
