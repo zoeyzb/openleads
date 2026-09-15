@@ -52,6 +52,15 @@ test("runs multiple acquisition loops inside each worker process",()=>{
   assert.match(patched,/worker slot/);
 });
 
+test("shortens raw Maps payload retention from the seven-day job TTL",()=>{
+  const rawFixture=`${fixture()}\nasync function replaceList(key,values) {\n  await redis.del(key);\n  await redis.rPush(key,values);\n  await redis.expire(key,JOB_TTL);\n}\nawait replaceList(rawKey(id),allRaw);`;
+  const patched=patchAcquisitionWorkerSource(rawFixture);
+  assert.match(patched,/ACQUISITION_RAW_TTL_SECONDS/);
+  assert.match(patched,/replaceList\(rawKey\(id\),allRaw,RAW_TTL\)/);
+  assert.match(patched,/async function replaceList\(key,values,ttlSeconds=JOB_TTL\)/);
+  assert.match(patched,/redis\.expire\(key,ttlSeconds\)/);
+});
+
 test("refuses to start if upstream worker no longer matches expected contract",()=>{
   assert.throws(()=>patchAcquisitionWorkerSource("no legacy timeout here"),/expected exactly one/);
 });
