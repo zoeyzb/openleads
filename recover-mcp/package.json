@@ -1,0 +1,12 @@
+{
+  "name": "recover-scrape-maintenance",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "redis": "^5.8.2"
+  }
+}
