@@ -6,6 +6,7 @@ import {
   rawRetentionAction
 } from "./redis-retention.mjs";
 
+// Fixed timestamp keeps retention tests deterministic in Railway builds.
 const NOW = Date.parse("2026-09-16T00:00:00.000Z");
 
 test("deletes raw payload immediately for completed acquisitions", () => {
