@@ -21,6 +21,16 @@ function cityFirstWithinTier(rows=[]) {
   return [...first,...repeats];
 }
 
+export function locationForCoveragePass(area={},coveragePass=1) {
+  const pass=Math.max(1,Number(coveragePass)||1);
+  if(pass>=2){
+    const city=String(area?.city||area?.partition_city||'').trim();
+    const state=String(area?.state||area?.partition_state||'').trim();
+    if(city&&state) return `${city}, ${state}`;
+  }
+  return String(area?.location||[area?.zip,area?.city,area?.state].filter(Boolean).join(' ')).trim();
+}
+
 // Preserve population-tier priority, but spend the first coverage wave on new
 // cities instead of burning consecutive jobs on multiple ZIPs from one city.
 export function orderControllerAreas(rows=[]) {
