@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { orderControllerAreas } from './us-hvac-area-order.mjs';
+import { orderControllerAreas, locationForCoveragePass } from './us-hvac-area-order.mjs';
 
 test('controller prioritizes high-population ZIP tiers before tiny areas while keeping state diversity', () => {
   const rows = [
@@ -27,4 +27,11 @@ test('first nationwide coverage wave visits distinct cities before a second ZIP 
   const out=orderControllerAreas(rows);
   const firstFour=out.slice(0,4).map(x=>`${x.state}:${x.city}`);
   assert.equal(new Set(firstFour).size,4);
+});
+
+test('later nationwide passes broaden from ZIP to one city-level location', () => {
+  const area={location:'77001 Houston, TX',city:'Houston',state:'TX'};
+  assert.equal(locationForCoveragePass(area,1),'77001 Houston, TX');
+  assert.equal(locationForCoveragePass(area,2),'Houston, TX');
+  assert.equal(locationForCoveragePass(area,5),'Houston, TX');
 });
