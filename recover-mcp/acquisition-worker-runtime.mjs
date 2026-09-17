@@ -1,4 +1,5 @@
 // Railway watches this runtime shim so acquisition resilience fixes deploy immediately.
+// 2026-09-17: fleet rollout trigger after controller switched to million-target city coverage.
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
