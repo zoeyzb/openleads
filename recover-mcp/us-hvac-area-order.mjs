@@ -1,7 +1,7 @@
 import { prioritizeAreas } from './national-yield-priority.mjs';
 
 // Keep nationwide acquisition focused on the highest-yield population tiers first.
-// Fresh controller deploy trigger after removing the failed runtime source patch.
+// Trigger the production controller onto the robust yield-priority runner.
 export function orderControllerAreas(rows=[]) {
   return prioritizeAreas(rows).map(area => ({
     ...area,
