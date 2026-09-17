@@ -1,5 +1,5 @@
 // Railway watches this runtime shim so acquisition resilience fixes deploy immediately.
-// 2026-09-17: fleet rollout trigger after controller switched to million-target city coverage.
+// 2026-09-17: million-target throughput patch: keep nationwide Maps results state-scoped instead of exact-city scoped.
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
@@ -42,7 +42,6 @@ async function clearMapsLaneFailure(url) {
 
 export const LEGACY_MAPS_DONE = `console.log("Acquisition maps done", id, mapsJobId);`;
 export const RESILIENT_MAPS_DONE = `await clearMapsLaneFailure(mapsBase);\n      console.log("Acquisition maps done", id, mapsJobId);`;
-export const LEGACY_QUEUE_POLL = `const item=await redis.brPop(["recover:acquisition:queue:ny-priority","recover:acquisition:queue"],5);`;
 
 export const LEGACY_STATUS_FAILURE = [
   "    } catch (error) {",
@@ -68,6 +67,23 @@ export const RESILIENT_STATUS_FAILURE = [
   "      throw error;",
   "    }",
 ].join("\n");
+
+export const LEGACY_LOCATION_MATCH = `function matchesAcquisitionLocation(lead, job) {
+  return isFastNyMilestoneJob(job) ? matchesFastNyState(lead) : matchesRequestedLocation(lead,job.location);
+}`;
+
+export const STATE_SCOPED_LOCATION_MATCH = `function matchesAcquisitionLocation(lead, job) {
+  if (isFastNyMilestoneJob(job)) return matchesFastNyState(lead);
+  if (String(job?.search_profile||"")==="core-home-service") {
+    const requestedState=normalizeText(job?.partition_state||"");
+    if (!requestedState) return matchesRequestedLocation(lead,job.location);
+    const leadRegion=normalizeText(lead.region||lead.state||lead.state_code||lead.province||"");
+    const leadAddress=normalizeText(lead.address||lead.full_address||lead.formatted_address||"");
+    if (leadRegion) return leadRegion===requestedState || leadRegion.split(" ").includes(requestedState);
+    return new RegExp("\\\\b"+requestedState.replace(/[^a-z]/g,"")+"\\\\b").test(leadAddress);
+  }
+  return matchesRequestedLocation(lead,job.location);
+}`;
 
 export const LEGACY_WORKER_LOOP = `while (!shuttingDown) {
   try {
@@ -122,17 +138,20 @@ export function patchAcquisitionWorkerSource(source) {
   const cooldownMatches = source.split(LEGACY_LANE_COOLDOWN).length - 1;
   const doneMatches = source.split(LEGACY_MAPS_DONE).length - 1;
   const statusFailureMatches = source.split(LEGACY_STATUS_FAILURE).length - 1;
+  const locationMatches = source.split(LEGACY_LOCATION_MATCH).length - 1;
   const loopMatches = source.split(LEGACY_WORKER_LOOP).length - 1;
   if (waitMatches !== 1) throw new Error(`expected exactly one legacy fast Maps wait expression, found ${waitMatches}`);
   if (cooldownMatches !== 1) throw new Error(`expected exactly one legacy Maps cooldown block, found ${cooldownMatches}`);
   if (doneMatches !== 1) throw new Error(`expected exactly one Maps completion marker, found ${doneMatches}`);
   if (statusFailureMatches !== 1) throw new Error(`expected exactly one Maps status failure block, found ${statusFailureMatches}`);
+  if (locationMatches !== 1) throw new Error(`expected exactly one acquisition location matcher, found ${locationMatches}`);
   if (loopMatches !== 1) throw new Error(`expected exactly one legacy worker loop, found ${loopMatches}`);
   const resilient = source
     .replace(LEGACY_FAST_WAIT, RESILIENT_FAST_WAIT)
     .replace(LEGACY_LANE_COOLDOWN, ADAPTIVE_LANE_COOLDOWN)
     .replace(LEGACY_MAPS_DONE, RESILIENT_MAPS_DONE)
     .replace(LEGACY_STATUS_FAILURE, RESILIENT_STATUS_FAILURE)
+    .replace(LEGACY_LOCATION_MATCH, STATE_SCOPED_LOCATION_MATCH)
     .replace(LEGACY_WORKER_LOOP, CONCURRENT_WORKER_LOOP);
   return patchRawRetention(resilient);
 }
