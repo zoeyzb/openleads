@@ -1,5 +1,6 @@
 import { prioritizeAreas } from './national-yield-priority.mjs';
 
+// Keep nationwide acquisition focused on the highest-yield population tiers first.
 export function orderControllerAreas(rows=[]) {
   return prioritizeAreas(rows).map(area => ({
     ...area,
