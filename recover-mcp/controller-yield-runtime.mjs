@@ -8,7 +8,7 @@ export function patchControllerSource(source='') {
   if (out.includes('return orderControllerAreas(out);')) return out;
 
   if (!out.includes(IMPORT_LINE)) {
-    const anchor=/import \{ deriveSchedulerCapacity, shardIdForArea \} from "\.\/nationwide-shard-scheduler\.mjs";\n/;
+    const anchor=/import\s+\{\s*deriveSchedulerCapacity\s*,\s*shardIdForArea\s*\}\s+from\s+['"]\.\/nationwide-shard-scheduler\.mjs['"];?\s*\n/;
     if (!anchor.test(out)) throw new Error('controller import anchor missing');
     out=out.replace(anchor,match=>match+IMPORT_LINE+'\n');
   }
