@@ -15,3 +15,16 @@ test('controller prioritizes high-population ZIP tiers before tiny areas while k
   assert.equal(ordered[2].population, 12000);
   assert.ok(ordered.slice(3).every(x=>x.population < 2500));
 });
+
+test('first nationwide coverage wave visits distinct cities before a second ZIP in one city', () => {
+  const rows=[
+    {state:'TX',city:'Houston',zip:'77001',population:60000},
+    {state:'TX',city:'Houston',zip:'77002',population:50000},
+    {state:'TX',city:'Austin',zip:'78701',population:40000},
+    {state:'CA',city:'Los Angeles',zip:'90001',population:55000},
+    {state:'CA',city:'San Diego',zip:'92101',population:35000},
+  ];
+  const out=orderControllerAreas(rows);
+  const firstFour=out.slice(0,4).map(x=>`${x.state}:${x.city}`);
+  assert.equal(new Set(firstFour).size,4);
+});
