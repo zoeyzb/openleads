@@ -23,7 +23,10 @@ function cityFirstWithinTier(rows=[]) {
 
 export function locationForCoveragePass(area={},coveragePass=1) {
   const pass=Math.max(1,Number(coveragePass)||1);
-  if(pass>=2){
+  // Pass 2 is the broad city sweep used by million-target campaigns. From
+  // pass 3 onward return to ZIP-level locations so later coverage adds new
+  // geographic precision instead of repeating the same city queries forever.
+  if(pass===2){
     const city=String(area?.city||area?.partition_city||'').trim();
     const state=String(area?.state||area?.partition_state||'').trim();
     if(city&&state) return `${city}, ${state}`;
