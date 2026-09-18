@@ -339,7 +339,14 @@ const HOME_COMFORT_QUERIES=[
   "furnace boiler contractor",
   "air conditioning installation",
   "heating repair service",
-  "duct cleaning service"
+  "duct cleaning service",
+  "heat pump contractor",
+  "heat pump repair service",
+  "water heater repair service",
+  "water heater installation",
+  "geothermal heating contractor",
+  "indoor air quality service",
+  "thermostat installation service"
 ];
 const queryVariants=(industry,location)=>{
   if (isHomeComfortTarget(industry)) return HOME_COMFORT_QUERIES.map(q=>`${q} in ${location}`);
