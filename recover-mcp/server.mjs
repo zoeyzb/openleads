@@ -1508,6 +1508,29 @@ const httpServer = createHttpServer((req, res) => {
 
 httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`Recover Scrape MCP listening on 0.0.0.0:${PORT}`);
+  void (async () => {
+    try {
+      const redis = await getAcquisitionRedis();
+      const values = await redis.hVals("recover:leadstore:qualified");
+      let parsed=0, noWebsite=0, contactable=0, noWebsiteContactable=0, coreNoWebsiteContactable=0, withWebsite=0;
+      for (const value of values) {
+        let lead; try { lead=JSON.parse(value); } catch { continue; }
+        if (!lead) continue;
+        parsed++;
+        const website=String(lead.website||"").trim();
+        const emails=Array.isArray(lead.emails) ? lead.emails : String(lead.email||lead.emails||"").split(/[;,\\s]+/).filter(Boolean);
+        const hasContact=Boolean(String(lead.phone||"").trim())||emails.length>0;
+        const nw=!website;
+        if(nw) noWebsite++; else withWebsite++;
+        if(hasContact) contactable++;
+        if(nw&&hasContact) noWebsiteContactable++;
+        if(nw&&hasContact&&isCoreHomeServiceLead(lead)) coreNoWebsiteContactable++;
+      }
+      console.log(JSON.stringify({event:"qualified_lead_store_stats",redis_hash_entries:values.length,parsed,no_website:noWebsite,with_website:withWebsite,contactable,no_website_contactable:noWebsiteContactable,core_home_service_no_website_contactable:coreNoWebsiteContactable}));
+    } catch (error) {
+      console.error("qualified_lead_store_stats_error", error);
+    }
+  })();
 });
 
 // Trigger live NY export route redeploy 2026-09-09T09:08Z
