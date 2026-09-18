@@ -1254,6 +1254,52 @@ const httpServer = createHttpServer((req, res) => {
   }
 
 
+  if (requestUrl.pathname === "/stats/qualified-leads" && req.method === "GET") {
+    void (async () => {
+      try {
+        const redis = await getAcquisitionRedis();
+        const values = await redis.hVals("recover:leadstore:qualified");
+        let parsed=0, noWebsite=0, contactable=0, noWebsiteContactable=0, coreNoWebsiteContactable=0, withWebsite=0;
+        const placeIds=new Set(), phones=new Set();
+        let duplicatePlaceIds=0, duplicatePhones=0;
+        for (const value of values) {
+          let lead; try { lead=JSON.parse(value); } catch { continue; }
+          if (!lead) continue;
+          parsed++;
+          const website=String(lead.website||"").trim();
+          const emails=Array.isArray(lead.emails) ? lead.emails : String(lead.email||lead.emails||"").split(/[;,\s]+/).filter(Boolean);
+          const phone=String(lead.phone||"").trim();
+          const hasContact=Boolean(phone)||emails.length>0;
+          const nw=!website;
+          if(nw) noWebsite++; else withWebsite++;
+          if(hasContact) contactable++;
+          if(nw&&hasContact) noWebsiteContactable++;
+          if(nw&&hasContact&&isCoreHomeServiceLead(lead)) coreNoWebsiteContactable++;
+          const place=String(lead.place_id||"").trim();
+          if(place){ if(placeIds.has(place)) duplicatePlaceIds++; else placeIds.add(place); }
+          const normalizedPhone=normalizePhone(phone);
+          if(normalizedPhone){ if(phones.has(normalizedPhone)) duplicatePhones++; else phones.add(normalizedPhone); }
+        }
+        res.writeHead(200, {"content-type":"application/json","cache-control":"no-store"});
+        res.end(JSON.stringify({
+          redis_hash_entries: values.length,
+          parsed,
+          no_website:noWebsite,
+          with_website:withWebsite,
+          contactable,
+          no_website_contactable:noWebsiteContactable,
+          core_home_service_no_website_contactable:coreNoWebsiteContactable,
+          duplicate_place_id_rows:duplicatePlaceIds,
+          duplicate_phone_rows:duplicatePhones
+        }));
+      } catch (error) {
+        res.writeHead(500, {"content-type":"application/json","cache-control":"no-store"});
+        res.end(JSON.stringify({error:"qualified_stats_failed",message:error?.message||"unknown"}));
+      }
+    })();
+    return;
+  }
+
   if (requestUrl.pathname === "/exports/legacy-raw-recovery.csv" && req.method === "GET") {
     void (async () => {
       try {
