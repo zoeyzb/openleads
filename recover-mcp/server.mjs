@@ -8,6 +8,7 @@ import { orchestrate as enrichEmail } from "email-enrich";
 import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
 import { startQualifiedGoogleSheetSync } from "./google-sheet-direct-sync.mjs";
+// Lead-sheet template rows 1-6 are reserved for title, KPIs, and headers.
 
 const PORT = Number(process.env.PORT || 3000);
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
