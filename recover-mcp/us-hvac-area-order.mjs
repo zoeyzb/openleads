@@ -22,15 +22,11 @@ function cityFirstWithinTier(rows=[]) {
 }
 
 export function locationForCoveragePass(area={},coveragePass=1) {
-  const pass=Math.max(1,Number(coveragePass)||1);
-  // Pass 2 is the broad city sweep used by million-target campaigns. From
-  // pass 3 onward return to ZIP-level locations so later coverage adds new
-  // geographic precision instead of repeating the same city queries forever.
-  if(pass===2){
-    const city=String(area?.city||area?.partition_city||'').trim();
-    const state=String(area?.state||area?.partition_state||'').trim();
-    if(city&&state) return `${city}, ${state}`;
-  }
+  // Keep million-target coverage ZIP-scoped on every pass. City-level Maps
+  // searches overlap heavily with adjacent cities and were producing a large
+  // duplicate share. Coverage pass remains part of the claim key, so later
+  // passes can still revisit a ZIP with a distinct pass identity.
+  Math.max(1,Number(coveragePass)||1);
   return String(area?.location||[area?.zip,area?.city,area?.state].filter(Boolean).join(' ')).trim();
 }
 
