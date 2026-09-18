@@ -1104,16 +1104,32 @@ async function postSmsResultCallback(payload) {
 async function telnyxSendMessage(to, text) {
   if (!TELNYX_API_KEY) throw new Error("TELNYX_API_KEY is not configured");
   if (!TELNYX_FROM_NUMBER) throw new Error("TELNYX_FROM_NUMBER is not configured");
-  const response = await fetch("https://api.telnyx.com/v2/messages", {
-    method:"POST",
-    headers:{ authorization:`Bearer ${TELNYX_API_KEY}`, "content-type":"application/json" },
-    body:JSON.stringify({ from:TELNYX_FROM_NUMBER, to, text })
-  });
-  const raw = await response.text();
-  let body;
-  try { body = raw ? JSON.parse(raw) : {}; } catch { body = { raw }; }
-  if (!response.ok) throw new Error(`Telnyx ${response.status}: ${JSON.stringify(body)}`);
-  return body;
+  let lastError = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const response = await fetch("https://api.telnyx.com/v2/messages", {
+        method:"POST",
+        headers:{ authorization:`Bearer ${TELNYX_API_KEY}`, "content-type":"application/json" },
+        body:JSON.stringify({ from:TELNYX_FROM_NUMBER, to, text }),
+        signal:AbortSignal.timeout(15000)
+      });
+      const raw = await response.text();
+      let body;
+      try { body = raw ? JSON.parse(raw) : {}; } catch { body = { raw }; }
+      if (response.ok) return body;
+      const error = new Error(`Telnyx ${response.status}: ${JSON.stringify(body)}`);
+      error.status = response.status;
+      if (response.status !== 429 && response.status < 500) throw error;
+      lastError = error;
+    } catch (error) {
+      lastError = error;
+      const status = Number(error?.status || 0);
+      const retryable = status === 429 || status >= 500 || /timeout|aborted|fetch failed/i.test(String(error?.message || error));
+      if (!retryable) throw error;
+    }
+    if (attempt < 4) await new Promise(resolve => setTimeout(resolve, Math.min(10000, 500 * (2 ** attempt))));
+  }
+  throw lastError || new Error("Telnyx send failed");
 }
 
 async function startSmsWorker() {
