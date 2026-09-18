@@ -1080,8 +1080,108 @@ function buildServer() {
   return server;
 }
 
+
+async function telnyxSendMessage(to, text) {
+  if (!TELNYX_API_KEY) throw new Error("TELNYX_API_KEY is not configured");
+  if (!TELNYX_FROM_NUMBER) throw new Error("TELNYX_FROM_NUMBER is not configured");
+  const response = await fetch("https://api.telnyx.com/v2/messages", {
+    method:"POST",
+    headers:{ authorization:`Bearer ${TELNYX_API_KEY}`, "content-type":"application/json" },
+    body:JSON.stringify({ from:TELNYX_FROM_NUMBER, to, text })
+  });
+  const raw = await response.text();
+  let body;
+  try { body = raw ? JSON.parse(raw) : {}; } catch { body = { raw }; }
+  if (!response.ok) throw new Error(`Telnyx ${response.status}: ${JSON.stringify(body)}`);
+  return body;
+}
+
+async function startSmsWorker() {
+  if (!ACQUISITION_REDIS_URL) return;
+  const base = await getAcquisitionRedis();
+  const redis = base.duplicate();
+  redis.on("error", err => console.error("SMS worker Redis error", err));
+  await redis.connect();
+  console.log("Recover SMS worker loop started");
+
+  while (true) {
+    try {
+      const item = await redis.brPop("recover:sms:queue", 5);
+      const batchId = item?.element;
+      if (!batchId) continue;
+      const key = `recover:sms:batch:${batchId}`;
+      const raw = await redis.get(key);
+      if (!raw) continue;
+      const batch = JSON.parse(raw);
+      if (!["queued","running"].includes(batch.status)) continue;
+
+      batch.status = "running";
+      batch.started_at ||= new Date().toISOString();
+      batch.sent_count ||= 0;
+      batch.failed_count ||= 0;
+      batch.processed_count ||= 0;
+      const save = () => redis.set(key, JSON.stringify(batch), { EX: 604800 });
+      await save();
+
+      const recipients = Array.isArray(batch.recipients) ? batch.recipients : [];
+      for (let i = batch.processed_count; i < recipients.length; i++) {
+        const recipient = recipients[i];
+        const suppressed = await redis.sIsMember("recover:sms:suppressed", recipient.phone);
+        if (suppressed) {
+          await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify({
+            index:i, phone:recipient.phone, status:"skipped_suppressed", at:new Date().toISOString()
+          }));
+          batch.processed_count = i + 1;
+          await save();
+          continue;
+        }
+
+        for (let j = 0; j < recipient.messages.length; j++) {
+          try {
+            const response = await telnyxSendMessage(recipient.phone, recipient.messages[j]);
+            await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify({
+              index:i,
+              message_index:j,
+              phone:recipient.phone,
+              contact_id:recipient.contact_id || "",
+              status:"accepted",
+              telnyx_message_id:response?.data?.id || null,
+              at:new Date().toISOString()
+            }));
+            batch.sent_count += 1;
+          } catch (error) {
+            batch.failed_count += 1;
+            await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify({
+              index:i,
+              message_index:j,
+              phone:recipient.phone,
+              contact_id:recipient.contact_id || "",
+              status:"failed",
+              error:error?.message || "send_failed",
+              at:new Date().toISOString()
+            }));
+          }
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        batch.processed_count = i + 1;
+        batch.updated_at = new Date().toISOString();
+        await save();
+      }
+
+      batch.status = batch.failed_count > 0 ? "completed_with_errors" : "completed";
+      batch.completed_at = new Date().toISOString();
+      await save();
+    } catch (error) {
+      console.error("SMS worker loop error", error);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+}
+
 const handler = createMcpHandler(buildServer);
 const nodeHandler = toNodeHandler(handler);
+
+void startSmsWorker().catch(error => console.error("SMS worker startup error", error));
 
 const httpServer = createHttpServer((req, res) => {
   const requestUrl = new URL(req.url || "/", OAUTH_ISSUER || `http://${req.headers.host || "localhost"}`);
