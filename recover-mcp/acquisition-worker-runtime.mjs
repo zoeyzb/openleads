@@ -1,4 +1,5 @@
 // Railway watches this runtime shim so acquisition resilience fixes deploy immediately.
+// 2026-09-18: force base acquisition-worker rebuild after skipped/failed deployment.
 // 2026-09-17: million-target throughput patch: keep nationwide Maps results state-scoped instead of exact-city scoped.
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
