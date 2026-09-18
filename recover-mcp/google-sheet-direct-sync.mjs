@@ -109,7 +109,7 @@ function createSheetsClient(serviceAccount) {
       const range = `${quoteTab(tabName)}!A7:Y50006`;
       await request(
         spreadsheetId,
-        `/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+        `/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=OVERWRITE`,
         {
           method: "POST",
           body: {
