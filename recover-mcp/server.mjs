@@ -26,6 +26,8 @@ const KEELEAD_BASE_URL = (process.env.KEELEAD_BASE_URL || "").replace(/\/$/, "")
 const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 const ACQUISITION_REDIS_URL = process.env.ACQUISITION_REDIS_URL || "";
+const TELNYX_API_KEY = process.env.TELNYX_API_KEY || "";
+const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER || "";
 let acquisitionRedisPromise = null;
 
 const oauthEnabled = Boolean(OAUTH_ISSUER && OAUTH_CLIENT_ID && OAUTH_CLIENT_SECRET && OAUTH_SIGNING_SECRET && OAUTH_ACCESS_KEY);
@@ -457,6 +459,96 @@ function scoreLead(lead) {
   return { score, tier, reasons };
 }
 
+
+function normalizeE164(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const digits = raw.replace(/\D/g, "");
+  if (raw.startsWith("+") && digits.length >= 8 && digits.length <= 15) return "+" + digits;
+  if (digits.length === 10) return "+1" + digits;
+  if (digits.length === 11 && digits.startsWith("1")) return "+" + digits;
+  return "";
+}
+
+function smsSegmentEstimate(text = "") {
+  const value = String(text || "");
+  const ascii = /^[\x00-\x7F]*$/.test(value);
+  const single = ascii ? 160 : 70;
+  const concat = ascii ? 153 : 67;
+  if (value.length <= single) return 1;
+  return Math.ceil(value.length / concat);
+}
+
+async function prepareSmsBatch({ recipients, label }) {
+  const redis = await getAcquisitionRedis();
+  const suppressed = [];
+  const invalid = [];
+  const seen = new Set();
+  const accepted = [];
+  let estimatedSegments = 0;
+
+  for (let i = 0; i < recipients.length; i++) {
+    const row = recipients[i] || {};
+    const phone = normalizeE164(row.phone);
+    if (!phone) { invalid.push({ index:i, reason:"invalid_phone" }); continue; }
+    if (row.consent !== true) { invalid.push({ index:i, phone, reason:"consent_not_confirmed" }); continue; }
+    if (seen.has(phone)) { invalid.push({ index:i, phone, reason:"duplicate_phone" }); continue; }
+    seen.add(phone);
+
+    const isSuppressed = await redis.sIsMember("recover:sms:suppressed", phone);
+    if (isSuppressed) { suppressed.push({ index:i, phone, reason:"suppressed" }); continue; }
+
+    const messages = Array.isArray(row.messages)
+      ? row.messages.map(x => String(x || "").trim()).filter(Boolean).slice(0, 3)
+      : [String(row.message || "").trim()].filter(Boolean);
+    if (!messages.length) { invalid.push({ index:i, phone, reason:"missing_message" }); continue; }
+    if (messages.some(m => m.length > 1600)) { invalid.push({ index:i, phone, reason:"message_too_long" }); continue; }
+
+    const segments = messages.reduce((sum, msg) => sum + smsSegmentEstimate(msg), 0);
+    estimatedSegments += segments;
+    accepted.push({
+      phone,
+      messages,
+      contact_id: String(row.contact_id || row.id || ""),
+      metadata: row.metadata && typeof row.metadata === "object" ? row.metadata : {},
+      estimated_segments: segments
+    });
+  }
+
+  const batchId = randomUUID();
+  const confirmationToken = randomUUID();
+  const payload = {
+    id: batchId,
+    label: String(label || ""),
+    status: "prepared",
+    accepted_count: accepted.length,
+    estimated_segments: estimatedSegments,
+    recipients: accepted,
+    invalid,
+    suppressed,
+    created_at: new Date().toISOString()
+  };
+  await redis.set(`recover:sms:batch:${batchId}`, JSON.stringify(payload), { EX: 3600 });
+  await redis.set(`recover:sms:confirm:${batchId}`, confirmationToken, { EX: 3600 });
+  return { ...payload, recipients: accepted.slice(0, 10), confirmation_token: confirmationToken };
+}
+
+async function enqueuePreparedSmsBatch(batchId, confirmationToken) {
+  const redis = await getAcquisitionRedis();
+  const raw = await redis.get(`recover:sms:batch:${batchId}`);
+  if (!raw) throw new Error("Prepared SMS batch not found or expired");
+  const expected = await redis.get(`recover:sms:confirm:${batchId}`);
+  if (!expected || !secureEqual(expected, confirmationToken || "")) throw new Error("Confirmation token is invalid or expired");
+  const batch = JSON.parse(raw);
+  if (batch.status !== "prepared") throw new Error(`Batch is already ${batch.status}`);
+  batch.status = "queued";
+  batch.queued_at = new Date().toISOString();
+  await redis.set(`recover:sms:batch:${batchId}`, JSON.stringify(batch), { EX: 604800 });
+  await redis.del(`recover:sms:confirm:${batchId}`);
+  await redis.lPush("recover:sms:queue", batchId);
+  return batch;
+}
+
 function buildServer() {
   const server = new McpServer(
     { name: "recover-scrape", version: "1.0.0" },
@@ -837,6 +929,152 @@ function buildServer() {
       } catch (e) { result.email_error = e.message; }
     }
     return jsonText(result);
+  });
+
+
+  server.registerTool("sms_telnyx_status", {
+    description: "Check whether Recover Scrape is configured for consent-based Telnyx SMS sending. Does not expose secrets."
+  }, async () => {
+    return jsonText({
+      telnyx_api_key_configured: !!TELNYX_API_KEY,
+      from_number_configured: !!TELNYX_FROM_NUMBER,
+      redis_configured: !!ACQUISITION_REDIS_URL,
+      ready_to_prepare: !!ACQUISITION_REDIS_URL,
+      ready_to_send: !!(TELNYX_API_KEY && TELNYX_FROM_NUMBER && ACQUISITION_REDIS_URL)
+    });
+  });
+
+  server.registerTool("sms_prepare_batch", {
+    description: "Prepare and validate a consent-based SMS batch without sending it. Every recipient must have consent=true. Deduplicates phones, excludes STOP/suppressed numbers, estimates SMS segments, and returns a one-time confirmation token. Use this before sms_send_prepared_batch.",
+    inputSchema: z.object({
+      label: z.string().max(120).optional(),
+      recipients: z.array(z.object({
+        phone: z.string().min(3),
+        message: z.string().max(1600).optional(),
+        messages: z.array(z.string().max(1600)).min(1).max(3).optional(),
+        consent: z.literal(true),
+        contact_id: z.string().optional(),
+        id: z.string().optional(),
+        metadata: z.record(z.string(), z.any()).optional()
+      })).min(1).max(5000)
+    })
+  }, async ({ recipients, label }) => {
+    try {
+      const preview = await prepareSmsBatch({ recipients, label });
+      return jsonText({
+        batch_id: preview.id,
+        status: preview.status,
+        label: preview.label,
+        accepted_count: preview.accepted_count,
+        invalid_count: preview.invalid.length,
+        suppressed_count: preview.suppressed.length,
+        estimated_segments: preview.estimated_segments,
+        sample: preview.recipients,
+        invalid: preview.invalid.slice(0, 25),
+        suppressed: preview.suppressed.slice(0, 25),
+        confirmation_token: preview.confirmation_token,
+        expires_in_seconds: 3600,
+        next: "Only after the user explicitly confirms this exact prepared batch, call sms_send_prepared_batch with batch_id and confirmation_token."
+      });
+    } catch (e) {
+      return { content:[{type:"text",text:`SMS prepare error: ${e.message}`}], isError:true };
+    }
+  });
+
+  server.registerTool("sms_send_prepared_batch", {
+    description: "Queue a previously prepared SMS batch for sending. Call only after the user explicitly confirms the exact prepared batch and recipient count. Requires the one-time confirmation token returned by sms_prepare_batch.",
+    inputSchema: z.object({
+      batch_id: z.string().uuid(),
+      confirmation_token: z.string().uuid()
+    })
+  }, async ({ batch_id, confirmation_token }) => {
+    try {
+      if (!TELNYX_API_KEY) throw new Error("TELNYX_API_KEY is not configured");
+      if (!TELNYX_FROM_NUMBER) throw new Error("TELNYX_FROM_NUMBER is not configured");
+      const batch = await enqueuePreparedSmsBatch(batch_id, confirmation_token);
+      return jsonText({
+        batch_id,
+        status: batch.status,
+        accepted_count: batch.accepted_count,
+        estimated_segments: batch.estimated_segments,
+        queued_at: batch.queued_at,
+        next: "Use sms_batch_status to monitor progress."
+      });
+    } catch (e) {
+      return { content:[{type:"text",text:`SMS queue error: ${e.message}`}], isError:true };
+    }
+  });
+
+  server.registerTool("sms_batch_status", {
+    description: "Check a prepared, queued, running, completed, or failed SMS batch.",
+    inputSchema: z.object({ batch_id: z.string().uuid() })
+  }, async ({ batch_id }) => {
+    try {
+      const redis = await getAcquisitionRedis();
+      const raw = await redis.get(`recover:sms:batch:${batch_id}`);
+      if (!raw) return { content:[{type:"text",text:"SMS batch not found or expired."}], isError:true };
+      const batch = JSON.parse(raw);
+      return jsonText({
+        batch_id,
+        label: batch.label || "",
+        status: batch.status,
+        accepted_count: batch.accepted_count || 0,
+        estimated_segments: batch.estimated_segments || 0,
+        sent_count: batch.sent_count || 0,
+        failed_count: batch.failed_count || 0,
+        processed_count: batch.processed_count || 0,
+        created_at: batch.created_at,
+        queued_at: batch.queued_at || null,
+        started_at: batch.started_at || null,
+        completed_at: batch.completed_at || null,
+        error: batch.error || null
+      });
+    } catch (e) {
+      return { content:[{type:"text",text:`SMS status error: ${e.message}`}], isError:true };
+    }
+  });
+
+  server.registerTool("sms_batch_results", {
+    description: "Get delivery-request results recorded by the SMS worker for a batch. This reflects Telnyx API acceptance/failure, not final carrier delivery receipts.",
+    inputSchema: z.object({
+      batch_id: z.string().uuid(),
+      offset: z.number().int().min(0).default(0),
+      limit: z.number().int().min(1).max(200).default(100)
+    })
+  }, async ({ batch_id, offset, limit }) => {
+    try {
+      const redis = await getAcquisitionRedis();
+      const key = `recover:sms:batch:${batch_id}:results`;
+      const total = await redis.lLen(key);
+      const rows = total ? await redis.lRange(key, offset, offset + limit - 1) : [];
+      const results = rows.map(x => { try { return JSON.parse(x); } catch { return { raw:x }; } });
+      return jsonText({
+        batch_id,
+        total,
+        offset,
+        returned: results.length,
+        next_offset: offset + results.length < total ? offset + results.length : null,
+        results
+      });
+    } catch (e) {
+      return { content:[{type:"text",text:`SMS results error: ${e.message}`}], isError:true };
+    }
+  });
+
+  server.registerTool("sms_suppress_number", {
+    description: "Add a phone number to the permanent SMS suppression set, for example after STOP/opt-out.",
+    inputSchema: z.object({ phone: z.string().min(3), reason: z.string().max(120).default("manual_opt_out") })
+  }, async ({ phone, reason }) => {
+    try {
+      const normalized = normalizeE164(phone);
+      if (!normalized) throw new Error("Invalid phone number");
+      const redis = await getAcquisitionRedis();
+      await redis.sAdd("recover:sms:suppressed", normalized);
+      await redis.hSet("recover:sms:suppression:reasons", normalized, JSON.stringify({reason,at:new Date().toISOString()}));
+      return jsonText({ phone: normalized, suppressed: true, reason });
+    } catch (e) {
+      return { content:[{type:"text",text:`SMS suppression error: ${e.message}`}], isError:true };
+    }
   });
 
   return server;
