@@ -1300,25 +1300,9 @@ const httpServer = createHttpServer((req, res) => {
     void (async () => {
       try {
         const redis = await getAcquisitionRedis();
-        const profileJob = {
-          industry:"HVAC",
-          require_no_website:true,
-          require_contact:true,
-          require_phone:false,
-          require_email:false,
-          include_no_website:true,
-          min_score:30
-        };
-        const scopeKey = campaignLeadSetKey(profileJob);
-        const ids = await redis.sMembers(scopeKey);
-        const values = [];
-        for (let i=0;i<ids.length;i+=500) {
-          const chunk=ids.slice(i,i+500);
-          let rows;
-          if (typeof redis.hMGet === "function") rows = await redis.hMGet("recover:leadstore:qualified", chunk);
-          else rows = await Promise.all(chunk.map(id=>redis.hGet("recover:leadstore:qualified",id)));
-          values.push(...rows);
-        }
+        // Export from the permanent qualified lead store, not one campaign-scope set.
+        // The campaign scope can omit valid leads discovered by other nationwide passes.
+        const values = await redis.hVals("recover:leadstore:qualified");
         const leads = values
           .map(v => { try { return v ? JSON.parse(v) : null; } catch { return null; } })
           .filter(Boolean)
