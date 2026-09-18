@@ -28,6 +28,8 @@ const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 const ACQUISITION_REDIS_URL = process.env.ACQUISITION_REDIS_URL || "";
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || "";
 const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER || "";
+const RECOVER_REVENUE_SMS_CALLBACK_URL = (process.env.RECOVER_REVENUE_SMS_CALLBACK_URL || "").replace(/\/$/, "");
+const RECOVER_REVENUE_SMS_CALLBACK_SECRET = process.env.RECOVER_REVENUE_SMS_CALLBACK_SECRET || "";
 let acquisitionRedisPromise = null;
 
 const oauthEnabled = Boolean(OAUTH_ISSUER && OAUTH_CLIENT_ID && OAUTH_CLIENT_SECRET && OAUTH_SIGNING_SECRET && OAUTH_ACCESS_KEY);
@@ -939,6 +941,7 @@ function buildServer() {
       telnyx_api_key_configured: !!TELNYX_API_KEY,
       from_number_configured: !!TELNYX_FROM_NUMBER,
       redis_configured: !!ACQUISITION_REDIS_URL,
+      result_callback_configured: !!(RECOVER_REVENUE_SMS_CALLBACK_URL && RECOVER_REVENUE_SMS_CALLBACK_SECRET),
       ready_to_prepare: !!ACQUISITION_REDIS_URL,
       ready_to_send: !!(TELNYX_API_KEY && TELNYX_FROM_NUMBER && ACQUISITION_REDIS_URL)
     });
@@ -1081,6 +1084,23 @@ function buildServer() {
 }
 
 
+
+async function postSmsResultCallback(payload) {
+  if (!RECOVER_REVENUE_SMS_CALLBACK_URL || !RECOVER_REVENUE_SMS_CALLBACK_SECRET) return { configured:false };
+  const response = await fetch(RECOVER_REVENUE_SMS_CALLBACK_URL, {
+    method:"POST",
+    headers:{
+      authorization:`Bearer ${RECOVER_REVENUE_SMS_CALLBACK_SECRET}`,
+      "content-type":"application/json"
+    },
+    body:JSON.stringify(payload),
+    signal:AbortSignal.timeout(10000)
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(`Recover Revenue SMS callback ${response.status}: ${raw.slice(0,500)}`);
+  return { configured:true, ok:true };
+}
+
 async function telnyxSendMessage(to, text) {
   if (!TELNYX_API_KEY) throw new Error("TELNYX_API_KEY is not configured");
   if (!TELNYX_FROM_NUMBER) throw new Error("TELNYX_FROM_NUMBER is not configured");
@@ -1128,9 +1148,16 @@ async function startSmsWorker() {
         const recipient = recipients[i];
         const suppressed = await redis.sIsMember("recover:sms:suppressed", recipient.phone);
         if (suppressed) {
-          await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify({
-            index:i, phone:recipient.phone, status:"skipped_suppressed", at:new Date().toISOString()
-          }));
+          const result = {
+            batch_id:batchId,
+            index:i,
+            phone:recipient.phone,
+            contact_id:recipient.contact_id || "",
+            status:"skipped_suppressed",
+            at:new Date().toISOString()
+          };
+          await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
+          await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
           batch.processed_count = i + 1;
           await save();
           continue;
@@ -1139,7 +1166,8 @@ async function startSmsWorker() {
         for (let j = 0; j < recipient.messages.length; j++) {
           try {
             const response = await telnyxSendMessage(recipient.phone, recipient.messages[j]);
-            await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify({
+            const result = {
+              batch_id:batchId,
               index:i,
               message_index:j,
               phone:recipient.phone,
@@ -1147,11 +1175,14 @@ async function startSmsWorker() {
               status:"accepted",
               telnyx_message_id:response?.data?.id || null,
               at:new Date().toISOString()
-            }));
+            };
+            await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
+            await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
             batch.sent_count += 1;
           } catch (error) {
             batch.failed_count += 1;
-            await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify({
+            const result = {
+              batch_id:batchId,
               index:i,
               message_index:j,
               phone:recipient.phone,
@@ -1159,7 +1190,9 @@ async function startSmsWorker() {
               status:"failed",
               error:error?.message || "send_failed",
               at:new Date().toISOString()
-            }));
+            };
+            await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
+            await postSmsResultCallback(result).catch(callbackError => console.error("SMS callback error", callbackError.message));
           }
           await new Promise(resolve => setTimeout(resolve, 100));
         }
