@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 
 const IMPORT_LINE="import { orderControllerAreas, locationForCoveragePass } from './us-hvac-area-order.mjs';";
 const OLD_IMPORT_LINE="import { orderControllerAreas } from './us-hvac-area-order.mjs';";
-const MILLION_PASS_MARKER='if(TARGET_TOTAL>=1000000&&coveragePass===1)';
+const MILLION_PASS_MARKER='if(TARGET_TOTAL>=1000000&&coveragePass<3)';
 
 export function patchControllerSource(source='') {
   let out=String(source);
@@ -25,7 +25,7 @@ export function patchControllerSource(source='') {
   if (!out.includes(MILLION_PASS_MARKER)) {
     const statePattern=/(let cursor=Number\(await redis\.hGet\(CONTROLLER_KEY,"cursor"\)\|\|0\);\s*let coveragePass=Math\.max\(1,Number\(await redis\.hGet\(CONTROLLER_KEY,"coverage_pass"\)\|\|1\)\);)/;
     if (!statePattern.test(out)) throw new Error('controller coverage state marker missing');
-    out=out.replace(statePattern,`$1\nif(TARGET_TOTAL>=1000000&&coveragePass===1){coveragePass=2;cursor=0;await redis.hSet(CONTROLLER_KEY,{cursor:'0',coverage_pass:'2'});console.log(JSON.stringify({event:'million_target_city_pass',coveragePass,cursor}));}`);
+    out=out.replace(statePattern,`$1\nif(TARGET_TOTAL>=1000000&&coveragePass<3){coveragePass=3;cursor=0;await redis.hSet(CONTROLLER_KEY,{cursor:'0',coverage_pass:'3'});console.log(JSON.stringify({event:'million_target_query_refresh_pass',coveragePass,cursor}));}`);
   }
 
   if (!out.includes('location:locationForCoveragePass(area,coveragePass)')) {
