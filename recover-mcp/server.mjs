@@ -7,6 +7,7 @@ import * as z from "zod/v4";
 import { orchestrate as enrichEmail } from "email-enrich";
 import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
+import { startQualifiedGoogleSheetSync } from "./google-sheet-direct-sync.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -30,6 +31,11 @@ const TELNYX_API_KEY = process.env.TELNYX_API_KEY || "";
 const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER || "";
 const RECOVER_REVENUE_SMS_CALLBACK_URL = (process.env.RECOVER_REVENUE_SMS_CALLBACK_URL || "").replace(/\/$/, "");
 const RECOVER_REVENUE_SMS_CALLBACK_SECRET = process.env.RECOVER_REVENUE_SMS_CALLBACK_SECRET || "";
+const GOOGLE_SERVICE_ACCOUNT_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
+const GOOGLE_SHEETS_TARGETS_JSON = process.env.GOOGLE_SHEETS_TARGETS_JSON || "";
+const GOOGLE_SHEETS_SYNC_ENABLED = String(process.env.GOOGLE_SHEETS_SYNC_ENABLED || "").toLowerCase() === "true";
+const GOOGLE_SHEETS_SYNC_INTERVAL_MS = Math.max(30000, Number(process.env.GOOGLE_SHEETS_SYNC_INTERVAL_MS || 60000));
+const GOOGLE_SHEETS_TAB_CAPACITY = Math.max(1, Number(process.env.GOOGLE_SHEETS_TAB_CAPACITY || 50000));
 let acquisitionRedisPromise = null;
 
 const oauthEnabled = Boolean(OAUTH_ISSUER && OAUTH_CLIENT_ID && OAUTH_CLIENT_SECRET && OAUTH_SIGNING_SECRET && OAUTH_ACCESS_KEY);
@@ -178,6 +184,21 @@ async function getAcquisitionRedis() {
     })();
   }
   return acquisitionRedisPromise;
+}
+
+async function getQualifiedSheetLeads(redis) {
+  const values = await redis.hVals("recover:leadstore:qualified");
+  return values
+    .map((value) => { try { return value ? JSON.parse(value) : null; } catch { return null; } })
+    .filter(Boolean)
+    .filter((lead) => {
+      const noWebsite = !String(lead.website || "").trim();
+      const emails = Array.isArray(lead.emails)
+        ? lead.emails
+        : String(lead.email || lead.emails || "").split(/[;,\s]+/).filter(Boolean);
+      const contactable = !!String(lead.phone || "").trim() || emails.length > 0;
+      return noWebsite && contactable && isCoreHomeServiceLead(lead);
+    });
 }
 
 const jsonText = (value) => ({
@@ -1231,6 +1252,16 @@ const handler = createMcpHandler(buildServer);
 const nodeHandler = toNodeHandler(handler);
 
 void startSmsWorker().catch(error => console.error("SMS worker startup error", error));
+
+startQualifiedGoogleSheetSync({
+  getRedis: getAcquisitionRedis,
+  getQualifiedLeads: getQualifiedSheetLeads,
+  enabled: GOOGLE_SHEETS_SYNC_ENABLED,
+  intervalMs: GOOGLE_SHEETS_SYNC_INTERVAL_MS,
+  capacity: GOOGLE_SHEETS_TAB_CAPACITY,
+  targetsJson: GOOGLE_SHEETS_TARGETS_JSON,
+  serviceAccountJson: GOOGLE_SERVICE_ACCOUNT_JSON,
+});
 
 const httpServer = createHttpServer((req, res) => {
   const requestUrl = new URL(req.url || "/", OAUTH_ISSUER || `http://${req.headers.host || "localhost"}`);
