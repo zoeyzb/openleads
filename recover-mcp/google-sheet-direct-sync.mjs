@@ -106,7 +106,7 @@ function createSheetsClient(serviceAccount) {
 
   async function appendRows(spreadsheetId, tabName, rows) {
     for (let i = 0; i < rows.length; i += 500) {
-      const range = `${quoteTab(tabName)}!A:Y`;
+      const range = `${quoteTab(tabName)}!A7:Y50006`;
       await request(
         spreadsheetId,
         `/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
@@ -123,7 +123,7 @@ function createSheetsClient(serviceAccount) {
   }
 
   async function readIdentityColumns(spreadsheetId, tabName) {
-    const ranges = [`${quoteTab(tabName)}!A2:A50001`, `${quoteTab(tabName)}!W2:W50001`, `${quoteTab(tabName)}!X2:X50001`];
+    const ranges = [`${quoteTab(tabName)}!A7:A50006`, `${quoteTab(tabName)}!W7:W50006`, `${quoteTab(tabName)}!X7:X50006`];
     const qs = new URLSearchParams();
     for (const range of ranges) qs.append("ranges", range);
     qs.set("majorDimension", "ROWS");
@@ -227,7 +227,7 @@ async function bootstrapAssignments({ redis, client, slots }) {
         const phone = digits(leadId.replace(/^lead:/, ""));
         identity = phone ? `phone:${phone}` : acq ? `fallback:${acq}::` : leadId;
       }
-      if (identity) assignments[identity] = JSON.stringify({ key: slot.key, row: i + 2 });
+      if (identity) assignments[identity] = JSON.stringify({ key: slot.key, row: i + 7 });
     }
     if (Object.keys(assignments).length) await redis.hSet(ASSIGN_HASH, assignments);
     await redis.hSet(COUNT_HASH, slot.key, String(count));
@@ -312,7 +312,7 @@ export function startQualifiedGoogleSheetSync({
 
         const mapped = {};
         for (let i = 0; i < batch.length; i++) {
-          mapped[batch[i].identity] = JSON.stringify({ key: slot.key, row: used + i + 2 });
+          mapped[batch[i].identity] = JSON.stringify({ key: slot.key, row: used + i + 7 });
         }
         if (Object.keys(mapped).length) await redis.hSet(ASSIGN_HASH, mapped);
         counts.set(slot.key, used + batch.length);
