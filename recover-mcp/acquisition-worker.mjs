@@ -862,46 +862,49 @@ async function recoverInterrupted() {
     console.log(JSON.stringify({event:"recover_interrupted_skipped",reason:"recovery_lock_busy"}));
     return;
   }
-  const ids=await redis.sMembers("recover:acq:index");
-  const now=Date.now();
-  const [pausedNational,pausedNySurplus,pausedLegacy]=await Promise.all([
-    redis.lRange(PAUSED_NATIONAL_QUEUE,0,-1),
-    redis.lRange(PAUSED_NY_SURPLUS_QUEUE,0,-1),
-    redis.lRange(PAUSED_LEGACY_NATIONAL_QUEUE,0,-1)
-  ]);
-  const parked=new Set([...pausedNational,...pausedNySurplus,...pausedLegacy].map(String));
+  try {
+    const ids=await redis.sMembers("recover:acq:index");
+    const now=Date.now();
+    const [pausedNational,pausedNySurplus,pausedLegacy]=await Promise.all([
+      redis.lRange(PAUSED_NATIONAL_QUEUE,0,-1),
+      redis.lRange(PAUSED_NY_SURPLUS_QUEUE,0,-1),
+      redis.lRange(PAUSED_LEGACY_NATIONAL_QUEUE,0,-1)
+    ]);
+    const parked=new Set([...pausedNational,...pausedNySurplus,...pausedLegacy].map(String));
 
-  let recovered=0, skippedParked=0;
-  for (const id of ids) {
-    const raw=await redis.get(jobKey(id));
-    if (!raw) continue;
-    try {
-      const job=JSON.parse(raw);
-      if (parked.has(String(id))) {
-        if (["queued","running"].includes(String(job.status||""))) {
-          job.status="parked";
-          job.phase="parked_queue_preserved";
-          await saveJob(job);
+    let recovered=0, skippedParked=0;
+    for (const id of ids) {
+      const raw=await redis.get(jobKey(id));
+      if (!raw) continue;
+      try {
+        const job=JSON.parse(raw);
+        if (parked.has(String(id))) {
+          if (["queued","running"].includes(String(job.status||""))) {
+            job.status="parked";
+            job.phase="parked_queue_preserved";
+            await saveJob(job);
+          }
+          skippedParked++;
+          continue;
         }
-        skippedParked++;
-        continue;
-      }
-      if (!["queued","running"].includes(job.status)) continue;
-      const updated=Date.parse(job.updated_at||job.created_at||0);
-      if (!updated || now-updated>120000) {
-        job.status="queued";
-        job.phase="requeued_after_restart";
-        await saveJob(job);
-        await enqueueUnique(id,job);
-        recovered++;
-      }
+        if (!["queued","running"].includes(job.status)) continue;
+        const updated=Date.parse(job.updated_at||job.created_at||0);
+        if (!updated || now-updated>120000) {
+          job.status="queued";
+          job.phase="requeued_after_restart";
+          await saveJob(job);
+          await enqueueUnique(id,job);
+          recovered++;
+        }
+      } catch {}
+    }
+    console.log(JSON.stringify({event:"recover_interrupted_complete",recovered,skippedParked,parkedSnapshot:parked.size}));
+  } finally {
+    try {
+      const owner=await redis.get(lockKey);
+      if(owner===lockToken) await redis.del(lockKey);
     } catch {}
   }
-  console.log(JSON.stringify({event:"recover_interrupted_complete",recovered,skippedParked,parkedSnapshot:parked.size}));
-  try {
-    const owner=await redis.get(lockKey);
-    if(owner===lockToken) await redis.del(lockKey);
-  } catch {}
 }
 
 function beginShutdown(signal) {
