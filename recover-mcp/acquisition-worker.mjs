@@ -325,13 +325,62 @@ async function recordAreaYield(redis,job) {
 }
 async function persistPermanentQualified(redis, job, leads) {
   if (!Array.isArray(leads) || !leads.length) return {unique:0,newAdded:0,duplicates:0};
+
+  const rows=leads.map(lead=>{
+    const compact=compactLead(lead);
+    const preferred=permanentLeadIdentity(compact);
+    const phone=normalizePhone(compact.phone||"");
+    return {compact,preferred,phoneKey:phone ? "phone:"+phone : ""};
+  });
+
+  const lookupKeys=[...new Set(rows.flatMap(row=>[row.preferred,row.phoneKey]).filter(Boolean))];
+  const existingByKey=new Map();
+  for(let i=0;i<lookupKeys.length;i+=500){
+    const keys=lookupKeys.slice(i,i+500);
+    const values=await redis.hmGet("recover:leadstore:qualified",keys);
+    keys.forEach((key,j)=>existingByKey.set(key,values?.[j]||null));
+  }
+
   const entries=[];
   const identities=[];
-  for (const lead of leads) {
-    const compact=compactLead(lead);
-    const key=permanentLeadIdentity(compact);
+  const seen=new Set();
+  let existingCount=0;
+  let newAdded=0;
+
+  for(const row of rows){
+    const {compact,preferred,phoneKey}=row;
+    let key=preferred;
+    let existed=Boolean(existingByKey.get(preferred));
+
+    // Before the CID/data-id upgrade, no-website leads were commonly keyed by
+    // phone. Reuse that legacy key only when it is clearly the same business.
+    // A shared phone with a different address is allowed to remain a distinct
+    // branch under its Maps-stable identifier.
+    if(!existed && phoneKey && phoneKey!==preferred){
+      const legacyRaw=existingByKey.get(phoneKey);
+      if(legacyRaw){
+        try{
+          const legacy=JSON.parse(legacyRaw);
+          const currentAddr=normalizeText(compact.address||"");
+          const legacyAddr=normalizeText(legacy.address||"");
+          const currentName=normalizeText(compact.name||"");
+          const legacyName=normalizeText(legacy.name||"");
+          const sameAddress=Boolean(currentAddr&&legacyAddr&&currentAddr===legacyAddr);
+          const sameName=Boolean(currentName&&legacyName&&currentName===legacyName);
+          if(sameAddress||sameName){
+            key=phoneKey;
+            existed=true;
+          }
+        }catch{}
+      }
+    }
+
+    if(seen.has(key)) continue;
+    seen.add(key);
     identities.push(key);
-    entries.push(key, JSON.stringify({
+    if(existed) existingCount++; else newAdded++;
+
+    entries.push(key,JSON.stringify({
       ...compact,
       acquisition_id:job.id,
       acquisition_location:job.location||"",
@@ -340,21 +389,15 @@ async function persistPermanentQualified(redis, job, leads) {
       persisted_at:new Date().toISOString()
     }));
   }
-  const uniqueIdentities=[...new Set(identities)];
-  let existingCount=0;
-  for (let i=0;i<uniqueIdentities.length;i+=500) {
-    const keys=uniqueIdentities.slice(i,i+500);
-    const existing=await redis.hmGet("recover:leadstore:qualified",keys);
-    existingCount+=existing.filter(Boolean).length;
-  }
-  if (entries.length) await redis.hSet("recover:leadstore:qualified", entries);
-  if (uniqueIdentities.length) {
-    await redis.sAdd(campaignLeadSetKey(job), uniqueIdentities);
-    if (/\\bny\\b|new york/i.test(String(job.location||"")) && isHomeComfortTarget(job.industry||"")) {
-      await redis.sAdd("recover:leadstore:ny-home-comfort", uniqueIdentities);
+
+  if(entries.length) await redis.hSet("recover:leadstore:qualified",entries);
+  if(identities.length){
+    await redis.sAdd(campaignLeadSetKey(job),identities);
+    if(/\\bny\\b|new york/i.test(String(job.location||"")) && isHomeComfortTarget(job.industry||"")){
+      await redis.sAdd("recover:leadstore:ny-home-comfort",identities);
     }
   }
-  return {unique:uniqueIdentities.length,newAdded:Math.max(0,uniqueIdentities.length-existingCount),duplicates:existingCount};
+  return {unique:identities.length,newAdded,duplicates:existingCount};
 }
 function mapsStatus(job) {
   return String(job?.status||job?.Status||job?.state||job?.State||job?.job?.status||job?.job?.Status||"").toLowerCase();
