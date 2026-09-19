@@ -1,3 +1,4 @@
+// maps-lane-count-refresh: 14 active lanes as of 2026-09-20
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { claimCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
