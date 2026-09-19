@@ -388,6 +388,46 @@ const queryVariants=(industry,location)=>{
     `${industry} installation in ${location}`
   ];
 };
+function queryFamily(query=""){
+  const value=String(query||"");
+  const marker=value.lastIndexOf(" in ");
+  return normalizeText(marker>0?value.slice(0,marker):value);
+}
+async function orderVariantsByNetNewYield(redis,variants=[]){
+  if(variants.length<2) return variants;
+  const families=variants.map(queryFamily);
+  const [attemptsRows,newRows,dupRows]=await Promise.all([
+    redis.hmGet("recover:yield:query:attempts",families),
+    redis.hmGet("recover:yield:query:new",families),
+    redis.hmGet("recover:yield:query:duplicates",families),
+  ]);
+  return variants.map((query,i)=>{
+    const attempts=Number(attemptsRows?.[i]||0);
+    const netNew=Number(newRows?.[i]||0);
+    const duplicates=Number(dupRows?.[i]||0);
+    const avgNew=attempts?netNew/attempts:0;
+    const dupRate=(netNew+duplicates)?duplicates/(netNew+duplicates):0;
+    // Unexplored families stay competitive so the system never locks itself
+    // permanently into yesterday's winners.
+    const score=attempts<4 ? 100-attempts : avgNew*12-(dupRate*4);
+    return {query,score,attempts};
+  }).sort((a,b)=>b.score-a.score||a.attempts-b.attempts).map(x=>x.query);
+}
+async function recordQueryYield(redis,queries=[],stats={}){
+  const families=[...new Set((queries||[]).map(queryFamily).filter(Boolean))];
+  if(!families.length) return;
+  const netNew=Math.max(0,Number(stats.newAdded||0));
+  const duplicates=Math.max(0,Number(stats.duplicates||0));
+  const perNew=Math.floor(netNew/families.length);
+  const perDup=Math.floor(duplicates/families.length);
+  for(const family of families){
+    await Promise.all([
+      redis.hIncrBy("recover:yield:query:attempts",family,1),
+      redis.hIncrBy("recover:yield:query:new",family,perNew),
+      redis.hIncrBy("recover:yield:query:duplicates",family,perDup),
+    ]);
+  }
+}
 
 async function dataforgeScrape(urls) {
   if (!DATAFORGE_BASE_URL || !urls.length) return [];
@@ -555,6 +595,7 @@ async function processAcquisition(id) {
 
   try {
     let variants=queryVariants(job.industry,job.location);
+    if (isFastHomeServiceJob(job)) variants=await orderVariantsByNetNewYield(redis,variants);
     const configuredMaxRounds=Number(job.max_rounds||12);
     const isFastHomeService=isFastHomeServiceJob(job);
     if (isFastHomeService && variants.length>2) {
@@ -578,6 +619,7 @@ async function processAcquisition(id) {
       const fastNyDepthCap=isFastHomeService ? 6 : MAPS_ROUND_DEPTH_CAP;
       const fastNyMaxTime=isFastHomeService ? 60 : MAPS_ROUND_MAX_TIME_SECONDS;
       const mapsKeywords=(isFastHomeService && configuredMaxRounds===1) ? variants : [variants[round]];
+      job.current_query_families=mapsKeywords.map(queryFamily);
       const mapsPayload={
         name:`Recover acquisition ${id} round ${round+1}`,
         keywords:mapsKeywords,
@@ -721,6 +763,7 @@ async function processAcquisition(id) {
       const persisted=upsertQualifiedLeads(existingPersisted,compactQualified);
       await replaceList(resultsKey(id),persisted);
       const permanentStats=await persistPermanentQualified(redis, job, leads);
+      await recordQueryYield(redis,job.current_query_families||[job.current_query],permanentStats);
       job.stored_count=persisted.length;
       job.permanent_new_count=Number(job.permanent_new_count||0)+permanentStats.newAdded;
       job.permanent_duplicate_count=Number(job.permanent_duplicate_count||0)+permanentStats.duplicates;
