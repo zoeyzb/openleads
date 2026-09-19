@@ -8,3 +8,4 @@ rollout 14-lane + latest yield/maps/social fixes to g-l 2026-09-20
 rollout branch-identity + dense-budget + targeting fixes to g-l 2026-09-20
 rollout long-tail discovery to g-l 2026-09-20
 canary corrected 180s Maps wait budget + 14th lane 2026-09-20
+canary qualification funnel instrumentation 2026-09-20
