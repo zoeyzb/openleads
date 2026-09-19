@@ -1,7 +1,7 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { claimCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
-import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
+import { isCoreHomeServiceLead, isOwnedBusinessWebsite } from "./home-service-targeting.mjs";
 import { deriveSchedulerCapacity, shardIdForArea } from "./nationwide-shard-scheduler.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||"";
@@ -37,6 +37,27 @@ const PAUSED_LEGACY_NATIONAL_QUEUE="recover:acquisition:queue:paused-legacy-nati
 const profileJob={industry:"HVAC",require_no_website:true,require_contact:true,require_phone:false,require_email:false,include_no_website:true,min_score:30};
 
 function isNyLocation(value=""){return /\bny\b|new york/i.test(String(value||""));}
+
+async function normalizeSocialOnlyLeadstore(redis){
+  const all=await redis.hGetAll("recover:leadstore:qualified");
+  let changed=0;
+  const updates=[];
+  for(const [identity,raw] of Object.entries(all)){
+    let lead; try{lead=JSON.parse(raw)}catch{continue}
+    const website=String(lead.website||"").trim();
+    if(!website || isOwnedBusinessWebsite(website)) continue;
+    lead.social_profile_url=lead.social_profile_url||website;
+    lead.website="";
+    lead.website_classification="social_or_directory_profile";
+    lead.normalized_at=new Date().toISOString();
+    updates.push(identity,JSON.stringify(lead));
+    changed++;
+    if(updates.length>=1000){await redis.hSet("recover:leadstore:qualified",updates.splice(0,updates.length));}
+  }
+  if(updates.length) await redis.hSet("recover:leadstore:qualified",updates);
+  console.log(JSON.stringify({event:"social_only_leadstore_normalized",changed,total:Object.keys(all).length}));
+  return changed;
+}
 
 async function bootstrapNyScope(redis){
   const before=await redis.sCard(NY_SCOPE_SET);
@@ -127,7 +148,7 @@ async function fetchZipAreas(){
 }
 
 const redis=createClient({url:REDIS_URL}); redis.on("error",e=>console.error("Redis error",e)); await redis.connect();
-const areas=await fetchZipAreas(); const scopeSet=campaignLeadSetKey(profileJob); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
+const areas=await fetchZipAreas(); const scopeSet=campaignLeadSetKey(profileJob); await normalizeSocialOnlyLeadstore(redis); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0); let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pass")||1));
 const hybridResetDone=String(await redis.hGet(CONTROLLER_KEY,"hybrid_zip_v3")||"")==="1";
 if(!hybridResetDone){
