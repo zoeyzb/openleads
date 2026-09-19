@@ -82,6 +82,8 @@ export const CITY_SCOPED_LOCATION_MATCH = `function matchesAcquisitionLocation(l
     const requestedState=normalizeText(job?.partition_state||"");
     const requestedCity=normalizeText(job?.partition_city||"");
     const requestedZip=String(job?.partition_zip||job?.source_zip||"").replace(/\\D/g,"").slice(0,5);
+    const locationText=String(job?.location||"");
+    const zipScoped=Boolean(requestedZip && new RegExp("^\\\\s*"+requestedZip+"\\\\b").test(locationText));
     const leadRegion=normalizeText(lead.region||lead.state||lead.state_code||lead.province||"");
     const leadCity=normalizeText(lead.city||lead.locality||lead.town||"");
     const leadAddressRaw=String(lead.address||lead.full_address||lead.formatted_address||"");
@@ -91,7 +93,7 @@ export const CITY_SCOPED_LOCATION_MATCH = `function matchesAcquisitionLocation(l
       ? leadRegion===requestedState || leadRegion.split(" ").includes(requestedState)
       : new RegExp("\\\\b"+requestedState.replace(/[^a-z]/g,"")+"\\\\b").test(leadAddress));
     if (!stateOk) return false;
-    if (requestedZip) {
+    if (zipScoped) {
       if (leadZip) return leadZip===requestedZip;
       const addressZip=(leadAddressRaw.match(/\\b\\d{5}(?:-\\d{4})?\\b/)||[])[0]||"";
       if (addressZip) return addressZip.slice(0,5)===requestedZip;
