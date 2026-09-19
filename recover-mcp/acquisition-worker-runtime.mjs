@@ -73,15 +73,21 @@ export const LEGACY_LOCATION_MATCH = `function matchesAcquisitionLocation(lead, 
   return isFastNyMilestoneJob(job) ? matchesFastNyState(lead) : matchesRequestedLocation(lead,job.location);
 }`;
 
-export const STATE_SCOPED_LOCATION_MATCH = `function matchesAcquisitionLocation(lead, job) {
+export const CITY_SCOPED_LOCATION_MATCH = `function matchesAcquisitionLocation(lead, job) {
   if (isFastNyMilestoneJob(job)) return matchesFastNyState(lead);
   if (String(job?.search_profile||"")==="core-home-service") {
     const requestedState=normalizeText(job?.partition_state||"");
-    if (!requestedState) return matchesRequestedLocation(lead,job.location);
+    const requestedCity=normalizeText(job?.partition_city||"");
     const leadRegion=normalizeText(lead.region||lead.state||lead.state_code||lead.province||"");
+    const leadCity=normalizeText(lead.city||lead.locality||lead.town||"");
     const leadAddress=normalizeText(lead.address||lead.full_address||lead.formatted_address||"");
-    if (leadRegion) return leadRegion===requestedState || leadRegion.split(" ").includes(requestedState);
-    return new RegExp("\\\\b"+requestedState.replace(/[^a-z]/g,"")+"\\\\b").test(leadAddress);
+    const stateOk=!requestedState || (leadRegion
+      ? leadRegion===requestedState || leadRegion.split(" ").includes(requestedState)
+      : new RegExp("\\\\b"+requestedState.replace(/[^a-z]/g,"")+"\\\\b").test(leadAddress));
+    if (!stateOk) return false;
+    if (!requestedCity) return matchesRequestedLocation(lead,job.location);
+    if (leadCity) return leadCity===requestedCity;
+    return leadAddress.includes(requestedCity);
   }
   return matchesRequestedLocation(lead,job.location);
 }`;
@@ -152,7 +158,7 @@ export function patchAcquisitionWorkerSource(source) {
     .replace(LEGACY_LANE_COOLDOWN, ADAPTIVE_LANE_COOLDOWN)
     .replace(LEGACY_MAPS_DONE, RESILIENT_MAPS_DONE)
     .replace(LEGACY_STATUS_FAILURE, RESILIENT_STATUS_FAILURE)
-    .replace(LEGACY_LOCATION_MATCH, STATE_SCOPED_LOCATION_MATCH)
+    .replace(LEGACY_LOCATION_MATCH, CITY_SCOPED_LOCATION_MATCH)
     .replace(LEGACY_WORKER_LOOP, CONCURRENT_WORKER_LOOP);
   return patchRawRetention(resilient);
 }
