@@ -287,7 +287,7 @@ function permanentLeadIdentity(lead) {
   return "nameaddr:"+normalizeText((lead.name||lead.title||"")+"|"+(lead.address||""));
 }
 async function persistPermanentQualified(redis, job, leads) {
-  if (!Array.isArray(leads) || !leads.length) return 0;
+  if (!Array.isArray(leads) || !leads.length) return {unique:0,newAdded:0,duplicates:0};
   const entries=[];
   const identities=[];
   for (const lead of leads) {
@@ -303,15 +303,21 @@ async function persistPermanentQualified(redis, job, leads) {
       persisted_at:new Date().toISOString()
     }));
   }
-  if (entries.length) await redis.hSet("recover:leadstore:qualified", entries);
   const uniqueIdentities=[...new Set(identities)];
+  let existingCount=0;
+  for (let i=0;i<uniqueIdentities.length;i+=500) {
+    const keys=uniqueIdentities.slice(i,i+500);
+    const existing=await redis.hMGet("recover:leadstore:qualified",keys);
+    existingCount+=existing.filter(Boolean).length;
+  }
+  if (entries.length) await redis.hSet("recover:leadstore:qualified", entries);
   if (uniqueIdentities.length) {
     await redis.sAdd(campaignLeadSetKey(job), uniqueIdentities);
     if (/\\bny\\b|new york/i.test(String(job.location||"")) && isHomeComfortTarget(job.industry||"")) {
       await redis.sAdd("recover:leadstore:ny-home-comfort", uniqueIdentities);
     }
   }
-  return uniqueIdentities.length;
+  return {unique:uniqueIdentities.length,newAdded:Math.max(0,uniqueIdentities.length-existingCount),duplicates:existingCount};
 }
 function mapsStatus(job) {
   return String(job?.status||job?.Status||job?.state||job?.State||job?.job?.status||job?.job?.Status||"").toLowerCase();
@@ -690,12 +696,14 @@ async function processAcquisition(id) {
       const existingPersisted=await loadList(resultsKey(id));
       const persisted=upsertQualifiedLeads(existingPersisted,compactQualified);
       await replaceList(resultsKey(id),persisted);
-      await persistPermanentQualified(redis, job, leads);
+      const permanentStats=await persistPermanentQualified(redis, job, leads);
       job.stored_count=persisted.length;
+      job.permanent_new_count=Number(job.permanent_new_count||0)+permanentStats.newAdded;
+      job.permanent_duplicate_count=Number(job.permanent_duplicate_count||0)+permanentStats.duplicates;
       const addedThisRound=Math.max(0,job.stored_count-previousStored);
       stagnantRounds=addedThisRound===0 ? stagnantRounds+1 : 0;
       previousStored=job.stored_count;
-      console.log("Acquisition qualified", id, "count", leads.length, "stored", job.stored_count, "added", addedThisRound, "target", job.target);
+      console.log("Acquisition qualified", id, "count", leads.length, "stored", job.stored_count, "added", addedThisRound, "global_new", permanentStats.newAdded, "global_dup", permanentStats.duplicates, "target", job.target);
       await saveJob(job);
 
       if (leads.length>=Number(job.target)) {
