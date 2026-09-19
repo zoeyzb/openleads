@@ -433,18 +433,25 @@ async function orderVariantsByNetNewYield(redis,variants=[]){
     return {query,score,attempts};
   }).sort((a,b)=>b.score-a.score||a.attempts-b.attempts).map(x=>x.query);
 }
-async function recordQueryYield(redis,queries=[],stats={}){
+async function recordQueryYield(redis,queries=[],stats={},seed=""){
   const families=[...new Set((queries||[]).map(queryFamily).filter(Boolean))];
   if(!families.length) return;
   const netNew=Math.max(0,Number(stats.newAdded||0));
   const duplicates=Math.max(0,Number(stats.duplicates||0));
-  const perNew=Math.floor(netNew/families.length);
-  const perDup=Math.floor(duplicates/families.length);
-  for(const family of families){
+  let hash=0;
+  for(const ch of String(seed||"")) hash=(hash*31+ch.charCodeAt(0))>>>0;
+  const offset=families.length ? hash%families.length : 0;
+  const baseNew=Math.floor(netNew/families.length), remNew=netNew%families.length;
+  const baseDup=Math.floor(duplicates/families.length), remDup=duplicates%families.length;
+  for(let i=0;i<families.length;i++){
+    const family=families[i];
+    const rotated=(i-offset+families.length)%families.length;
+    const newShare=baseNew+(rotated<remNew?1:0);
+    const dupShare=baseDup+(rotated<remDup?1:0);
     await Promise.all([
       redis.hIncrBy("recover:yield:query:attempts",family,1),
-      redis.hIncrBy("recover:yield:query:new",family,perNew),
-      redis.hIncrBy("recover:yield:query:duplicates",family,perDup),
+      redis.hIncrBy("recover:yield:query:new",family,newShare),
+      redis.hIncrBy("recover:yield:query:duplicates",family,dupShare),
     ]);
   }
 }
@@ -788,7 +795,7 @@ async function processAcquisition(id) {
       const persisted=upsertQualifiedLeads(existingPersisted,compactQualified);
       await replaceList(resultsKey(id),persisted);
       const permanentStats=await persistPermanentQualified(redis, job, leads);
-      await recordQueryYield(redis,job.current_query_families||[job.current_query],permanentStats);
+      await recordQueryYield(redis,job.current_query_families||[job.current_query],permanentStats,job.id);
       job.stored_count=persisted.length;
       job.permanent_new_count=Number(job.permanent_new_count||0)+permanentStats.newAdded;
       job.permanent_duplicate_count=Number(job.permanent_duplicate_count||0)+permanentStats.duplicates;
