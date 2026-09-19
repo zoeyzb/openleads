@@ -602,10 +602,13 @@ async function processAcquisition(id) {
       let hash=0;
       const querySeed=`${String(job.location||job.id||"")}|${String(job.coverage_pass||"pass1")}`;
       for (const ch of querySeed) hash=(hash*31+ch.charCodeAt(0))>>>0;
-      const start=hash % variants.length;
       const bundleCount=configuredMaxRounds===1 ? Math.min(3,variants.length) : Math.min(2,variants.length);
-      const spread=Math.max(1,Math.floor(variants.length/bundleCount));
-      variants=Array.from({length:bundleCount},(_,i)=>variants[(start+i*spread)%variants.length]);
+      const chosen=variants.slice(0,Math.min(2,bundleCount));
+      if(bundleCount>chosen.length){
+        const explorationPool=variants.slice(2);
+        chosen.push(explorationPool[hash % explorationPool.length]);
+      }
+      variants=[...new Set(chosen)].slice(0,bundleCount);
     }
     const maxRounds=Math.min(isFastHomeService ? Math.min(2,configuredMaxRounds) : configuredMaxRounds,variants.length);
 
