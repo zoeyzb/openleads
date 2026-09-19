@@ -10,3 +10,4 @@ rollout long-tail discovery to g-l 2026-09-20
 canary corrected 180s Maps wait budget + 14th lane 2026-09-20
 canary qualification funnel instrumentation 2026-09-20
 canary same-city-before-ZIP matcher 2026-09-20
+rollout Maps stability fix to g-l 2026-09-20
