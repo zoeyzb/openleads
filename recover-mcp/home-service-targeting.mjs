@@ -33,6 +33,24 @@ export function isCoreHomeServiceLead(lead={}){
   return false;
 }
 
+export function isOwnedBusinessWebsite(value=""){
+  const raw=String(value||"").trim();
+  if(!raw) return false;
+  let host="";
+  try{
+    const url=raw.includes("://")?new URL(raw):new URL("https://"+raw);
+    host=url.hostname.toLowerCase().replace(/^www\./,"");
+  }catch{
+    host=raw.toLowerCase().replace(/^https?:\/\//,"").split("/")[0].replace(/^www\./,"");
+  }
+  const profileOnly=[
+    "facebook.com","instagram.com","linkedin.com","yelp.com","yellowpages.com",
+    "nextdoor.com","alignable.com","bbb.org","houzz.com","thumbtack.com",
+    "angi.com","homeadvisor.com","mapquest.com","linktr.ee","beacons.ai"
+  ];
+  return !profileOnly.some(domain=>host===domain||host.endsWith("."+domain));
+}
+
 export function isCoreHomeServiceIndustry(value=""){
   return /\b(hvac|heating|cooling|air conditioning|home comfort|plumb|furnace|boiler|duct|ventilation|refrigeration)\b/.test(normalize(value));
 }
