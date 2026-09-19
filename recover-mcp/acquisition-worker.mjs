@@ -722,7 +722,8 @@ async function processAcquisition(id) {
       job.permanent_new_count=Number(job.permanent_new_count||0)+permanentStats.newAdded;
       job.permanent_duplicate_count=Number(job.permanent_duplicate_count||0)+permanentStats.duplicates;
       const addedThisRound=Math.max(0,job.stored_count-previousStored);
-      stagnantRounds=addedThisRound===0 ? stagnantRounds+1 : 0;
+      const globallyStagnant=permanentStats.newAdded===0 && permanentStats.duplicates>0;
+      stagnantRounds=globallyStagnant ? stagnantRounds+1 : 0;
       previousStored=job.stored_count;
       console.log("Acquisition qualified", id, "count", leads.length, "stored", job.stored_count, "added", addedThisRound, "global_new", permanentStats.newAdded, "global_dup", permanentStats.duplicates, "target", job.target);
       await saveJob(job);
@@ -743,7 +744,7 @@ async function processAcquisition(id) {
 
       // Fast NY milestone mode: do not waste rounds on a ZIP that has stopped yielding.
       // Require at least two completed rounds so the first query still gets one follow-up.
-      if (round>=1 && stagnantRounds>=1) {
+      if ((round>=1 && stagnantRounds>=1) || (isFastHomeService && permanentStats.newAdded===0 && permanentStats.duplicates>=5)) {
         job.status="partial_complete";
         job.phase="complete";
         job.reason="stagnant_round_exit";
