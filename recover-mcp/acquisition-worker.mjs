@@ -267,7 +267,6 @@ function locationCandidateSet(records=[],job={}){
 
 function qualificationFunnel(records=[],job={}){
   const candidates=locationCandidateSet(records,job);
-  const candidateKeys=new Set(candidates.map(permanentLeadIdentity));
   const counts={raw:records.length,location:Math.max(0,records.length-candidates.length),industry:0,owned_website:0,phone:0,email:0,contact:0,include_website:0,score:0,accepted:0};
   for(const lead of candidates){
     if(!matchesRequestedIndustry(lead,job.industry)){counts.industry++;continue;}
@@ -546,7 +545,7 @@ async function orderVariantsByNetNewYield(redis,variants=[]){
     const duplicates=Number(dupRows?.[i]||0);
     const avgNew=attempts?netNew/attempts:0;
     const dupRate=(netNew+duplicates)?duplicates/(netNew+duplicates):0;
-    const saturated=attempts>=10 && avgNew<0.10 && dupRate>0.80;
+    const saturated=(attempts>=6 && avgNew<0.35 && dupRate>0.75) || (attempts>=12 && avgNew<0.75 && dupRate>0.90);
     // Prefer demonstrated permanent net-new yield, while retiring search
     // families that have repeatedly produced almost nothing but duplicates.
     const score=attempts===0 ? 3.5 : (avgNew*20)-(dupRate*2)+(attempts<4?1:0);
