@@ -2,7 +2,7 @@ import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { matchesRequestedLocation, upsertQualifiedLeads } from "./acquisition-persistence.mjs";
 import { markCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
-import { isCoreHomeServiceLead, isCoreHomeServiceIndustry } from "./home-service-targeting.mjs";
+import { isCoreHomeServiceLead, isCoreHomeServiceIndustry, isOwnedBusinessWebsite } from "./home-service-targeting.mjs";
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -238,7 +238,7 @@ function scoreLead(lead) {
   let score=0; const reasons=[]; const add=(p,r)=>{score+=p;reasons.push({points:p,reason:r});};
   const category=normalizeText(lead.category||lead.industry||"");
   if (/hvac|heating|air conditioning|plumb|roof|electric/.test(category)) add(15,"target local-service category");
-  if (!lead.website) add(20,"no website");
+  if (!isOwnedBusinessWebsite(lead.website)) add(20,"no owned website");
   if (lead.website && lead.website_status && lead.website_status!=="ok") add(10,"website fetch/health problem");
   if (lead.website && lead.ssl_valid===false) add(10,"website SSL problem");
   if (lead.website && Number(lead.site_speed_ms||0)>=3000) add(10,"slow website");
@@ -259,7 +259,8 @@ function compactLead(lead) {
     address:lead.address||"",
     city:lead.city||lead.locality||"",
     region:lead.region||lead.state||lead.state_code||"",
-    website:lead.website||"",
+    website:isOwnedBusinessWebsite(lead.website)?(lead.website||""):"",
+    social_profile_url:(!isOwnedBusinessWebsite(lead.website)&&lead.website)?String(lead.website):"",
     phone:lead.phone||"",
     emails:normalizeEmails(lead.emails||lead.email||""),
     owner_name:ownerNameFromLead(lead),
@@ -781,7 +782,7 @@ async function processAcquisition(id) {
       leads=leads
         .filter(lead=>matchesAcquisitionLocation(lead,job))
         .filter(lead=>matchesRequestedIndustry(lead,job.industry))
-        .filter(lead=>!job.require_no_website||!lead.website)
+        .filter(lead=>!job.require_no_website||!isOwnedBusinessWebsite(lead.website))
         .filter(lead=>!job.require_phone||!!lead.phone)
         .filter(lead=>!job.require_email||normalizeEmails(lead.emails||lead.email||"").length>0)
         .filter(lead=>!job.require_contact||!!lead.phone||normalizeEmails(lead.emails||lead.email||"").length>0)
@@ -847,7 +848,7 @@ async function processAcquisition(id) {
       .filter(lead=>!job.require_email||normalizeEmails(lead.emails||lead.email||"").length>0)
       .filter(lead=>!job.require_contact||!!lead.phone||normalizeEmails(lead.emails||lead.email||"").length>0)
       .filter(lead=>job.include_no_website!==false||!!lead.website)
-      .filter(lead=>!job.require_no_website||!lead.website)
+      .filter(lead=>!job.require_no_website||!isOwnedBusinessWebsite(lead.website))
       .sort((a,b)=>b.qualification.score-a.qualification.score)
       .map(compactLead);
 
