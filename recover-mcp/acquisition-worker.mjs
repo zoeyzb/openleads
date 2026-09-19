@@ -376,7 +376,26 @@ const HOME_COMFORT_QUERIES=[
   "pipe repair service",
   "geothermal heating contractor",
   "indoor air quality service",
-  "thermostat installation service"
+  "thermostat installation service",
+  "HVAC repair service",
+  "air conditioning contractor",
+  "air conditioning service",
+  "residential HVAC contractor",
+  "commercial HVAC contractor",
+  "heating and air conditioning service",
+  "furnace contractor",
+  "boiler contractor",
+  "heating installation service",
+  "AC installation service",
+  "ductless HVAC contractor",
+  "mini split installation service",
+  "emergency plumber",
+  "plumbing repair service",
+  "24 hour plumber",
+  "water heater contractor",
+  "drain service",
+  "sewer service",
+  "refrigeration service"
 ];
 const queryVariants=(industry,location)=>{
   if (isHomeComfortTarget(industry)) return HOME_COMFORT_QUERIES.map(q=>`${q} in ${location}`);
@@ -603,10 +622,12 @@ async function processAcquisition(id) {
       const querySeed=`${String(job.location||job.id||"")}|${String(job.coverage_pass||"pass1")}`;
       for (const ch of querySeed) hash=(hash*31+ch.charCodeAt(0))>>>0;
       const bundleCount=configuredMaxRounds===1 ? Math.min(3,variants.length) : Math.min(2,variants.length);
-      const chosen=variants.slice(0,Math.min(2,bundleCount));
-      if(bundleCount>chosen.length){
-        const explorationPool=variants.slice(2);
-        chosen.push(explorationPool[hash % explorationPool.length]);
+      const passNum=Number(String(job.coverage_pass||"").match(/p(\\d+)$/)?.[1]||1);
+      const exploitCount=passNum>=4 ? Math.min(1,bundleCount) : Math.min(2,bundleCount);
+      const chosen=variants.slice(0,exploitCount);
+      const explorationPool=variants.slice(exploitCount);
+      for(let i=chosen.length;i<bundleCount&&explorationPool.length;i++){
+        chosen.push(explorationPool[(hash+i-exploitCount)%explorationPool.length]);
       }
       variants=[...new Set(chosen)].slice(0,bundleCount);
     }
