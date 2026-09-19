@@ -141,9 +141,15 @@ async function fetchZipAreas(){
   for(const key of ["zip_code","city","state","population"]) if(idx[key]===undefined) throw new Error("zip source missing column "+key);
   const out=[];
   for(const line of lines.slice(1)){
-    const row=parseCsvLine(line); const zip=String(row[idx.zip_code]||"").trim().padStart(5,"0"); const city=String(row[idx.city]||"").trim(); const state=String(row[idx.state]||"").trim().toUpperCase(); const population=Number(String(row[idx.population]||"0").replace(/[^0-9.-]/g,""))||0;
+    const row=parseCsvLine(line);
+    const zip=String(row[idx.zip_code]||"").trim().padStart(5,"0");
+    const city=String(row[idx.city]||"").trim();
+    const state=String(row[idx.state]||"").trim().toUpperCase();
+    const population=Number(String(row[idx.population]||"0").replace(/[^0-9.-]/g,""))||0;
+    const latitude=idx.latitude===undefined?null:Number(row[idx.latitude]);
+    const longitude=idx.longitude===undefined?null:Number(row[idx.longitude]);
     if(!/^\d{5}$/.test(zip)||!city||!/^[A-Z]{2}$/.test(state)||["PR","VI","GU","AS","MP"].includes(state))continue;
-    out.push({zip,city,state,population,location:`${zip} ${city}, ${state}`});
+    out.push({zip,city,state,population,latitude:Number.isFinite(latitude)?latitude:null,longitude:Number.isFinite(longitude)?longitude:null,location:`${zip} ${city}, ${state}`});
   }
   if(!out.length) throw new Error("zip source parsed zero areas"); return partitionNationwideAreas(out);
 }
@@ -265,7 +271,7 @@ async function seedOne(area){
     if(!firstForCity) return false;
     cityMarked=true;
   }
-  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,created_at:now,updated_at:now};
+  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_latitude:area.latitude,source_longitude:area.longitude,created_at:now,updated_at:now};
   const claim=await claimCoverage(redis,job,{source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,partition_state:job.partition_state,partition_city:job.partition_city,coverage_pass:job.coverage_pass,shard_id});
   if(!claim.claimed){
     if(cityMarked) await redis.sRem(cityPassKey,cityField);
