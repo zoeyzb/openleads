@@ -29,9 +29,10 @@ test('first nationwide coverage wave visits distinct cities before a second ZIP 
   assert.equal(new Set(firstFour).size,4);
 });
 
-test('nationwide coverage remains ZIP-scoped across passes to reduce overlap', () => {
+test('later nationwide coverage passes broaden once per city after two ZIP passes', () => {
   const area={location:'77001 Houston, TX',city:'Houston',state:'TX'};
   assert.equal(locationForCoveragePass(area,1),'77001 Houston, TX');
   assert.equal(locationForCoveragePass(area,2),'77001 Houston, TX');
-  assert.equal(locationForCoveragePass(area,5),'77001 Houston, TX');
+  assert.equal(locationForCoveragePass(area,3),'Houston, TX');
+  assert.equal(locationForCoveragePass(area,5),'Houston, TX');
 });
