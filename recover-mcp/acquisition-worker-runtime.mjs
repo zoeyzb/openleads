@@ -93,14 +93,19 @@ export const CITY_SCOPED_LOCATION_MATCH = `function matchesAcquisitionLocation(l
       ? leadRegion===requestedState || leadRegion.split(" ").includes(requestedState)
       : new RegExp("\\\\b"+requestedState.replace(/[^a-z]/g,"")+"\\\\b").test(leadAddress));
     if (!stateOk) return false;
+    // ZIP queries often surface legitimate businesses elsewhere in the same city.
+    // Accept same-city matches first; exact ZIP is only a fallback when city data is missing.
+    if (requestedCity) {
+      if (leadCity) return leadCity===requestedCity;
+      if (leadAddress.includes(requestedCity)) return true;
+    }
     if (zipScoped) {
       if (leadZip) return leadZip===requestedZip;
       const addressZip=(leadAddressRaw.match(/\\b\\d{5}(?:-\\d{4})?\\b/)||[])[0]||"";
       if (addressZip) return addressZip.slice(0,5)===requestedZip;
     }
     if (!requestedCity) return matchesRequestedLocation(lead,job.location);
-    if (leadCity) return leadCity===requestedCity;
-    return leadAddress.includes(requestedCity);
+    return false;
   }
   return matchesRequestedLocation(lead,job.location);
 }`;
