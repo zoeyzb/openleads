@@ -328,7 +328,7 @@ async function persistPermanentQualified(redis, job, leads) {
   let existingCount=0;
   for (let i=0;i<uniqueIdentities.length;i+=500) {
     const keys=uniqueIdentities.slice(i,i+500);
-    const existing=await redis.hMGet("recover:leadstore:qualified",keys);
+    const existing=await redis.hmGet("recover:leadstore:qualified",keys);
     existingCount+=existing.filter(Boolean).length;
   }
   if (entries.length) await redis.hSet("recover:leadstore:qualified", entries);
