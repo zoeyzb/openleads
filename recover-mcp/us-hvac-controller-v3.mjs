@@ -129,7 +129,7 @@ async function fetchZipAreas(){
 const redis=createClient({url:REDIS_URL}); redis.on("error",e=>console.error("Redis error",e)); await redis.connect();
 const areas=await fetchZipAreas(); const scopeSet=campaignLeadSetKey(profileJob); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0); let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pass")||1));
-const hybridResetDone=String(await redis.hGet(CONTROLLER_KEY,"hybrid_zip_v1")||"")==="1";
+const hybridResetDone=String(await redis.hGet(CONTROLLER_KEY,"hybrid_zip_v2")||"")==="1";
 if(coveragePass>=4&&!hybridResetDone){
   cursor=0;
   await redis.hSet(CONTROLLER_KEY,{cursor:"0",hybrid_zip_v1:"1"});
