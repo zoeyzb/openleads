@@ -241,10 +241,35 @@ function matchesRequestedIndustry(lead, industry) {
   const tokens=target.split(" ").filter(x=>x.length>=4);
   return tokens.length===0 || tokens.some(t=>hay.includes(t));
 }
+function sameRequestedState(lead,job={}){
+  const requested=normalizeText(job.partition_state||"");
+  if(!requested) return false;
+  const region=normalizeText(lead.region||lead.state||lead.state_code||lead.province||"");
+  const address=normalizeText(lead.address||lead.full_address||lead.formatted_address||"");
+  if(region) return region===requested || region.split(" ").includes(requested);
+  return new RegExp("\\b"+requested.replace(/[^a-z]/g,"")+"\\b").test(address);
+}
+function locationCandidateSet(records=[],job={}){
+  if(String(job.search_profile||"")!=="core-home-service") return records.filter(lead=>matchesAcquisitionLocation(lead,job));
+  const strict=records.filter(lead=>matchesAcquisitionLocation(lead,job));
+  if(strict.length>=5) return strict;
+  // Google Maps commonly returns nearby suburbs for ZIP/city searches. When
+  // strict local results are sparse, admit only a small top-ranked same-state
+  // fallback so we harvest nearby businesses without going back to state-wide
+  // acceptance and duplicate explosions.
+  const strictKeys=new Set(strict.map(permanentLeadIdentity));
+  const nearby=records
+    .filter(lead=>!strictKeys.has(permanentLeadIdentity(lead))&&sameRequestedState(lead,job))
+    .slice(0,Math.max(0,12-strict.length));
+  if(nearby.length) console.log(JSON.stringify({event:"location_relaxation",acquisition_id:job.id,strict:strict.length,nearby:nearby.length,location:job.location}));
+  return [...strict,...nearby];
+}
+
 function qualificationFunnel(records=[],job={}){
-  const counts={raw:records.length,location:0,industry:0,owned_website:0,phone:0,email:0,contact:0,include_website:0,score:0,accepted:0};
-  for(const lead of records){
-    if(!matchesAcquisitionLocation(lead,job)){counts.location++;continue;}
+  const candidates=locationCandidateSet(records,job);
+  const candidateKeys=new Set(candidates.map(permanentLeadIdentity));
+  const counts={raw:records.length,location:Math.max(0,records.length-candidates.length),industry:0,owned_website:0,phone:0,email:0,contact:0,include_website:0,score:0,accepted:0};
+  for(const lead of candidates){
     if(!matchesRequestedIndustry(lead,job.industry)){counts.industry++;continue;}
     if(job.require_no_website&&isOwnedBusinessWebsite(lead.website)){counts.owned_website++;continue;}
     if(job.require_phone&&!lead.phone){counts.phone++;continue;}
@@ -890,8 +915,7 @@ async function processAcquisition(id) {
       const funnel=qualificationFunnel(leads,job);
       console.log(JSON.stringify({event:"qualification_funnel",acquisition_id:id,location:job.location,coverage_pass:job.coverage_pass,...funnel}));
 
-      leads=leads
-        .filter(lead=>matchesAcquisitionLocation(lead,job))
+      leads=locationCandidateSet(leads,job)
         .filter(lead=>matchesRequestedIndustry(lead,job.industry))
         .filter(lead=>!job.require_no_website||!isOwnedBusinessWebsite(lead.website))
         .filter(lead=>!job.require_phone||!!lead.phone)
@@ -950,8 +974,7 @@ async function processAcquisition(id) {
       }
     }
 
-    let leads=allRaw
-      .filter(lead=>matchesAcquisitionLocation(lead,job))
+    let leads=locationCandidateSet(allRaw,job)
       .filter(lead=>matchesRequestedIndustry(lead,job.industry))
       .map(lead=>({...lead,qualification:scoreLead(lead)}))
       .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
