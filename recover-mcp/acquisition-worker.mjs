@@ -713,8 +713,13 @@ async function processAcquisition(id) {
       await saveJob(job);
 
       const currentCoveragePass=Number(String(job.coverage_pass||"").match(/p(\d+)$/)?.[1]||1);
-      const fastNyDepthCap=isFastHomeService ? (currentCoveragePass>=5 ? 8 : currentCoveragePass>=4 ? 6 : 6) : MAPS_ROUND_DEPTH_CAP;
-      const fastNyMaxTime=isFastHomeService ? (currentCoveragePass>=5 ? 90 : currentCoveragePass>=4 ? 60 : 60) : MAPS_ROUND_MAX_TIME_SECONDS;
+      const denseArea=Number(job.source_population||0)>=10000;
+      const fastNyDepthCap=isFastHomeService
+        ? (currentCoveragePass>=5 ? (denseArea?8:5) : 6)
+        : MAPS_ROUND_DEPTH_CAP;
+      const fastNyMaxTime=isFastHomeService
+        ? (currentCoveragePass>=5 ? (denseArea?90:55) : 60)
+        : MAPS_ROUND_MAX_TIME_SECONDS;
       const mapsKeywords=(isFastHomeService && configuredMaxRounds===1) ? variants : [variants[round]];
       job.current_query_families=mapsKeywords.map(queryFamily);
       const mapsPayload={
