@@ -286,6 +286,27 @@ function permanentLeadIdentity(lead) {
   if (phone) return "phone:"+phone;
   return "nameaddr:"+normalizeText((lead.name||lead.title||"")+"|"+(lead.address||""));
 }
+function areaYieldField(job={}) {
+  return [
+    normalizeText(job.partition_state||""),
+    normalizeText(job.partition_city||""),
+    normalizeText(job.partition_zip||job.source_zip||"")
+  ].join("|");
+}
+async function recordAreaYield(redis,job) {
+  if (job.area_yield_recorded) return;
+  const field=areaYieldField(job);
+  if (!field || field==="||") return;
+  const netNew=Math.max(0,Number(job.permanent_new_count||0));
+  const duplicates=Math.max(0,Number(job.permanent_duplicate_count||0));
+  await Promise.all([
+    redis.hIncrBy("recover:yield:area:attempts",field,1),
+    redis.hIncrBy("recover:yield:area:new",field,netNew),
+    redis.hIncrBy("recover:yield:area:duplicates",field,duplicates),
+  ]);
+  job.area_yield_recorded=true;
+  console.log("Acquisition area yield",job.id,"area",field,"global_new",netNew,"global_dup",duplicates);
+}
 async function persistPermanentQualified(redis, job, leads) {
   if (!Array.isArray(leads) || !leads.length) return {unique:0,newAdded:0,duplicates:0};
   const entries=[];
@@ -713,8 +734,9 @@ async function processAcquisition(id) {
         job.phase="complete";
         job.stored_count=finalLeads.length;
         job.completed_at=new Date().toISOString();
+        await recordAreaYield(redis,job);
         await saveJob(job);
-        await markCoverage(redis, job, "target_reached", {reason:"target_reached"});
+        await markCoverage(redis, job, "target_reached", {reason:"target_reached",permanent_new_count:job.permanent_new_count||0,permanent_duplicate_count:job.permanent_duplicate_count||0});
         console.log("Acquisition complete", id, "stored", finalLeads.length);
         return;
       }
@@ -726,8 +748,9 @@ async function processAcquisition(id) {
         job.phase="complete";
         job.reason="stagnant_round_exit";
         job.completed_at=new Date().toISOString();
+        await recordAreaYield(redis,job);
         await saveJob(job);
-        await markCoverage(redis, job, "exhausted", {reason:"stagnant_round_exit"});
+        await markCoverage(redis, job, "exhausted", {reason:"stagnant_round_exit",permanent_new_count:job.permanent_new_count||0,permanent_duplicate_count:job.permanent_duplicate_count||0});
         console.log("Acquisition early exit stagnant", id, "stored", job.stored_count, "after_round", round+1);
         return;
       }
@@ -755,8 +778,9 @@ async function processAcquisition(id) {
     job.stored_count=persisted.length;
     job.reason="max_rounds_reached";
     job.completed_at=new Date().toISOString();
+    await recordAreaYield(redis,job);
     await saveJob(job);
-    await markCoverage(redis, job, "exhausted", {reason:"max_rounds_reached"});
+    await markCoverage(redis, job, "exhausted", {reason:"max_rounds_reached",permanent_new_count:job.permanent_new_count||0,permanent_duplicate_count:job.permanent_duplicate_count||0});
     console.log("Acquisition partial_complete", id, "stored", leads.length);
   } catch (error) {
     if (shuttingDown || String(error?.message||error).includes("worker shutting down")) {
