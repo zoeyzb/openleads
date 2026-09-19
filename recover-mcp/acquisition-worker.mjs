@@ -288,10 +288,11 @@ function permanentLeadIdentity(lead) {
 }
 function areaYieldField(job={}) {
   const pass=Number(String(job.coverage_pass||"").match(/p(\d+)$/)?.[1]||1);
+  const denseLaterPass=pass>=3&&Number(job.source_population||0)>=10000;
   return [
     normalizeText(job.partition_state||""),
     normalizeText(job.partition_city||""),
-    pass>=3 ? "*" : normalizeText(job.partition_zip||job.source_zip||"")
+    pass>=3&&!denseLaterPass ? "*" : normalizeText(job.partition_zip||job.source_zip||"")
   ].join("|");
 }
 async function recordAreaYield(redis,job) {
