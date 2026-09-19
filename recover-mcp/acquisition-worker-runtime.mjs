@@ -5,7 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 export const LEGACY_FAST_WAIT = "const deadline=Date.now()+(fastProfile ? 90*1000 : 20*60*1000);";
-export const RESILIENT_FAST_WAIT = "const requestedMaxSeconds=Number(acquisition?.maps_round_max_time_seconds||acquisition?.max_time_seconds||60);\n  const fastWaitMs=(Math.max(120,requestedMaxSeconds)+30)*1000;\n  const deadline=Date.now()+(fastProfile ? fastWaitMs : 20*60*1000);";
+export const RESILIENT_FAST_WAIT = "const requestedMaxSeconds=Number(acquisition?.maps_round_max_time_seconds||acquisition?.max_time_seconds||60);\n  const backendMinimumSeconds=180;\n  const fastWaitMs=(Math.max(backendMinimumSeconds,requestedMaxSeconds)+45)*1000;\n  const deadline=Date.now()+(fastProfile ? fastWaitMs : 20*60*1000);";
 
 export const LEGACY_LANE_COOLDOWN = `function mapsLaneCooldownKey(url) {
   return "recover:maps:lane:cooldown:"+Buffer.from(String(url||"")).toString("base64url");
