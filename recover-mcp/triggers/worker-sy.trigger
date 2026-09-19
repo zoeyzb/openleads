@@ -7,3 +7,4 @@ rollout long-tail discovery to s-y 2026-09-20
 rollout corrected 180s Maps wait budget + 14th lane to s-y 2026-09-20
 rollout same-city-before-ZIP acquisition matcher to s-y 2026-09-20
 rollout Maps stability fix to s-y 2026-09-20
+rollout capped-nearby fallback + aggressive duplicate-query retirement to s-y 2026-09-20
