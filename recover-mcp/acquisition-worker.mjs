@@ -287,10 +287,11 @@ function permanentLeadIdentity(lead) {
   return "nameaddr:"+normalizeText((lead.name||lead.title||"")+"|"+(lead.address||""));
 }
 function areaYieldField(job={}) {
+  const pass=Number(String(job.coverage_pass||"").match(/p(\d+)$/)?.[1]||1);
   return [
     normalizeText(job.partition_state||""),
     normalizeText(job.partition_city||""),
-    normalizeText(job.partition_zip||job.source_zip||"")
+    pass>=3 ? "*" : normalizeText(job.partition_zip||job.source_zip||"")
   ].join("|");
 }
 async function recordAreaYield(redis,job) {
