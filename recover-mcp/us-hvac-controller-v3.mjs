@@ -129,11 +129,12 @@ async function fetchZipAreas(){
 const redis=createClient({url:REDIS_URL}); redis.on("error",e=>console.error("Redis error",e)); await redis.connect();
 const areas=await fetchZipAreas(); const scopeSet=campaignLeadSetKey(profileJob); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0); let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pass")||1));
-const hybridResetDone=String(await redis.hGet(CONTROLLER_KEY,"hybrid_zip_v2")||"")==="1";
-if(coveragePass>=4&&!hybridResetDone){
+const hybridResetDone=String(await redis.hGet(CONTROLLER_KEY,"hybrid_zip_v3")||"")==="1";
+if(!hybridResetDone){
+  coveragePass=Math.max(5,coveragePass);
   cursor=0;
-  await redis.hSet(CONTROLLER_KEY,{cursor:"0",hybrid_zip_v1:"1"});
-  console.log(JSON.stringify({event:"hybrid_zip_coverage_reset",coveragePass,cursor}));
+  await redis.hSet(CONTROLLER_KEY,{cursor:"0",coverage_pass:String(coveragePass),hybrid_zip_v3:"1"});
+  console.log(JSON.stringify({event:"hybrid_zip_coverage_reset",coveragePass,cursor,reason:"fresh_pass_to_avoid_stale_pass4_claims"}));
 }
 console.log("US HVAC ZIP controller v3 started",JSON.stringify({areas:areas.length,target:TARGET_TOTAL,scopeSet,cursor,targetPerArea:TARGET_PER_AREA,maxRounds:MAX_ROUNDS,depth:DEPTH,queueHighWater:QUEUE_HIGH_WATER,queueLowWater:QUEUE_LOW_WATER,seedBatchSize:SEED_BATCH_SIZE,coveragePass,partitioning:"state>city>zip",scheduler,enforceNyFirst:ENFORCE_NY_FIRST}));
 
