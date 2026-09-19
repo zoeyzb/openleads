@@ -46,7 +46,10 @@ export function isOwnedBusinessWebsite(value=""){
   const profileOnly=[
     "facebook.com","instagram.com","linkedin.com","yelp.com","yellowpages.com",
     "nextdoor.com","alignable.com","bbb.org","houzz.com","thumbtack.com",
-    "angi.com","homeadvisor.com","mapquest.com","linktr.ee","beacons.ai"
+    "angi.com","homeadvisor.com","mapquest.com","linktr.ee","beacons.ai",
+    "business.site","google.com","maps.app.goo.gl","goo.gl","manta.com",
+    "chamberofcommerce.com","superpages.com","porch.com","buildzoom.com",
+    "birdeye.com","loc8nearme.com"
   ];
   return !profileOnly.some(domain=>host===domain||host.endsWith("."+domain));
 }
