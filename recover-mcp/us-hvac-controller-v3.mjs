@@ -129,6 +129,12 @@ async function fetchZipAreas(){
 const redis=createClient({url:REDIS_URL}); redis.on("error",e=>console.error("Redis error",e)); await redis.connect();
 const areas=await fetchZipAreas(); const scopeSet=campaignLeadSetKey(profileJob); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0); let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pass")||1));
+const hybridResetDone=String(await redis.hGet(CONTROLLER_KEY,"hybrid_zip_v1")||"")==="1";
+if(coveragePass>=4&&!hybridResetDone){
+  cursor=0;
+  await redis.hSet(CONTROLLER_KEY,{cursor:"0",hybrid_zip_v1:"1"});
+  console.log(JSON.stringify({event:"hybrid_zip_coverage_reset",coveragePass,cursor}));
+}
 console.log("US HVAC ZIP controller v3 started",JSON.stringify({areas:areas.length,target:TARGET_TOTAL,scopeSet,cursor,targetPerArea:TARGET_PER_AREA,maxRounds:MAX_ROUNDS,depth:DEPTH,queueHighWater:QUEUE_HIGH_WATER,queueLowWater:QUEUE_LOW_WATER,seedBatchSize:SEED_BATCH_SIZE,coveragePass,partitioning:"state>city>zip",scheduler,enforceNyFirst:ENFORCE_NY_FIRST}));
 
 async function parkNySurplus(){
@@ -175,6 +181,12 @@ async function upgradeQueuedNationalJobs(){
     job.target=Math.min(Number(job.target||TARGET_PER_AREA),TARGET_PER_AREA);
     const passMatch=String(job.coverage_pass||"").match(/p(\d+)$/);
     const pass=Number(passMatch?.[1]||1);
+    if(pass>=3&&Number(job.source_population||0)>=10000){
+      const zip=String(job.partition_zip||job.source_zip||"").trim();
+      const city=String(job.partition_city||"").trim();
+      const state=String(job.partition_state||"").trim();
+      if(zip&&city&&state) job.location=`${zip} ${city}, ${state}`;
+    }
     if(pass>=3&&Number(job.source_population||0)<10000){
       const city=String(job.partition_city||"").trim();
       const state=String(job.partition_state||"").trim();
