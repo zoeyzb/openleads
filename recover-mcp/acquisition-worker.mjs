@@ -855,6 +855,13 @@ async function processAcquisition(id) {
 }
 
 async function recoverInterrupted() {
+  const lockKey="recover:worker:global-recovery-lock";
+  const lockToken=randomUUID();
+  const locked=await redis.set(lockKey,lockToken,{NX:true,EX:90});
+  if(!locked){
+    console.log(JSON.stringify({event:"recover_interrupted_skipped",reason:"recovery_lock_busy"}));
+    return;
+  }
   const ids=await redis.sMembers("recover:acq:index");
   const now=Date.now();
   const [pausedNational,pausedNySurplus,pausedLegacy]=await Promise.all([
@@ -891,6 +898,10 @@ async function recoverInterrupted() {
     } catch {}
   }
   console.log(JSON.stringify({event:"recover_interrupted_complete",recovered,skippedParked,parkedSnapshot:parked.size}));
+  try {
+    const owner=await redis.get(lockKey);
+    if(owner===lockToken) await redis.del(lockKey);
+  } catch {}
 }
 
 function beginShutdown(signal) {
