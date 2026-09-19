@@ -371,6 +371,9 @@ const HOME_COMFORT_QUERIES=[
   "heat pump repair service",
   "water heater repair service",
   "water heater installation",
+  "drain cleaning service",
+  "sewer repair service",
+  "pipe repair service",
   "geothermal heating contractor",
   "indoor air quality service",
   "thermostat installation service"
