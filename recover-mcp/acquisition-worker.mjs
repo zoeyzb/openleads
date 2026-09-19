@@ -729,7 +729,7 @@ async function processAcquisition(id) {
       const querySeed=`${String(job.location||job.id||"")}|${String(job.coverage_pass||"pass1")}`;
       for (const ch of querySeed) hash=(hash*31+ch.charCodeAt(0))>>>0;
       const passNum=Number(String(job.coverage_pass||"").match(/p(\\d+)$/)?.[1]||1);
-      const bundleTarget=passNum>=5 ? 4 : passNum>=4 ? 2 : 3;
+      const bundleTarget=passNum>=4 ? 2 : 3;
       const bundleCount=configuredMaxRounds===1 ? Math.min(bundleTarget,variants.length) : Math.min(2,variants.length);
       const exploitCount=passNum>=4 ? Math.min(1,bundleCount) : Math.min(2,bundleCount);
       const chosen=variants.slice(0,exploitCount);
@@ -754,7 +754,7 @@ async function processAcquisition(id) {
         ? (currentCoveragePass>=5 ? (denseArea?8:5) : 6)
         : MAPS_ROUND_DEPTH_CAP;
       const fastNyMaxTime=isFastHomeService
-        ? (currentCoveragePass>=5 ? (denseArea?90:55) : 60)
+        ? (currentCoveragePass>=5 ? (denseArea?120:75) : 60)
         : MAPS_ROUND_MAX_TIME_SECONDS;
       const mapsKeywords=(isFastHomeService && configuredMaxRounds===1) ? variants : [variants[round]];
       job.current_query_families=mapsKeywords.map(queryFamily);
@@ -779,7 +779,8 @@ async function processAcquisition(id) {
         await waitForMaps(mapsJobId,job,mapsBase);
       } catch (error) {
         const mapsError=String(error?.message||error);
-        const transportFailed=isRetryableError(error);
+        const explicitJobTimeout=/Maps job .* timed out|Maps job .* timeout|timed out$/i.test(mapsError);
+        const transportFailed=!explicitJobTimeout && isRetryableError(error);
         if (/timed out|lost after runtime restart|Maps job .* failed:/i.test(mapsError) || transportFailed) {
           const lost=/lost after runtime restart/i.test(mapsError);
           const jobFailed=/Maps job .* failed:/i.test(mapsError);
