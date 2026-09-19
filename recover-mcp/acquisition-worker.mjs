@@ -429,9 +429,10 @@ async function orderVariantsByNetNewYield(redis,variants=[]){
     const duplicates=Number(dupRows?.[i]||0);
     const avgNew=attempts?netNew/attempts:0;
     const dupRate=(netNew+duplicates)?duplicates/(netNew+duplicates):0;
-    // Unexplored families stay competitive so the system never locks itself
-    // permanently into yesterday's winners.
-    const score=attempts<4 ? 100-attempts : avgNew*12-(dupRate*4);
+    // Prefer families with demonstrated permanent net-new yield. Keep a small
+    // exploration bonus for untested families, but do not let them outrank
+    // proven winners by default.
+    const score=attempts===0 ? 3.5 : (avgNew*20)-(dupRate*2)+(attempts<4?1:0);
     return {query,score,attempts};
   }).sort((a,b)=>b.score-a.score||a.attempts-b.attempts).map(x=>x.query);
 }
