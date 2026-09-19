@@ -175,7 +175,7 @@ async function upgradeQueuedNationalJobs(){
     job.target=Math.min(Number(job.target||TARGET_PER_AREA),TARGET_PER_AREA);
     const passMatch=String(job.coverage_pass||"").match(/p(\d+)$/);
     const pass=Number(passMatch?.[1]||1);
-    if(pass>=3){
+    if(pass>=3&&Number(job.source_population||0)<10000){
       const city=String(job.partition_city||"").trim();
       const state=String(job.partition_state||"").trim();
       const cityKey=(pass+"|"+state+"|"+city).toLowerCase();
@@ -208,7 +208,7 @@ async function seedOne(area){
   const id=randomUUID(),now=new Date().toISOString(); const shard_id=shardIdForArea(area,SHARD_COUNT);
   const partitionState=area.partition_state||area.state;
   const partitionCity=area.partition_city||area.city;
-  const yieldField=[String(partitionState||"").toLowerCase(),String(partitionCity||"").toLowerCase(),coveragePass>=3?"*":String(area.partition_zip||area.zip||"").toLowerCase()].join("|");
+  const denseLaterPass=coveragePass>=3&&Number(area.population||0)>=10000;\n  const yieldField=[String(partitionState||"").toLowerCase(),String(partitionCity||"").toLowerCase(),coveragePass>=3&&!denseLaterPass?"*":String(area.partition_zip||area.zip||"").toLowerCase()].join("|");
   if(coveragePass>=2 && yieldField!=="||"){
     const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
       redis.hGet("recover:yield:area:attempts",yieldField),
