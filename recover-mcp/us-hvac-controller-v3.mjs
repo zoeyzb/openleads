@@ -220,15 +220,21 @@ async function seedOne(area){
       return false;
     }
   }
+  let cityPassKey="",cityField="",cityMarked=false;
   if(coveragePass>=3){
-    const cityField=`${String(partitionState||"").toLowerCase()}|${String(partitionCity||"").toLowerCase()}`;
-    const cityPassKey=`recover:coverage:city-pass:${coveragePass}`;
+    cityField=`${String(partitionState||"").toLowerCase()}|${String(partitionCity||"").toLowerCase()}`;
+    cityPassKey=`recover:coverage:city-pass:${coveragePass}`;
     const firstForCity=await redis.sAdd(cityPassKey,cityField);
     await redis.expire(cityPassKey,TTL);
     if(!firstForCity) return false;
+    cityMarked=true;
   }
   const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:area.location,target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,created_at:now,updated_at:now};
-  const claim=await claimCoverage(redis,job,{source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,partition_state:job.partition_state,partition_city:job.partition_city,coverage_pass:job.coverage_pass,shard_id}); if(!claim.claimed)return false;
+  const claim=await claimCoverage(redis,job,{source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,partition_state:job.partition_state,partition_city:job.partition_city,coverage_pass:job.coverage_pass,shard_id});
+  if(!claim.claimed){
+    if(cityMarked) await redis.sRem(cityPassKey,cityField);
+    return false;
+  }
   await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});await redis.sAdd("recover:acq:index",id);await redis.sAdd("recover:batch:"+BATCH_ID+":jobs",id);await redis.expire("recover:batch:"+BATCH_ID+":jobs",TTL);if(await redis.lPos(ACTIVE_QUEUE,id)===null)await redis.lPush(ACTIVE_QUEUE,id);return true;
 }
 
