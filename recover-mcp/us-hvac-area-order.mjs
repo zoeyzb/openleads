@@ -28,6 +28,12 @@ export function locationForCoveragePass(area={},coveragePass=1) {
   // so we discover businesses missed by ZIP-ranked Maps results without
   // repeating the same ZIP query forever.
   if(pass>=3){
+    const population=Number(area?.population||0);
+    // Dense ZIPs get ZIP-scoped discovery on later passes so large metros can
+    // surface neighborhood businesses beyond the same city-wide top results.
+    if(population>=10000){
+      return String(area?.location||[area?.zip,area?.city,area?.state].filter(Boolean).join(' ')).trim();
+    }
     const city=String(area?.city||'').trim();
     const state=String(area?.state||'').trim();
     if(city&&state) return `${city}, ${state}`;
