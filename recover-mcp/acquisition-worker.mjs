@@ -454,7 +454,27 @@ const HOME_COMFORT_QUERIES=[
   "water heater contractor",
   "drain service",
   "sewer service",
-  "refrigeration service"
+  "refrigeration service",
+  "local HVAC company",
+  "HVAC service company",
+  "HVAC repair contractor",
+  "heating repair contractor",
+  "heating service company",
+  "air conditioner repair",
+  "air conditioner service",
+  "AC service company",
+  "furnace service",
+  "boiler service",
+  "ductwork contractor",
+  "ductwork installation",
+  "mini split contractor",
+  "local plumber",
+  "plumbing company",
+  "plumbing service company",
+  "emergency plumbing service",
+  "water heater service",
+  "drain contractor",
+  "sewer contractor"
 ];
 const queryVariants=(industry,location)=>{
   if (isHomeComfortTarget(industry)) return HOME_COMFORT_QUERIES.map(q=>`${q} in ${location}`);
