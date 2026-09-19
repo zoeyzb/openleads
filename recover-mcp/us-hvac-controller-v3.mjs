@@ -178,7 +178,7 @@ async function upgradeQueuedNationalJobs(){
     if(pass>=3){
       const city=String(job.partition_city||"").trim();
       const state=String(job.partition_state||"").trim();
-      const cityKey=(state+"|"+city).toLowerCase();
+      const cityKey=(pass+"|"+state+"|"+city).toLowerCase();
       if(city&&state){
         if(seenLaterPassCities.has(cityKey)){
           await redis.lRem(ACTIVE_QUEUE,0,String(id));
