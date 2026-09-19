@@ -18,9 +18,12 @@ export function isCoreHomeServiceLead(lead={}){
   const evidence=[name,desc].filter(Boolean).join(" ");
 
   if(REJECT_CATEGORY.test(category)) return false;
+  // A precise Google Maps service category is stronger evidence than generic
+  // words such as "construction" or "remodeling" appearing in the business
+  // name. This prevents valid plumbers/HVAC contractors from being discarded.
+  if(STRONG_CATEGORY.test(category)) return true;
   if(REJECT_ANYWHERE.test([category,name,desc].join(" "))) return false;
   if(/\b(supplier|supply|distributor|distributors|wholesale|manufacturer|parts|retail store|equipment store|warranty|septic|motors|construction|demolition|excavation|excavating|roofing|landscaping|remodeling|rental|rentals)\b/.test(category)) return false;
-  if(STRONG_CATEGORY.test(category)) return true;
 
   if(/\b(mechanical contractor|mechanical service|contractor|home service)\b/.test(category)){
     return SERVICE_SIGNAL.test(evidence);
