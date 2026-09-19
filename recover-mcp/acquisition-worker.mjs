@@ -182,15 +182,22 @@ function ownerNameFromLead(lead) {
 function dedupeRecords(records) {
   const seen=new Set(), out=[];
   for (const lead of records) {
-    const keys=[
-      lead.place_id && "place:"+lead.place_id,
-      lead.cid && "cid:"+lead.cid,
-      normalizeDomain(lead.website||lead.domain||"") && "domain:"+normalizeDomain(lead.website||lead.domain||""),
-      normalizePhone(lead.phone||"") && "phone:"+normalizePhone(lead.phone||""),
-      "na:"+normalizeText((lead.name||lead.title||"")+"|"+(lead.address||""))
-    ].filter(Boolean);
-    if (keys.some(k=>seen.has(k))) continue;
-    keys.forEach(k=>seen.add(k)); out.push(lead);
+    const place=String(lead.place_id||"").trim();
+    const cid=String(lead.cid||"").trim();
+    const dataId=String(lead.data_id||lead.dataid||"").trim();
+    const nameAddr=normalizeText((lead.name||lead.title||"")+"|"+(lead.address||""));
+    const phone=normalizePhone(lead.phone||"");
+    // Prefer Maps-stable business identifiers. A shared phone number can belong
+    // to multiple branches, so do not collapse distinct CIDs/place IDs by phone.
+    const key=place ? "place:"+place
+      : cid ? "cid:"+cid
+      : dataId ? "data:"+dataId
+      : nameAddr && String(lead.address||"").trim() ? "na:"+nameAddr
+      : phone ? "phone:"+phone
+      : "";
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(lead);
   }
   return out;
 }
@@ -266,6 +273,8 @@ function compactLead(lead) {
     owner_name:ownerNameFromLead(lead),
     google_maps_url:lead.link||lead.google_maps_url||"",
     place_id:lead.place_id||"",
+    cid:lead.cid||"",
+    data_id:lead.data_id||lead.dataid||"",
     review_count:Number(lead.review_count||lead.reviews||0),
     review_rating:Number(lead.review_rating||lead.rating||0),
     latitude:lead.latitude?Number(lead.latitude):null,
@@ -281,11 +290,15 @@ function compactLead(lead) {
 
 function permanentLeadIdentity(lead) {
   if (lead.place_id) return "place:"+String(lead.place_id).trim();
+  if (lead.cid) return "cid:"+String(lead.cid).trim();
+  if (lead.data_id) return "data:"+String(lead.data_id).trim();
   const domain=normalizeDomain(lead.website||"");
   if (domain) return "domain:"+domain;
+  const nameAddr=normalizeText((lead.name||lead.title||"")+"|"+(lead.address||""));
+  if (nameAddr && String(lead.address||"").trim()) return "nameaddr:"+nameAddr;
   const phone=normalizePhone(lead.phone||"");
   if (phone) return "phone:"+phone;
-  return "nameaddr:"+normalizeText((lead.name||lead.title||"")+"|"+(lead.address||""));
+  return "nameaddr:"+nameAddr;
 }
 function areaYieldField(job={}) {
   const pass=Number(String(job.coverage_pass||"").match(/p(\d+)$/)?.[1]||1);
