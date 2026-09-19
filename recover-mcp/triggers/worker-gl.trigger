@@ -12,3 +12,4 @@ canary qualification funnel instrumentation 2026-09-20
 canary same-city-before-ZIP matcher 2026-09-20
 rollout Maps stability fix to g-l 2026-09-20
 canary capped-nearby fallback + aggressive duplicate-query retirement 2026-09-20
+canary 25-mile ZIP-centroid matcher 2026-09-20
