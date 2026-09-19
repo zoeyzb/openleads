@@ -158,9 +158,47 @@ async function parkLegacyNationalForV2(){
 }
 
 async function upgradeQueuedNationalJobs(){
-  const ids=await redis.lRange(ACTIVE_QUEUE,0,-1);let upgraded=0,skipped=0;
-  for(const id of ids){const raw=await redis.get("recover:acq:"+id);if(!raw){skipped++;continue;}let job;try{job=JSON.parse(raw)}catch{skipped++;continue;}if(String(job.status||"")!=="queued"||Number(job.round||0)>0){skipped++;continue;}const industry=String(job.industry||"").toLowerCase();if(!/hvac|home.comfort|home.service|heating|cooling|plumb/.test(industry)){skipped++;continue;}job.search_profile="core-home-service";job.max_rounds=Math.min(Number(job.max_rounds||MAX_ROUNDS),MAX_ROUNDS);job.depth=Math.min(Number(job.depth||DEPTH),DEPTH);job.target=Math.min(Number(job.target||TARGET_PER_AREA),TARGET_PER_AREA);job.updated_at=new Date().toISOString();await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});upgraded++;}
-  console.log(JSON.stringify({event:"legacy_queue_upgraded",queue:ids.length,upgraded,skipped})); return upgraded;
+  const ids=await redis.lRange(ACTIVE_QUEUE,0,-1);
+  let upgraded=0,skipped=0,cityDuplicatesParked=0;
+  const seenLaterPassCities=new Set();
+  for(const id of ids){
+    const raw=await redis.get("recover:acq:"+id);
+    if(!raw){skipped++;continue;}
+    let job;try{job=JSON.parse(raw)}catch{skipped++;continue;}
+    if(String(job.status||"")!=="queued"||Number(job.round||0)>0){skipped++;continue;}
+    const industry=String(job.industry||"").toLowerCase();
+    if(!/hvac|home.comfort|home.service|heating|cooling|plumb/.test(industry)){skipped++;continue;}
+    job.search_profile="core-home-service";
+    job.max_rounds=Math.min(Number(job.max_rounds||MAX_ROUNDS),MAX_ROUNDS);
+    job.depth=Math.min(Number(job.depth||DEPTH),DEPTH);
+    job.target=Math.min(Number(job.target||TARGET_PER_AREA),TARGET_PER_AREA);
+    const passMatch=String(job.coverage_pass||"").match(/p(\d+)$/);
+    const pass=Number(passMatch?.[1]||1);
+    if(pass>=3){
+      const city=String(job.partition_city||"").trim();
+      const state=String(job.partition_state||"").trim();
+      const cityKey=(state+"|"+city).toLowerCase();
+      if(city&&state){
+        if(seenLaterPassCities.has(cityKey)){
+          await redis.lRem(ACTIVE_QUEUE,0,String(id));
+          job.status="parked";
+          job.phase="parked_duplicate_city_pass";
+          job.reason="duplicate_city_in_later_coverage_pass";
+          job.updated_at=new Date().toISOString();
+          await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});
+          cityDuplicatesParked++;
+          continue;
+        }
+        seenLaterPassCities.add(cityKey);
+        job.location=`${city}, ${state}`;
+      }
+    }
+    job.updated_at=new Date().toISOString();
+    await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});
+    upgraded++;
+  }
+  console.log(JSON.stringify({event:"legacy_queue_upgraded",queue:ids.length,upgraded,skipped,cityDuplicatesParked}));
+  return upgraded;
 }
 
 await upgradeQueuedNationalJobs(); await parkLegacyNationalForV2();
