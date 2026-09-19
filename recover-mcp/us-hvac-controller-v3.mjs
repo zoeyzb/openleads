@@ -234,7 +234,7 @@ async function seedOne(area){
     }
   }
   let cityPassKey="",cityField="",cityMarked=false;
-  if(coveragePass>=3){
+  if(coveragePass>=3&&!denseLaterPass){
     cityField=`${String(partitionState||"").toLowerCase()}|${String(partitionCity||"").toLowerCase()}`;
     cityPassKey=`recover:coverage:city-pass:${coveragePass}`;
     const firstForCity=await redis.sAdd(cityPassKey,cityField);
