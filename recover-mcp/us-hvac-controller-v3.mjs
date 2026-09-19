@@ -20,6 +20,7 @@ const scheduler=deriveSchedulerCapacity({
   seedBatchSize:process.env.US_HVAC_SEED_BATCH_SIZE,
 });
 const { queueHighWater:QUEUE_HIGH_WATER, seedBatchSize:SEED_BATCH_SIZE, shardCount:SHARD_COUNT }=scheduler;
+const QUEUE_LOW_WATER=Math.max(1,Math.floor(QUEUE_HIGH_WATER*0.75));
 const TARGET_PER_AREA=Math.min(Math.max(Number(process.env.US_HVAC_ZIP_TARGET_PER_AREA||18),1),36);
 const DEPTH=Math.min(Math.max(Number(process.env.US_HVAC_ZIP_DEPTH||6),1),8);
 const MAX_ROUNDS=Math.min(Math.max(Number(process.env.US_HVAC_ZIP_MAX_ROUNDS||1),1),2);
@@ -128,7 +129,7 @@ async function fetchZipAreas(){
 const redis=createClient({url:REDIS_URL}); redis.on("error",e=>console.error("Redis error",e)); await redis.connect();
 const areas=await fetchZipAreas(); const scopeSet=campaignLeadSetKey(profileJob); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0); let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pass")||1));
-console.log("US HVAC ZIP controller v3 started",JSON.stringify({areas:areas.length,target:TARGET_TOTAL,scopeSet,cursor,targetPerArea:TARGET_PER_AREA,maxRounds:MAX_ROUNDS,depth:DEPTH,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,coveragePass,partitioning:"state>city>zip",scheduler,enforceNyFirst:ENFORCE_NY_FIRST}));
+console.log("US HVAC ZIP controller v3 started",JSON.stringify({areas:areas.length,target:TARGET_TOTAL,scopeSet,cursor,targetPerArea:TARGET_PER_AREA,maxRounds:MAX_ROUNDS,depth:DEPTH,queueHighWater:QUEUE_HIGH_WATER,queueLowWater:QUEUE_LOW_WATER,seedBatchSize:SEED_BATCH_SIZE,coveragePass,partitioning:"state>city>zip",scheduler,enforceNyFirst:ENFORCE_NY_FIRST}));
 
 async function parkNySurplus(){
   let moved=0,missing=0,already=0;
@@ -240,8 +241,9 @@ while(true){
     if(pausedNational>0){const capacity=Math.max(0,QUEUE_HIGH_WATER-queue);if(capacity>0){const resumed=await resumePausedNational(Math.min(capacity,SEED_BATCH_SIZE));console.log(JSON.stringify({event:"national_resume_parked",nyScoped,nyTarget:NY_FIRST_MILESTONE,queue_before:queue,capacity,...resumed}));}else console.log(JSON.stringify({event:"national_resume_backpressure",nyScoped,queue,pausedNational}));await new Promise(r=>setTimeout(r,LOOP_MS));continue;}
     if(scoped>=TARGET_TOTAL){console.log(JSON.stringify({event:"target_reached",scoped,queue,cursor}));await new Promise(r=>setTimeout(r,LOOP_MS));continue;}
     if(cursor>=areas.length&&scoped<TARGET_TOTAL){coveragePass++;cursor=0;await redis.hSet(CONTROLLER_KEY,{cursor:"0",coverage_pass:String(coveragePass)});console.log(JSON.stringify({event:"coverage_pass_advanced",coveragePass,scoped,area_count:areas.length}));}
-    if(queue>=QUEUE_HIGH_WATER){console.log(JSON.stringify({event:"backpressure",scoped,queue,cursor,queueHighWater:QUEUE_HIGH_WATER}));await new Promise(r=>setTimeout(r,LOOP_MS));continue;}
-    let seeded=0,checked=0;while(seeded<SEED_BATCH_SIZE&&cursor<areas.length&&queue+seeded<QUEUE_HIGH_WATER){const area=areas[cursor++];checked++;if(await seedOne(area))seeded++;await redis.hSet(CONTROLLER_KEY,"cursor",String(cursor));}
+    if(queue>=QUEUE_LOW_WATER){console.log(JSON.stringify({event:"backpressure",scoped,queue,cursor,queueHighWater:QUEUE_HIGH_WATER,queueLowWater:QUEUE_LOW_WATER}));await new Promise(r=>setTimeout(r,LOOP_MS));continue;}
+    const refillLimit=Math.min(SEED_BATCH_SIZE,Math.max(0,QUEUE_HIGH_WATER-queue));
+    let seeded=0,checked=0;while(seeded<refillLimit&&cursor<areas.length&&queue+seeded<QUEUE_HIGH_WATER){const area=areas[cursor++];checked++;if(await seedOne(area))seeded++;await redis.hSet(CONTROLLER_KEY,"cursor",String(cursor));}
     console.log(JSON.stringify({event:"seed_cycle",scoped,queue_before:queue,checked,seeded,cursor,coveragePass,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,shardCount:SHARD_COUNT,partition_state:String(areas[Math.max(0,cursor-1)]?.partition_state||""),partition_city:String(areas[Math.max(0,cursor-1)]?.partition_city||""),area_count:areas.length}));
     if(cursor>=areas.length)console.log(JSON.stringify({event:"coverage_pass_complete",scoped,cursor,coveragePass,area_count:areas.length}));
   }catch(error){console.error("Controller loop error",error);}
