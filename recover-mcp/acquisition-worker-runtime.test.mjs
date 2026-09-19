@@ -4,14 +4,14 @@ import {
   LEGACY_FAST_WAIT,
   LEGACY_LANE_COOLDOWN,
   LEGACY_MAPS_DONE,
-  LEGACY_QUEUE_POLL,
   LEGACY_STATUS_FAILURE,
+  LEGACY_TIMEOUT_COOLDOWN,
   LEGACY_WORKER_LOOP,
   patchAcquisitionWorkerSource,
 } from "./acquisition-worker-runtime.mjs";
 
 function fixture(){
-  return `before\n${LEGACY_FAST_WAIT}\n${LEGACY_LANE_COOLDOWN}\n${LEGACY_MAPS_DONE}\n${LEGACY_STATUS_FAILURE}\n${LEGACY_WORKER_LOOP}\nafter`;
+  return `before\n${LEGACY_FAST_WAIT}\n${LEGACY_LANE_COOLDOWN}\n${LEGACY_TIMEOUT_COOLDOWN}\n${LEGACY_MAPS_DONE}\n${LEGACY_STATUS_FAILURE}\n${LEGACY_WORKER_LOOP}\nafter`;
 }
 
 test("extends fast Maps status budget beyond backend 180-second minimum",()=>{
@@ -27,6 +27,13 @@ test("caps transient Maps lane cooldown at two minutes and avoids duplicate esca
   assert.match(patched,/Math\.min\(120,15\*\(2\*\*Math\.min\(3/);
   assert.doesNotMatch(patched,/Math\.min\(900,75\*/);
   assert.match(patched,/await clearMapsLaneFailure\(mapsBase\)/);
+});
+
+
+test("uses adaptive cooldown for timed-out fast Maps lanes",()=>{
+  const patched=patchAcquisitionWorkerSource(fixture());
+  assert.match(patched,/if \(fastProfile\) await markMapsLaneUnavailable\(mapsBase\);/);
+  assert.doesNotMatch(patched,/markMapsLaneUnavailable\(mapsBase,75\)/);
 });
 
 test("keeps an existing Maps job alive when status reads fail transiently",()=>{
