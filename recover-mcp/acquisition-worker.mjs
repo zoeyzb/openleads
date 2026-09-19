@@ -685,17 +685,22 @@ async function processAcquisition(id) {
         const transportFailed=isRetryableError(error);
         if (/timed out|lost after runtime restart|Maps job .* failed:/i.test(mapsError) || transportFailed) {
           const lost=/lost after runtime restart/i.test(mapsError);
-          const backendFailed=/Maps job .* failed:/i.test(mapsError) || transportFailed;
-          if (backendFailed || lost) await markMapsLaneUnavailable(mapsBase);
-          job.maps_jobs[job.maps_jobs.length-1].status=lost?"lost_after_restart":backendFailed?"backend_unavailable":"timed_out";
+          const jobFailed=/Maps job .* failed:/i.test(mapsError);
+          const laneFailed=transportFailed || lost;
+          // A scraper job can fail for a query/location-specific reason while
+          // the Maps service itself is healthy. Only cool the whole lane for
+          // transport/lost-state failures.
+          if (laneFailed) await markMapsLaneUnavailable(mapsBase);
+          job.maps_jobs[job.maps_jobs.length-1].status=lost?"lost_after_restart":laneFailed?"backend_unavailable":jobFailed?"job_failed":"timed_out";
           job.maps_jobs[job.maps_jobs.length-1].error=mapsError;
-          job.phase=lost?"maps_restart_continue":backendFailed?"maps_backend_unavailable_continue":"maps_timeout_continue";
+          job.phase=lost?"maps_restart_continue":laneFailed?"maps_backend_unavailable_continue":jobFailed?"maps_job_failed_continue":"maps_timeout_continue";
           await saveJob(job);
           console.warn(
             lost?"Acquisition Maps state reset; continuing next round":
-            backendFailed?"Acquisition Maps lane unavailable; continuing next round":
+            laneFailed?"Acquisition Maps lane unavailable; continuing next round":
+            jobFailed?"Acquisition Maps job failed; retrying another lane":
             "Acquisition maps timeout; continuing next round",
-            id,mapsJobId
+            id,mapsJobId,mapsError
           );
           job.round_retry_counts=job.round_retry_counts||{};
           const retryCount=Number(job.round_retry_counts[String(round)]||0);
