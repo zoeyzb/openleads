@@ -241,6 +241,22 @@ function matchesRequestedIndustry(lead, industry) {
   const tokens=target.split(" ").filter(x=>x.length>=4);
   return tokens.length===0 || tokens.some(t=>hay.includes(t));
 }
+function qualificationFunnel(records=[],job={}){
+  const counts={raw:records.length,location:0,industry:0,owned_website:0,phone:0,email:0,contact:0,include_website:0,score:0,accepted:0};
+  for(const lead of records){
+    if(!matchesAcquisitionLocation(lead,job)){counts.location++;continue;}
+    if(!matchesRequestedIndustry(lead,job.industry)){counts.industry++;continue;}
+    if(job.require_no_website&&isOwnedBusinessWebsite(lead.website)){counts.owned_website++;continue;}
+    if(job.require_phone&&!lead.phone){counts.phone++;continue;}
+    if(job.require_email&&!normalizeEmails(lead.emails||lead.email||"").length){counts.email++;continue;}
+    if(job.require_contact&&!lead.phone&&!normalizeEmails(lead.emails||lead.email||"").length){counts.contact++;continue;}
+    if(job.include_no_website===false&&!lead.website){counts.include_website++;continue;}
+    if(scoreLead(lead).score<Number(job.min_score||0)){counts.score++;continue;}
+    counts.accepted++;
+  }
+  return counts;
+}
+
 function scoreLead(lead) {
   let score=0; const reasons=[]; const add=(p,r)=>{score+=p;reasons.push({points:p,reason:r});};
   const category=normalizeText(lead.category||lead.industry||"");
@@ -869,6 +885,9 @@ async function processAcquisition(id) {
         });
         job.phase="qualification";
       }
+
+      const funnel=qualificationFunnel(leads,job);
+      console.log(JSON.stringify({event:"qualification_funnel",acquisition_id:id,location:job.location,coverage_pass:job.coverage_pass,...funnel}));
 
       leads=leads
         .filter(lead=>matchesAcquisitionLocation(lead,job))
