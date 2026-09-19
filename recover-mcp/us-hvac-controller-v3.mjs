@@ -208,7 +208,7 @@ async function seedOne(area){
   const id=randomUUID(),now=new Date().toISOString(); const shard_id=shardIdForArea(area,SHARD_COUNT);
   const partitionState=area.partition_state||area.state;
   const partitionCity=area.partition_city||area.city;
-  const yieldField=[String(partitionState||"").toLowerCase(),String(partitionCity||"").toLowerCase(),String(area.partition_zip||area.zip||"").toLowerCase()].join("|");
+  const yieldField=[String(partitionState||"").toLowerCase(),String(partitionCity||"").toLowerCase(),coveragePass>=3?"*":String(area.partition_zip||area.zip||"").toLowerCase()].join("|");
   if(coveragePass>=2 && yieldField!=="||"){
     const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
       redis.hGet("recover:yield:area:attempts",yieldField),
