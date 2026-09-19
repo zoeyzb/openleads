@@ -423,18 +423,22 @@ async function orderVariantsByNetNewYield(redis,variants=[]){
     redis.hmGet("recover:yield:query:new",families),
     redis.hmGet("recover:yield:query:duplicates",families),
   ]);
-  return variants.map((query,i)=>{
+  const ranked=variants.map((query,i)=>{
     const attempts=Number(attemptsRows?.[i]||0);
     const netNew=Number(newRows?.[i]||0);
     const duplicates=Number(dupRows?.[i]||0);
     const avgNew=attempts?netNew/attempts:0;
     const dupRate=(netNew+duplicates)?duplicates/(netNew+duplicates):0;
-    // Prefer families with demonstrated permanent net-new yield. Keep a small
-    // exploration bonus for untested families, but do not let them outrank
-    // proven winners by default.
+    const saturated=attempts>=10 && avgNew<0.10 && dupRate>0.80;
+    // Prefer demonstrated permanent net-new yield, while retiring search
+    // families that have repeatedly produced almost nothing but duplicates.
     const score=attempts===0 ? 3.5 : (avgNew*20)-(dupRate*2)+(attempts<4?1:0);
-    return {query,score,attempts};
-  }).sort((a,b)=>b.score-a.score||a.attempts-b.attempts).map(x=>x.query);
+    return {query,score,attempts,saturated};
+  });
+  const active=ranked.filter(x=>!x.saturated);
+  return (active.length>=3?active:ranked)
+    .sort((a,b)=>b.score-a.score||a.attempts-b.attempts)
+    .map(x=>x.query);
 }
 async function recordQueryYield(redis,queries=[],stats={},seed=""){
   const families=[...new Set((queries||[]).map(queryFamily).filter(Boolean))];
@@ -653,8 +657,8 @@ async function processAcquisition(id) {
       await saveJob(job);
 
       const currentCoveragePass=Number(String(job.coverage_pass||"").match(/p(\d+)$/)?.[1]||1);
-      const fastNyDepthCap=isFastHomeService ? (currentCoveragePass>=4 ? 5 : 6) : MAPS_ROUND_DEPTH_CAP;
-      const fastNyMaxTime=isFastHomeService ? (currentCoveragePass>=4 ? 45 : 60) : MAPS_ROUND_MAX_TIME_SECONDS;
+      const fastNyDepthCap=isFastHomeService ? (currentCoveragePass>=5 ? 8 : currentCoveragePass>=4 ? 6 : 6) : MAPS_ROUND_DEPTH_CAP;
+      const fastNyMaxTime=isFastHomeService ? (currentCoveragePass>=5 ? 90 : currentCoveragePass>=4 ? 60 : 60) : MAPS_ROUND_MAX_TIME_SECONDS;
       const mapsKeywords=(isFastHomeService && configuredMaxRounds===1) ? variants : [variants[round]];
       job.current_query_families=mapsKeywords.map(queryFamily);
       const mapsPayload={
