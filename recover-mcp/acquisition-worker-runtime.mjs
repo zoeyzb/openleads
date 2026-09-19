@@ -93,11 +93,21 @@ export const CITY_SCOPED_LOCATION_MATCH = `function matchesAcquisitionLocation(l
       ? leadRegion===requestedState || leadRegion.split(" ").includes(requestedState)
       : new RegExp("\\\\b"+requestedState.replace(/[^a-z]/g,"")+"\\\\b").test(leadAddress));
     if (!stateOk) return false;
-    // ZIP queries often surface legitimate businesses elsewhere in the same city.
-    // Accept same-city matches first; exact ZIP is only a fallback when city data is missing.
     if (requestedCity) {
       if (leadCity) return leadCity===requestedCity;
       if (leadAddress.includes(requestedCity)) return true;
+    }
+    const sourceLat=Number(job?.source_latitude);
+    const sourceLon=Number(job?.source_longitude);
+    const leadLat=Number(lead.latitude||lead.lat);
+    const leadLon=Number(lead.longitude||lead.lng||lead.lon);
+    if (Number.isFinite(sourceLat)&&Number.isFinite(sourceLon)&&Number.isFinite(leadLat)&&Number.isFinite(leadLon)) {
+      const toRad=d=>d*Math.PI/180;
+      const dLat=toRad(leadLat-sourceLat);
+      const dLon=toRad(leadLon-sourceLon);
+      const a=Math.sin(dLat/2)**2+Math.cos(toRad(sourceLat))*Math.cos(toRad(leadLat))*Math.sin(dLon/2)**2;
+      const miles=3958.8*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+      if (miles<=25) return true;
     }
     if (zipScoped) {
       if (leadZip) return leadZip===requestedZip;
