@@ -5,7 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 export const LEGACY_FAST_WAIT = "const deadline=Date.now()+(fastProfile ? 90*1000 : 20*60*1000);";
-export const RESILIENT_FAST_WAIT = "const requestedMaxSeconds=Number(acquisition?.maps_round_max_time_seconds||acquisition?.max_time_seconds||60);\n  const fastWaitMs=(Math.max(180,requestedMaxSeconds)+45)*1000;\n  const deadline=Date.now()+(fastProfile ? fastWaitMs : 20*60*1000);";
+export const RESILIENT_FAST_WAIT = "const requestedMaxSeconds=Number(acquisition?.maps_round_max_time_seconds||acquisition?.max_time_seconds||60);\n  const fastWaitMs=(Math.max(120,requestedMaxSeconds)+30)*1000;\n  const deadline=Date.now()+(fastProfile ? fastWaitMs : 20*60*1000);";
 
 export const LEGACY_LANE_COOLDOWN = `function mapsLaneCooldownKey(url) {
   return "recover:maps:lane:cooldown:"+Buffer.from(String(url||"")).toString("base64url");
@@ -40,6 +40,9 @@ async function clearMapsLaneFailure(url) {
   if (!url) return;
   try { await redis.del(mapsLaneFailureKey(url),mapsLaneCooldownKey(url)); } catch {}
 }`;
+
+export const LEGACY_TIMEOUT_COOLDOWN = 'if (fastProfile) await markMapsLaneUnavailable(mapsBase,75);';
+export const ADAPTIVE_TIMEOUT_COOLDOWN = 'if (fastProfile) await markMapsLaneUnavailable(mapsBase);';
 
 export const LEGACY_MAPS_DONE = `console.log("Acquisition maps done", id, mapsJobId);`;
 export const RESILIENT_MAPS_DONE = `await clearMapsLaneFailure(mapsBase);\n      console.log("Acquisition maps done", id, mapsJobId);`;
@@ -145,12 +148,14 @@ export function patchAcquisitionWorkerSource(source) {
   const cooldownMatches = source.split(LEGACY_LANE_COOLDOWN).length - 1;
   const doneMatches = source.split(LEGACY_MAPS_DONE).length - 1;
   const statusFailureMatches = source.split(LEGACY_STATUS_FAILURE).length - 1;
+  const timeoutCooldownMatches = source.split(LEGACY_TIMEOUT_COOLDOWN).length - 1;
   const locationMatches = source.split(LEGACY_LOCATION_MATCH).length - 1;
   const loopMatches = source.split(LEGACY_WORKER_LOOP).length - 1;
   if (waitMatches !== 1) throw new Error(`expected exactly one legacy fast Maps wait expression, found ${waitMatches}`);
   if (cooldownMatches !== 1) throw new Error(`expected exactly one legacy Maps cooldown block, found ${cooldownMatches}`);
   if (doneMatches !== 1) throw new Error(`expected exactly one Maps completion marker, found ${doneMatches}`);
   if (statusFailureMatches !== 1) throw new Error(`expected exactly one Maps status failure block, found ${statusFailureMatches}`);
+  if (timeoutCooldownMatches !== 1) throw new Error(`expected exactly one timeout cooldown marker, found ${timeoutCooldownMatches}`);
   if (locationMatches !== 1) throw new Error(`expected exactly one acquisition location matcher, found ${locationMatches}`);
   if (loopMatches !== 1) throw new Error(`expected exactly one legacy worker loop, found ${loopMatches}`);
   const resilient = source
@@ -158,6 +163,7 @@ export function patchAcquisitionWorkerSource(source) {
     .replace(LEGACY_LANE_COOLDOWN, ADAPTIVE_LANE_COOLDOWN)
     .replace(LEGACY_MAPS_DONE, RESILIENT_MAPS_DONE)
     .replace(LEGACY_STATUS_FAILURE, RESILIENT_STATUS_FAILURE)
+    .replace(LEGACY_TIMEOUT_COOLDOWN, ADAPTIVE_TIMEOUT_COOLDOWN)
     .replace(LEGACY_LOCATION_MATCH, CITY_SCOPED_LOCATION_MATCH)
     .replace(LEGACY_WORKER_LOOP, CONCURRENT_WORKER_LOOP);
   return patchRawRetention(resilient);
