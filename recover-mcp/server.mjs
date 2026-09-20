@@ -1023,16 +1023,15 @@ function buildServer() {
         label: `Sheet ${tab_name} rows ${start_row}-${end_row}`
       });
 
-      const acceptedPhones = new Set((preview.recipients || []).map((row) => row.phone));
       const invalidByIndex = new Map((preview.invalid || []).map((row) => [row.index, row.reason]));
       const suppressedByIndex = new Map((preview.suppressed || []).map((row) => [row.index, row.reason]));
       const updates = ready.map((row, index) => {
-        const normalizedPhone = normalizeE164(row.phone);
         const reason = invalidByIndex.get(index) || suppressedByIndex.get(index) || "";
+        const accepted = !reason;
         return {
           row: row.row,
-          status: acceptedPhones.has(normalizedPhone) ? "Prepared" : `Blocked - ${reason || "Not accepted"}`,
-          batch_id: acceptedPhones.has(normalizedPhone) ? preview.id : "",
+          status: accepted ? "Prepared" : `Blocked - ${reason || "Not accepted"}`,
+          batch_id: accepted ? preview.id : "",
           updated_at: new Date().toISOString(),
           error: reason
         };
