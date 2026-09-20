@@ -229,6 +229,17 @@ async function upgradeQueuedNationalJobs(){
       job.query_family=latePassServiceFamily(job,pass);
     }
     const serviceFamily=String(job.query_family||"").trim().toLowerCase();
+    const minPopulation=minPopulationForCoveragePass(pass);
+    if(minPopulation>0&&Number(job.source_population||0)<minPopulation){
+      await redis.lRem(ACTIVE_QUEUE,0,String(id));
+      job.status="parked";
+      job.phase="parked_low_density_productive_wave";
+      job.reason="deferred_until_lower_density_coverage_phase";
+      job.updated_at=new Date().toISOString();
+      await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});
+      cityDuplicatesParked++;
+      continue;
+    }
     const yieldField=[partitionState.toLowerCase(),partitionCity.toLowerCase(),(cityScopedPass||pass>=3&&!denseLaterPass)?"*":partitionZip.toLowerCase(),cityScopedPass?serviceFamily:""].join("|");
     if(pass>=2&&yieldField!=="||"){
       const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
