@@ -9,3 +9,4 @@ rollout same-city-before-ZIP acquisition matcher to m-r 2026-09-20
 rollout Maps stability fix to m-r 2026-09-20
 rollout capped-nearby fallback + aggressive duplicate-query retirement to m-r 2026-09-20
 rollout current ZIP-centroid matcher + yield fixes to m-r 2026-09-20
+rollout one-job-per-lane stability profile to m-r 2026-09-20
