@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { claimCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead, isOwnedBusinessWebsite } from "./home-service-targeting.mjs";
 import { deriveSchedulerCapacity, shardIdForArea } from "./nationwide-shard-scheduler.mjs";
-import { latePassServiceFamily } from "./late-pass-service-families.mjs";
+import { latePassServiceFamily, LATE_PASS_SERVICE_FAMILIES } from "./late-pass-service-families.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||"";
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
@@ -165,6 +165,43 @@ async function fetchZipAreas(){
 }
 
 const redis=createClient({url:REDIS_URL}); redis.on("error",e=>console.error("Redis error",e)); await redis.connect();
+
+async function chooseLatePassServiceFamily(area={},pass=5){
+  const fallback=latePassServiceFamily(area,pass);
+  if(pass<5||!LATE_PASS_SERVICE_FAMILIES.length) return fallback;
+  try{
+    const families=LATE_PASS_SERVICE_FAMILIES.map(x=>String(x||"").trim()).filter(Boolean);
+    const keys=families.map(x=>x.toLowerCase());
+    const state=String(area.partition_state||area.state||"").trim().toLowerCase();
+    const city=String(area.partition_city||area.city||"").trim().toLowerCase();
+    const areaFields=keys.map(k=>[state,city,"*",k].join("|"));
+    const [qAttempts,qNew,qDup,aAttempts]=await Promise.all([
+      redis.hmGet("recover:yield:query:attempts",keys),
+      redis.hmGet("recover:yield:query:new",keys),
+      redis.hmGet("recover:yield:query:duplicates",keys),
+      redis.hmGet("recover:yield:area:attempts",areaFields),
+    ]);
+    const ranked=families.map((family,i)=>{
+      const attempts=Number(qAttempts?.[i]||0);
+      const netNew=Number(qNew?.[i]||0);
+      const dup=Number(qDup?.[i]||0);
+      const areaAttempts=Number(aAttempts?.[i]||0);
+      const avgNew=attempts?netNew/attempts:0;
+      const dupRate=(netNew+dup)?dup/(netNew+dup):0;
+      // Untried city/family slices first; among them, favor permanent net-new
+      // families while retaining a modest exploration prior for globally
+      // under-sampled families.
+      const score=(areaAttempts===0?1000:0)+(avgNew*100)-(dupRate*10)+(attempts<8?6:0)-areaAttempts*100;
+      return {family,score,areaAttempts,attempts,avgNew,dupRate};
+    }).sort((a,b)=>b.score-a.score||b.avgNew-a.avgNew||a.attempts-b.attempts);
+    const pick=ranked[0];
+    if(pick) {
+      console.log(JSON.stringify({event:"adaptive_family_pick",coveragePass:pass,state,city,family:pick.family,areaAttempts:pick.areaAttempts,globalAttempts:pick.attempts,globalAvgNew:Number(pick.avgNew.toFixed(3)),globalDupRate:Number(pick.dupRate.toFixed(3))}));
+      return pick.family;
+    }
+  }catch(error){console.warn("adaptive family pick failed",error?.message||error);}
+  return fallback;
+}
 const areas=await fetchZipAreas(); const scopeSet=campaignLeadSetKey(profileJob); await normalizeSocialOnlyLeadstore(redis); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0); let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pass")||1));
 const hybridResetDone=String(await redis.hGet(CONTROLLER_KEY,"hybrid_zip_v3")||"")==="1";
@@ -310,7 +347,7 @@ async function seedOne(area){
   const partitionCity=area.partition_city||area.city;
   const denseLaterPass=coveragePass>=3&&Number(area.population||0)>=10000;
   const cityScopedPass=coveragePass>=5;
-  const queryFamily=cityScopedPass?latePassServiceFamily(area,coveragePass):"";
+  const queryFamily=cityScopedPass?await chooseLatePassServiceFamily(area,coveragePass):"";
   const yieldField=[String(partitionState||"").toLowerCase(),String(partitionCity||"").toLowerCase(),(cityScopedPass||coveragePass>=3&&!denseLaterPass)?"*":String(area.partition_zip||area.zip||"").toLowerCase(),String(queryFamily||"").toLowerCase()].join("|");
   let yieldDecision={attempts:0,netNew:0,dups:0,avgNew:0,dupRate:0,exhausted:false,exploration:false};
   if(coveragePass>=2 && yieldField!=="||"){
