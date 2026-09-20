@@ -31,6 +31,7 @@ const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 const ACQUISITION_REDIS_URL = process.env.ACQUISITION_REDIS_URL || "";
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || "";
 const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER || "";
+const TELNYX_WEBHOOK_URL = (process.env.TELNYX_WEBHOOK_URL || "").trim();
 const RECOVER_REVENUE_SMS_CALLBACK_URL = (process.env.RECOVER_REVENUE_SMS_CALLBACK_URL || "").replace(/\/$/, "");
 const RECOVER_REVENUE_SMS_CALLBACK_SECRET = process.env.RECOVER_REVENUE_SMS_CALLBACK_SECRET || "";
 const GOOGLE_SERVICE_ACCOUNT_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
@@ -958,6 +959,51 @@ function buildServer() {
   });
 
 
+  server.registerTool("sms_telnyx_account_inventory", {
+    description: "Read the Telnyx account phone numbers and messaging profiles using the configured Railway API key. Read only; never exposes the API key."
+  }, async () => {
+    try {
+      const inventory = await telnyxAccountInventory();
+      return jsonText({
+        authenticated: true,
+        webhook_target: TELNYX_WEBHOOK_URL || null,
+        ...inventory
+      });
+    } catch (e) {
+      return { content:[{type:"text",text:`Telnyx inventory error: ${e.message}`}], isError:true };
+    }
+  });
+
+  server.registerTool("sms_telnyx_configure_profile", {
+    description: "Create or update the Recover Telnyx Messaging Profile with the Recover inbound/delivery webhook. Requires explicit confirm=true because it changes Telnyx account configuration.",
+    inputSchema: z.object({
+      profile_id: z.string().optional(),
+      name: z.string().min(1).max(128).default("Recover Revenue"),
+      confirm: z.literal(true)
+    })
+  }, async ({ profile_id, name }) => {
+    try {
+      return jsonText(await configureTelnyxMessagingProfile({ profileId: profile_id || "", name }));
+    } catch (e) {
+      return { content:[{type:"text",text:`Telnyx profile configuration error: ${e.message}`}], isError:true };
+    }
+  });
+
+  server.registerTool("sms_telnyx_assign_number", {
+    description: "Assign an existing Telnyx phone number to a Messaging Profile. Requires explicit confirm=true. Does not purchase a number.",
+    inputSchema: z.object({
+      phone_number_id: z.string().min(1),
+      messaging_profile_id: z.string().uuid(),
+      confirm: z.literal(true)
+    })
+  }, async ({ phone_number_id, messaging_profile_id }) => {
+    try {
+      return jsonText(await assignTelnyxNumberToProfile({ phoneNumberId: phone_number_id, messagingProfileId: messaging_profile_id }));
+    } catch (e) {
+      return { content:[{type:"text",text:`Telnyx number assignment error: ${e.message}`}], isError:true };
+    }
+  });
+
   server.registerTool("sms_telnyx_status", {
     description: "Check whether Recover Scrape is configured for consent-based Telnyx SMS sending. Does not expose secrets."
   }, async () => {
@@ -1217,6 +1263,88 @@ async function postSmsResultCallback(payload) {
   const raw = await response.text();
   if (!response.ok) throw new Error(`Recover Revenue SMS callback ${response.status}: ${raw.slice(0,500)}`);
   return { configured:true, ok:true };
+}
+
+async function telnyxApiRequest(path, init = {}) {
+  if (!TELNYX_API_KEY) throw new Error("TELNYX_API_KEY is not configured");
+  const response = await fetch(`https://api.telnyx.com/v2${path}`, {
+    ...init,
+    headers: {
+      authorization: `Bearer ${TELNYX_API_KEY}`,
+      ...(init.body ? { "content-type":"application/json" } : {}),
+      ...(init.headers || {})
+    },
+    signal:AbortSignal.timeout(15000)
+  });
+  const raw = await response.text();
+  let body;
+  try { body = raw ? JSON.parse(raw) : {}; } catch { body = { raw }; }
+  if (!response.ok) throw new Error(`Telnyx ${response.status}: ${JSON.stringify(body)}`);
+  return body;
+}
+
+async function telnyxAccountInventory() {
+  const [numbers, profiles] = await Promise.all([
+    telnyxApiRequest("/phone_numbers?page[size]=100"),
+    telnyxApiRequest("/messaging_profiles?page[size]=100")
+  ]);
+  return {
+    numbers: (numbers?.data || []).map((row) => ({
+      id: row.id,
+      phone_number: row.phone_number,
+      status: row.status || null,
+      connection_id: row.connection_id || null,
+      messaging_profile_id: row.messaging_profile_id || null,
+      tags: row.tags || []
+    })),
+    messaging_profiles: (profiles?.data || []).map((row) => ({
+      id: row.id,
+      name: row.name,
+      enabled: row.enabled,
+      webhook_url: row.webhook_url || null,
+      webhook_api_version: row.webhook_api_version || null,
+      whitelisted_destinations: row.whitelisted_destinations || []
+    }))
+  };
+}
+
+async function configureTelnyxMessagingProfile({ profileId = "", name = "Recover Revenue" } = {}) {
+  if (!TELNYX_WEBHOOK_URL) throw new Error("TELNYX_WEBHOOK_URL is not configured");
+  const inventory = await telnyxAccountInventory();
+  let profile = profileId
+    ? inventory.messaging_profiles.find((row) => row.id === profileId)
+    : inventory.messaging_profiles.find((row) => row.name === name) || (inventory.messaging_profiles.length === 1 ? inventory.messaging_profiles[0] : null);
+
+  const payload = {
+    name: profile?.name || name,
+    enabled: true,
+    webhook_url: TELNYX_WEBHOOK_URL,
+    webhook_api_version: "2",
+    whitelisted_destinations: ["US"]
+  };
+
+  if (profile?.id) {
+    const updated = await telnyxApiRequest(`/messaging_profiles/${encodeURIComponent(profile.id)}`, {
+      method:"PATCH",
+      body:JSON.stringify(payload)
+    });
+    return { created:false, profile:updated?.data || updated };
+  }
+
+  const created = await telnyxApiRequest("/messaging_profiles", {
+    method:"POST",
+    body:JSON.stringify(payload)
+  });
+  return { created:true, profile:created?.data || created };
+}
+
+async function assignTelnyxNumberToProfile({ phoneNumberId, messagingProfileId }) {
+  if (!phoneNumberId || !messagingProfileId) throw new Error("phoneNumberId and messagingProfileId are required");
+  const updated = await telnyxApiRequest(`/phone_numbers/${encodeURIComponent(phoneNumberId)}`, {
+    method:"PATCH",
+    body:JSON.stringify({ messaging_profile_id: messagingProfileId })
+  });
+  return updated?.data || updated;
 }
 
 async function telnyxSendMessage(to, text) {
