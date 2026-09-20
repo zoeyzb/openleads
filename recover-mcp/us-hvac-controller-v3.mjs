@@ -36,6 +36,14 @@ const ACTIVE_QUEUE="recover:acquisition:queue";
 const NY_PRIORITY_QUEUE="recover:acquisition:queue:ny-priority";
 const PAUSED_NY_SURPLUS_QUEUE="recover:acquisition:queue:paused-ny-surplus";
 const PAUSED_LEGACY_NATIONAL_QUEUE="recover:acquisition:queue:paused-legacy-national-v1";
+const MILLION_DENSE_WAVE_MAX_PASS=Number(process.env.US_HVAC_MILLION_DENSE_WAVE_MAX_PASS||12);
+const MILLION_MID_WAVE_MAX_PASS=Number(process.env.US_HVAC_MILLION_MID_WAVE_MAX_PASS||20);
+function minPopulationForCoveragePass(pass){
+  if(TARGET_TOTAL<1000000||pass<5) return 0;
+  if(pass<=MILLION_DENSE_WAVE_MAX_PASS) return 10000;
+  if(pass<=MILLION_MID_WAVE_MAX_PASS) return 2500;
+  return 0;
+}
 
 const profileJob={industry:"HVAC",require_no_website:true,require_contact:true,require_phone:false,require_email:false,include_no_website:true,min_score:30};
 
@@ -343,6 +351,17 @@ while(true){
     const nyPriorityLen=await redis.lLen(NY_PRIORITY_QUEUE);if(!ENFORCE_NY_FIRST&&nyPriorityLen>0){const parkedNy=await parkNySurplus();console.log(JSON.stringify({event:"ny_surplus_parked",nyScoped,nyTarget:NY_FIRST_MILESTONE,...parkedNy}));}
     if(pausedNational>0){const capacity=Math.max(0,QUEUE_HIGH_WATER-queue);if(capacity>0){const resumed=await resumePausedNational(Math.min(capacity,SEED_BATCH_SIZE));console.log(JSON.stringify({event:"national_resume_parked",nyScoped,nyTarget:NY_FIRST_MILESTONE,queue_before:queue,capacity,...resumed}));}else console.log(JSON.stringify({event:"national_resume_backpressure",nyScoped,queue,pausedNational}));await new Promise(r=>setTimeout(r,LOOP_MS));continue;}
     if(scoped>=TARGET_TOTAL){console.log(JSON.stringify({event:"target_reached",scoped,queue,cursor}));await new Promise(r=>setTimeout(r,LOOP_MS));continue;}
+    const minPopulation=minPopulationForCoveragePass(coveragePass);
+    if(cursor<areas.length&&minPopulation>0&&Number(areas[cursor]?.population||0)<minPopulation){
+      const previousPass=coveragePass;
+      const skippedTail=areas.length-cursor;
+      coveragePass++;
+      cursor=0;
+      await redis.hSet(CONTROLLER_KEY,{cursor:"0",coverage_pass:String(coveragePass),productive_wave_min_population:String(minPopulation),productive_wave_skipped_tail:String(skippedTail)});
+      console.log(JSON.stringify({event:"productive_wave_advanced",previousPass,coveragePass,scoped,minPopulation,skippedTail,reason:"skip_low_density_tail_for_next_service_family"}));
+      await new Promise(r=>setTimeout(r,LOOP_MS));
+      continue;
+    }
     if(cursor>=areas.length&&scoped<TARGET_TOTAL){coveragePass++;cursor=0;await redis.hSet(CONTROLLER_KEY,{cursor:"0",coverage_pass:String(coveragePass)});console.log(JSON.stringify({event:"coverage_pass_advanced",coveragePass,scoped,area_count:areas.length}));}
     if(queue>=QUEUE_LOW_WATER){console.log(JSON.stringify({event:"backpressure",scoped,queue,cursor,queueHighWater:QUEUE_HIGH_WATER,queueLowWater:QUEUE_LOW_WATER}));await new Promise(r=>setTimeout(r,LOOP_MS));continue;}
     const refillLimit=Math.min(SEED_BATCH_SIZE,Math.max(0,QUEUE_HIGH_WATER-queue));
