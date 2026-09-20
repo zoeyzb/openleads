@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { claimCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead, isOwnedBusinessWebsite } from "./home-service-targeting.mjs";
 import { deriveSchedulerCapacity, shardIdForArea } from "./nationwide-shard-scheduler.mjs";
+import { latePassServiceFamily } from "./late-pass-service-families.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||"";
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
@@ -216,7 +217,8 @@ async function upgradeQueuedNationalJobs(){
     const partitionZip=String(job.partition_zip||job.source_zip||"").trim();
     const denseLaterPass=pass>=3&&Number(job.source_population||0)>=10000;
     const cityScopedPass=pass>=5;
-    const yieldField=[partitionState.toLowerCase(),partitionCity.toLowerCase(),(cityScopedPass||pass>=3&&!denseLaterPass)?"*":partitionZip.toLowerCase()].join("|");
+    const serviceFamily=String(job.query_family||"").trim().toLowerCase();
+    const yieldField=[partitionState.toLowerCase(),partitionCity.toLowerCase(),(cityScopedPass||pass>=3&&!denseLaterPass)?"*":partitionZip.toLowerCase(),cityScopedPass?serviceFamily:""].join("|");
     if(pass>=2&&yieldField!=="||"){
       const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
         redis.hGet("recover:yield:area:attempts",yieldField),
@@ -286,7 +288,8 @@ async function seedOne(area){
   const partitionCity=area.partition_city||area.city;
   const denseLaterPass=coveragePass>=3&&Number(area.population||0)>=10000;
   const cityScopedPass=coveragePass>=5;
-  const yieldField=[String(partitionState||"").toLowerCase(),String(partitionCity||"").toLowerCase(),(cityScopedPass||coveragePass>=3&&!denseLaterPass)?"*":String(area.partition_zip||area.zip||"").toLowerCase()].join("|");
+  const queryFamily=cityScopedPass?latePassServiceFamily(area,coveragePass):"";
+  const yieldField=[String(partitionState||"").toLowerCase(),String(partitionCity||"").toLowerCase(),(cityScopedPass||coveragePass>=3&&!denseLaterPass)?"*":String(area.partition_zip||area.zip||"").toLowerCase(),String(queryFamily||"").toLowerCase()].join("|");
   let yieldDecision={attempts:0,netNew:0,dups:0,avgNew:0,dupRate:0,exhausted:false,exploration:false};
   if(coveragePass>=2 && yieldField!=="||"){
     const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
@@ -320,7 +323,7 @@ async function seedOne(area){
     if(!firstForCity) return false;
     cityMarked=true;
   }
-  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_latitude:area.latitude,source_longitude:area.longitude,yield_exploration:Boolean(yieldDecision.exploration),prior_area_attempts:yieldDecision.attempts,prior_area_net_new:yieldDecision.netNew,prior_area_duplicate_rate:yieldDecision.dupRate,created_at:now,updated_at:now};
+  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),query_family:queryFamily,target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_latitude:area.latitude,source_longitude:area.longitude,yield_exploration:Boolean(yieldDecision.exploration),prior_area_attempts:yieldDecision.attempts,prior_area_net_new:yieldDecision.netNew,prior_area_duplicate_rate:yieldDecision.dupRate,created_at:now,updated_at:now};
   const claim=await claimCoverage(redis,job,{source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,partition_state:job.partition_state,partition_city:job.partition_city,coverage_pass:job.coverage_pass,shard_id});
   if(!claim.claimed){
     if(cityMarked) await redis.sRem(cityPassKey,cityField);
