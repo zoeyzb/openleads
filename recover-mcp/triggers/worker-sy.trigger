@@ -11,3 +11,4 @@ rollout capped-nearby fallback + aggressive duplicate-query retirement to s-y 20
 rollout current ZIP-centroid matcher + yield fixes to s-y 2026-09-20
 rollout standby excess workers u-y and one-job-per-lane profile to s-y 2026-09-20
 rollout 1m-yield-fix 2026-09-20T02:15Z
+rollout service-family-slices 2026-09-20T03:45Z
