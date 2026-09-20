@@ -32,6 +32,8 @@ const ACQUISITION_REDIS_URL = process.env.ACQUISITION_REDIS_URL || "";
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || "";
 const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER || "";
 const TELNYX_WEBHOOK_URL = (process.env.TELNYX_WEBHOOK_URL || "").trim();
+const SMS_SEND_INTERVAL_MS = Math.max(100, Number(process.env.SMS_SEND_INTERVAL_MS || 30000));
+const SMS_MAX_BATCH_RECIPIENTS = Math.max(1, Number(process.env.SMS_MAX_BATCH_RECIPIENTS || 5000));
 const RECOVER_REVENUE_SMS_CALLBACK_URL = (process.env.RECOVER_REVENUE_SMS_CALLBACK_URL || "").replace(/\/$/, "");
 const RECOVER_REVENUE_SMS_CALLBACK_SECRET = process.env.RECOVER_REVENUE_SMS_CALLBACK_SECRET || "";
 const GOOGLE_SERVICE_ACCOUNT_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
@@ -514,6 +516,9 @@ async function prepareSmsBatch({ recipients, label }) {
   const accepted = [];
   let estimatedSegments = 0;
 
+  if (recipients.length > SMS_MAX_BATCH_RECIPIENTS) {
+    throw new Error(`Batch exceeds SMS_MAX_BATCH_RECIPIENTS (${SMS_MAX_BATCH_RECIPIENTS})`);
+  }
   for (let i = 0; i < recipients.length; i++) {
     const row = recipients[i] || {};
     const phone = normalizeE164(row.phone);
@@ -1013,7 +1018,9 @@ function buildServer() {
       redis_configured: !!ACQUISITION_REDIS_URL,
       result_callback_configured: !!(RECOVER_REVENUE_SMS_CALLBACK_URL && RECOVER_REVENUE_SMS_CALLBACK_SECRET),
       ready_to_prepare: !!ACQUISITION_REDIS_URL,
-      ready_to_send: !!(TELNYX_API_KEY && TELNYX_FROM_NUMBER && ACQUISITION_REDIS_URL)
+      ready_to_send: !!(TELNYX_API_KEY && TELNYX_FROM_NUMBER && ACQUISITION_REDIS_URL),
+      send_interval_ms: SMS_SEND_INTERVAL_MS,
+      max_batch_recipients: SMS_MAX_BATCH_RECIPIENTS
     });
   });
 
@@ -1459,7 +1466,7 @@ async function startSmsWorker() {
             await postSmsResultCallback(result).catch(callbackError => console.error("SMS callback error", callbackError.message));
             await SMS_SHEET_BRIDGE.writeSendResult(result, recipient.metadata || {}).catch(sheetError => console.error("SMS sheet send writeback error", sheetError.message));
           }
-          await new Promise(resolve => setTimeout(resolve, 100));
+          await new Promise(resolve => setTimeout(resolve, SMS_SEND_INTERVAL_MS));
         }
         batch.processed_count = i + 1;
         batch.updated_at = new Date().toISOString();
