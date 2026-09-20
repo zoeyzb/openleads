@@ -196,7 +196,7 @@ async function parkLegacyNationalForV2(){
 
 async function upgradeQueuedNationalJobs(){
   const ids=await redis.lRange(ACTIVE_QUEUE,0,-1);
-  let upgraded=0,skipped=0,cityDuplicatesParked=0;
+  let upgraded=0,skipped=0,cityDuplicatesParked=0,yieldExhaustedParked=0,yieldExplorationKept=0;
   const seenLaterPassCities=new Set();
   for(const id of ids){
     const raw=await redis.get("recover:acq:"+id);
@@ -211,6 +211,39 @@ async function upgradeQueuedNationalJobs(){
     job.target=Math.min(Number(job.target||TARGET_PER_AREA),TARGET_PER_AREA);
     const passMatch=String(job.coverage_pass||"").match(/p(\d+)$/);
     const pass=Number(passMatch?.[1]||1);
+    const partitionState=String(job.partition_state||"").trim();
+    const partitionCity=String(job.partition_city||"").trim();
+    const partitionZip=String(job.partition_zip||job.source_zip||"").trim();
+    const denseLaterPass=pass>=3&&Number(job.source_population||0)>=10000;
+    const yieldField=[partitionState.toLowerCase(),partitionCity.toLowerCase(),pass>=3&&!denseLaterPass?"*":partitionZip.toLowerCase()].join("|");
+    if(pass>=2&&yieldField!=="||"){
+      const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
+        redis.hGet("recover:yield:area:attempts",yieldField),
+        redis.hGet("recover:yield:area:new",yieldField),
+        redis.hGet("recover:yield:area:duplicates",yieldField),
+      ]);
+      const attempts=Number(attemptsRaw||0),netNew=Number(newRaw||0),dups=Number(dupRaw||0);
+      const avgNew=attempts?netNew/attempts:0;
+      const dupRate=(netNew+dups)?dups/(netNew+dups):0;
+      const exhausted=(attempts>=2&&netNew===0&&dups>=5) ||
+        (attempts>=3&&avgNew<0.5&&dupRate>=0.85) ||
+        (attempts>=5&&avgNew<1);
+      let hash=0;
+      const seed=`${partitionState}|${partitionCity}|${partitionZip}|p${pass}`;
+      for(const ch of seed) hash=(hash*31+ch.charCodeAt(0))>>>0;
+      const exploration=exhausted&&hash%20===0;
+      if(exhausted&&!exploration){
+        await redis.lRem(ACTIVE_QUEUE,0,String(id));
+        job.status="parked";
+        job.phase="parked_yield_exhausted";
+        job.reason="queued_area_duplicate_saturation";
+        job.updated_at=new Date().toISOString();
+        await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});
+        yieldExhaustedParked++;
+        continue;
+      }
+      if(exploration) yieldExplorationKept++;
+    }
     if(pass>=3&&Number(job.source_population||0)>=10000){
       const zip=String(job.partition_zip||job.source_zip||"").trim();
       const city=String(job.partition_city||"").trim();
@@ -240,7 +273,7 @@ async function upgradeQueuedNationalJobs(){
     await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});
     upgraded++;
   }
-  console.log(JSON.stringify({event:"legacy_queue_upgraded",queue:ids.length,upgraded,skipped,cityDuplicatesParked}));
+  console.log(JSON.stringify({event:"legacy_queue_upgraded",queue:ids.length,upgraded,skipped,cityDuplicatesParked,yieldExhaustedParked,yieldExplorationKept}));
   return upgraded;
 }
 
