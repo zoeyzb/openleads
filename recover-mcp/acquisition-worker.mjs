@@ -1086,6 +1086,15 @@ process.on("SIGINT", () => beginShutdown("SIGINT"));
 
 await redis.connect();
 console.log("Acquisition worker connected to Redis");
+
+if(String(process.env.ACQUISITION_WORKER_STANDBY||"").toLowerCase()==="true"){
+  console.log("Acquisition worker standby mode enabled; not consuming queue");
+  while(!shuttingDown) await sleep(30000);
+  try { await redis.quit(); } catch {}
+  console.log("Acquisition worker standby stopped cleanly");
+  process.exit(0);
+}
+
 await recoverInterrupted();
 
 while (!shuttingDown) {
