@@ -1,3 +1,4 @@
 trigger base acquisition worker deployment — 2026-09-17T03:50+05:00
 put legacy acquisition-worker replicas into standby 2026-09-20
 standby legacy acquisition-worker replicas 2026-09-20
+legacy worker standby retry with sleep infinity 2026-09-20
