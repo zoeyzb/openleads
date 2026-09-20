@@ -8,6 +8,7 @@ import { orchestrate as enrichEmail } from "email-enrich";
 import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
 import { startQualifiedGoogleSheetSync } from "./google-sheet-direct-sync.mjs";
+import { createSmsSheetBridge } from "./sms-sheet-bridge.mjs";
 // Lead-sheet template rows 1-6 are reserved for title, KPIs, and headers.
 
 const PORT = Number(process.env.PORT || 3000);
@@ -37,6 +38,7 @@ const GOOGLE_SHEETS_TARGETS_JSON = process.env.GOOGLE_SHEETS_TARGETS_JSON || "";
 const GOOGLE_SHEETS_SYNC_ENABLED = String(process.env.GOOGLE_SHEETS_SYNC_ENABLED || "").toLowerCase() === "true";
 const GOOGLE_SHEETS_SYNC_INTERVAL_MS = Math.max(30000, Number(process.env.GOOGLE_SHEETS_SYNC_INTERVAL_MS || 60000));
 const GOOGLE_SHEETS_TAB_CAPACITY = Math.max(1, Number(process.env.GOOGLE_SHEETS_TAB_CAPACITY || 50000));
+const SMS_SHEET_BRIDGE = createSmsSheetBridge({ serviceAccountJson: GOOGLE_SERVICE_ACCOUNT_JSON, targetsJson: GOOGLE_SHEETS_TARGETS_JSON });
 let acquisitionRedisPromise = null;
 
 const oauthEnabled = Boolean(OAUTH_ISSUER && OAUTH_CLIENT_ID && OAUTH_CLIENT_SECRET && OAUTH_SIGNING_SECRET && OAUTH_ACCESS_KEY);
@@ -969,6 +971,100 @@ function buildServer() {
     });
   });
 
+  server.registerTool("sms_sheet_status", {
+    description: "Check the configured Recover Google Sheets SMS workflow and the exact columns used. Read only."
+  }, async () => {
+    return jsonText({
+      configured: SMS_SHEET_BRIDGE.configured,
+      target_count: SMS_SHEET_BRIDGE.target_count,
+      targets: SMS_SHEET_BRIDGE.targets,
+      schema: SMS_SHEET_BRIDGE.schema
+    });
+  });
+
+  server.registerTool("sms_prepare_sheet_range", {
+    description: "Prepare a consent-based Telnyx batch from personalized messages entered in Recover lead-sheet rows. Reads phone from column I, message from Z, consent from AA, and requires READY/PREPARE in AB. This never sends. Maximum 5000 rows.",
+    inputSchema: z.object({
+      spreadsheet_id: z.string().min(10),
+      tab_name: z.string().min(1),
+      start_row: z.number().int().min(7),
+      end_row: z.number().int().min(7)
+    })
+  }, async ({ spreadsheet_id, tab_name, start_row, end_row }) => {
+    try {
+      if (!SMS_SHEET_BRIDGE.configured) throw new Error("SMS sheet bridge is not configured");
+      if (end_row < start_row) throw new Error("end_row must be >= start_row");
+      if (end_row - start_row + 1 > 5000) throw new Error("Maximum sheet preparation range is 5000 rows");
+
+      const rows = await SMS_SHEET_BRIDGE.readRows({
+        spreadsheetId: spreadsheet_id,
+        tabName: tab_name,
+        startRow: start_row,
+        endRow: end_row
+      });
+      const ready = rows.filter((row) => row.ready);
+      if (!ready.length) throw new Error("No rows are marked READY/PREPARE in this range");
+
+      const recipients = ready.map((row) => ({
+        phone: row.phone,
+        message: row.message,
+        consent: row.consent,
+        contact_id: row.lead_id,
+        metadata: {
+          sheet_spreadsheet_id: spreadsheet_id,
+          sheet_tab_name: tab_name,
+          sheet_row: row.row,
+          business_name: row.business_name,
+          lead_id: row.lead_id
+        }
+      }));
+      const preview = await prepareSmsBatch({
+        recipients,
+        label: `Sheet ${tab_name} rows ${start_row}-${end_row}`
+      });
+
+      const acceptedPhones = new Set((preview.recipients || []).map((row) => row.phone));
+      const invalidByIndex = new Map((preview.invalid || []).map((row) => [row.index, row.reason]));
+      const suppressedByIndex = new Map((preview.suppressed || []).map((row) => [row.index, row.reason]));
+      const updates = ready.map((row, index) => {
+        const normalizedPhone = normalizeE164(row.phone);
+        const reason = invalidByIndex.get(index) || suppressedByIndex.get(index) || "";
+        return {
+          row: row.row,
+          status: acceptedPhones.has(normalizedPhone) ? "Prepared" : `Blocked - ${reason || "Not accepted"}`,
+          batch_id: acceptedPhones.has(normalizedPhone) ? preview.id : "",
+          updated_at: new Date().toISOString(),
+          error: reason
+        };
+      });
+      await SMS_SHEET_BRIDGE.writeRows({
+        spreadsheetId: spreadsheet_id,
+        tabName: tab_name,
+        updates
+      });
+
+      return jsonText({
+        spreadsheet_id,
+        tab_name,
+        requested_rows: ready.length,
+        batch_id: preview.id,
+        status: preview.status,
+        accepted_count: preview.accepted_count,
+        invalid_count: preview.invalid.length,
+        suppressed_count: preview.suppressed.length,
+        estimated_segments: preview.estimated_segments,
+        sample: preview.recipients,
+        invalid: preview.invalid.slice(0, 25),
+        suppressed: preview.suppressed.slice(0, 25),
+        confirmation_token: preview.confirmation_token,
+        expires_in_seconds: 3600,
+        next: "Show this preview to the user. Only after explicit confirmation of this exact batch, call sms_send_prepared_batch."
+      });
+    } catch (e) {
+      return { content:[{type:"text",text:`SMS sheet prepare error: ${e.message}`}], isError:true };
+    }
+  });
+
   server.registerTool("sms_prepare_batch", {
     description: "Prepare and validate a consent-based SMS batch without sending it. Every recipient must have consent=true. Deduplicates phones, excludes STOP/suppressed numbers, estimates SMS segments, and returns a one-time confirmation token. Use this before sms_send_prepared_batch.",
     inputSchema: z.object({
@@ -1017,6 +1113,7 @@ function buildServer() {
       if (!TELNYX_API_KEY) throw new Error("TELNYX_API_KEY is not configured");
       if (!TELNYX_FROM_NUMBER) throw new Error("TELNYX_FROM_NUMBER is not configured");
       const batch = await enqueuePreparedSmsBatch(batch_id, confirmation_token);
+      await SMS_SHEET_BRIDGE.markBatchQueued(batch).catch(error => console.error("SMS sheet queued writeback error", error.message));
       return jsonText({
         batch_id,
         status: batch.status,
@@ -1196,6 +1293,7 @@ async function startSmsWorker() {
           };
           await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
           await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
+          await SMS_SHEET_BRIDGE.writeSendResult(result, recipient.metadata || {}).catch(error => console.error("SMS sheet suppression writeback error", error.message));
           batch.processed_count = i + 1;
           await save();
           continue;
@@ -1216,6 +1314,7 @@ async function startSmsWorker() {
             };
             await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
             await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
+            await SMS_SHEET_BRIDGE.writeSendResult(result, recipient.metadata || {}).catch(error => console.error("SMS sheet send writeback error", error.message));
             batch.sent_count += 1;
           } catch (error) {
             batch.failed_count += 1;
@@ -1231,6 +1330,7 @@ async function startSmsWorker() {
             };
             await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
             await postSmsResultCallback(result).catch(callbackError => console.error("SMS callback error", callbackError.message));
+            await SMS_SHEET_BRIDGE.writeSendResult(result, recipient.metadata || {}).catch(sheetError => console.error("SMS sheet send writeback error", sheetError.message));
           }
           await new Promise(resolve => setTimeout(resolve, 100));
         }
