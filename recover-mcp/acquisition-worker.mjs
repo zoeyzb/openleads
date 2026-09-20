@@ -345,10 +345,12 @@ function permanentLeadIdentity(lead) {
 function areaYieldField(job={}) {
   const pass=Number(String(job.coverage_pass||"").match(/p(\d+)$/)?.[1]||1);
   const denseLaterPass=pass>=3&&Number(job.source_population||0)>=10000;
+  const cityScopedPass=pass>=5;
   return [
     normalizeText(job.partition_state||""),
     normalizeText(job.partition_city||""),
-    pass>=3&&!denseLaterPass ? "*" : normalizeText(job.partition_zip||job.source_zip||"")
+    (cityScopedPass||pass>=3&&!denseLaterPass) ? "*" : normalizeText(job.partition_zip||job.source_zip||""),
+    cityScopedPass ? normalizeText(job.query_family||"") : ""
   ].join("|");
 }
 async function recordAreaYield(redis,job) {
@@ -554,7 +556,10 @@ async function orderVariantsByNetNewYield(redis,variants=[]){
     return {query,score,attempts,saturated};
   });
   const active=ranked.filter(x=>!x.saturated);
-  return (active.length>=3?active:ranked)
+  const pool=active.length ? active : ranked
+    .sort((a,b)=>a.attempts-b.attempts||b.score-a.score)
+    .slice(0,Math.min(3,ranked.length));
+  return pool
     .sort((a,b)=>b.score-a.score||a.attempts-b.attempts)
     .map(x=>x.query);
 }
@@ -747,7 +752,14 @@ async function processAcquisition(id) {
 
   try {
     let variants=queryVariants(job.industry,job.location);
-    if (isFastHomeServiceJob(job)) variants=await orderVariantsByNetNewYield(redis,variants);
+    const requestedFamily=normalizeText(job.query_family||"");
+    if (isFastHomeServiceJob(job) && requestedFamily) {
+      const exact=variants.find(query=>queryFamily(query)===requestedFamily);
+      variants=exact ? [exact] : [`${job.query_family} in ${job.location}`];
+      console.log(JSON.stringify({event:"query_family_slice",acquisition_id:job.id,coverage_pass:job.coverage_pass,location:job.location,query_family:job.query_family}));
+    } else if (isFastHomeServiceJob(job)) {
+      variants=await orderVariantsByNetNewYield(redis,variants);
+    }
     const configuredMaxRounds=Number(job.max_rounds||12);
     const isFastHomeService=isFastHomeServiceJob(job);
     if (isFastHomeService && variants.length>2) {
