@@ -225,8 +225,8 @@ async function upgradeQueuedNationalJobs(){
       const attempts=Number(attemptsRaw||0),netNew=Number(newRaw||0),dups=Number(dupRaw||0);
       const avgNew=attempts?netNew/attempts:0;
       const dupRate=(netNew+dups)?dups/(netNew+dups):0;
-      const exhausted=(attempts>=2&&netNew===0&&dups>=5) ||
-        (attempts>=3&&avgNew<0.5&&dupRate>=0.85) ||
+      const exhausted=(attempts>=1&&netNew===0&&dups>=8) ||
+        (attempts>=2&&avgNew<0.5&&dupRate>=0.85) ||
         (attempts>=5&&avgNew<1);
       let hash=0;
       const seed=`${partitionState}|${partitionCity}|${partitionZip}|p${pass}`;
@@ -295,8 +295,8 @@ async function seedOne(area){
     const attempts=Number(attemptsRaw||0),netNew=Number(newRaw||0),dups=Number(dupRaw||0);
     const avgNew=attempts?netNew/attempts:0;
     const dupRate=(netNew+dups)?dups/(netNew+dups):0;
-    const exhausted=(attempts>=2&&netNew===0&&dups>=5) ||
-      (attempts>=3&&avgNew<0.5&&dupRate>=0.85) ||
+    const exhausted=(attempts>=1&&netNew===0&&dups>=8) ||
+      (attempts>=2&&avgNew<0.5&&dupRate>=0.85) ||
       (attempts>=5&&avgNew<1);
     let hash=0;
     const explorationSeed=`${partitionState||""}|${partitionCity||""}|${area.partition_zip||area.zip||""}|p${coveragePass}`;
