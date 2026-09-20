@@ -15,3 +15,4 @@ canary capped-nearby fallback + aggressive duplicate-query retirement 2026-09-20
 canary 25-mile ZIP-centroid matcher 2026-09-20
 rollout one-job-per-lane stability profile to g-l 2026-09-20
 rollout 1m-yield-fix 2026-09-20T02:15Z
+rollout service-family-slices 2026-09-20T03:45Z
