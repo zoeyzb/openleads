@@ -215,7 +215,8 @@ async function upgradeQueuedNationalJobs(){
     const partitionCity=String(job.partition_city||"").trim();
     const partitionZip=String(job.partition_zip||job.source_zip||"").trim();
     const denseLaterPass=pass>=3&&Number(job.source_population||0)>=10000;
-    const yieldField=[partitionState.toLowerCase(),partitionCity.toLowerCase(),pass>=3&&!denseLaterPass?"*":partitionZip.toLowerCase()].join("|");
+    const cityScopedPass=pass>=5;
+    const yieldField=[partitionState.toLowerCase(),partitionCity.toLowerCase(),(cityScopedPass||pass>=3&&!denseLaterPass)?"*":partitionZip.toLowerCase()].join("|");
     if(pass>=2&&yieldField!=="||"){
       const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
         redis.hGet("recover:yield:area:attempts",yieldField),
@@ -244,13 +245,13 @@ async function upgradeQueuedNationalJobs(){
       }
       if(exploration) yieldExplorationKept++;
     }
-    if(pass>=3&&Number(job.source_population||0)>=10000){
+    if(pass>=3&&Number(job.source_population||0)>=10000&&pass<5){
       const zip=String(job.partition_zip||job.source_zip||"").trim();
       const city=String(job.partition_city||"").trim();
       const state=String(job.partition_state||"").trim();
       if(zip&&city&&state) job.location=`${zip} ${city}, ${state}`;
     }
-    if(pass>=3&&Number(job.source_population||0)<10000){
+    if(pass>=3&&(Number(job.source_population||0)<10000||pass>=5)){
       const city=String(job.partition_city||"").trim();
       const state=String(job.partition_state||"").trim();
       const cityKey=(pass+"|"+state+"|"+city).toLowerCase();
@@ -284,7 +285,8 @@ async function seedOne(area){
   const partitionState=area.partition_state||area.state;
   const partitionCity=area.partition_city||area.city;
   const denseLaterPass=coveragePass>=3&&Number(area.population||0)>=10000;
-  const yieldField=[String(partitionState||"").toLowerCase(),String(partitionCity||"").toLowerCase(),coveragePass>=3&&!denseLaterPass?"*":String(area.partition_zip||area.zip||"").toLowerCase()].join("|");
+  const cityScopedPass=coveragePass>=5;
+  const yieldField=[String(partitionState||"").toLowerCase(),String(partitionCity||"").toLowerCase(),(cityScopedPass||coveragePass>=3&&!denseLaterPass)?"*":String(area.partition_zip||area.zip||"").toLowerCase()].join("|");
   let yieldDecision={attempts:0,netNew:0,dups:0,avgNew:0,dupRate:0,exhausted:false,exploration:false};
   if(coveragePass>=2 && yieldField!=="||"){
     const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
@@ -310,7 +312,7 @@ async function seedOne(area){
     if(exploration) await redis.hIncrBy(CONTROLLER_KEY,"yield_exploration_total",1);
   }
   let cityPassKey="",cityField="",cityMarked=false;
-  if(coveragePass>=3&&!denseLaterPass){
+  if(coveragePass>=3&&(!denseLaterPass||coveragePass>=5)){
     cityField=`${String(partitionState||"").toLowerCase()}|${String(partitionCity||"").toLowerCase()}`;
     cityPassKey=`recover:coverage:city-pass:${coveragePass}`;
     const firstForCity=await redis.sAdd(cityPassKey,cityField);
