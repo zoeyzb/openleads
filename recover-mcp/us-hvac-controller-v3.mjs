@@ -10,7 +10,7 @@ const REDIS_URL=process.env.ACQUISITION_REDIS_URL||"";
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
 
 const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||"https://raw.githubusercontent.com/ReadyAPIs-com/curated-us-zips/main/data/us-zips.csv";
-const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||100000);
+const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||1000000);
 const NY_FIRST_MILESTONE=Number(process.env.NY_HOME_COMFORT_FIRST_MILESTONE||1000);
 const ENFORCE_NY_FIRST=String(process.env.ENFORCE_NY_FIRST_MILESTONE||"0")==="1";
 const NY_SCOPE_SET="recover:leadstore:ny-home-comfort";
@@ -29,7 +29,7 @@ const MAX_ROUNDS=Math.min(Math.max(Number(process.env.US_HVAC_ZIP_MAX_ROUNDS||1)
 const LOOP_MS=Math.max(5000,Number(process.env.US_HVAC_CONTROLLER_LOOP_MS||15000));
 const TTL=Number(process.env.ACQUISITION_TTL_SECONDS||604800);
 const CONTROLLER_KEY="recover:controller:us-core-home-service:v2";
-const BATCH_ID=process.env.US_HVAC_BATCH_ID||"us-core-home-service-100k-v2-2026-09-10";
+const BATCH_ID=process.env.US_HVAC_BATCH_ID||"us-core-home-service-1m-v3-2026-09-20";
 const PAUSED_NATIONAL_QUEUE="recover:acquisition:queue:paused-national";
 const ACTIVE_QUEUE="recover:acquisition:queue";
 const NY_PRIORITY_QUEUE="recover:acquisition:queue:ny-priority";
@@ -252,6 +252,7 @@ async function seedOne(area){
   const partitionCity=area.partition_city||area.city;
   const denseLaterPass=coveragePass>=3&&Number(area.population||0)>=10000;
   const yieldField=[String(partitionState||"").toLowerCase(),String(partitionCity||"").toLowerCase(),coveragePass>=3&&!denseLaterPass?"*":String(area.partition_zip||area.zip||"").toLowerCase()].join("|");
+  let yieldDecision={attempts:0,netNew:0,dups:0,avgNew:0,dupRate:0,exhausted:false,exploration:false};
   if(coveragePass>=2 && yieldField!=="||"){
     const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
       redis.hGet("recover:yield:area:attempts",yieldField),
@@ -259,9 +260,21 @@ async function seedOne(area){
       redis.hGet("recover:yield:area:duplicates",yieldField),
     ]);
     const attempts=Number(attemptsRaw||0),netNew=Number(newRaw||0),dups=Number(dupRaw||0);
-    if(attempts>=2 && netNew<=attempts && dups>=attempts*10){
+    const avgNew=attempts?netNew/attempts:0;
+    const dupRate=(netNew+dups)?dups/(netNew+dups):0;
+    const exhausted=(attempts>=2&&netNew===0&&dups>=5) ||
+      (attempts>=3&&avgNew<0.5&&dupRate>=0.85) ||
+      (attempts>=5&&avgNew<1);
+    let hash=0;
+    const explorationSeed=`${partitionState||""}|${partitionCity||""}|${area.partition_zip||area.zip||""}|p${coveragePass}`;
+    for(const ch of explorationSeed) hash=(hash*31+ch.charCodeAt(0))>>>0;
+    const exploration=exhausted&&hash%20===0;
+    yieldDecision={attempts,netNew,dups,avgNew,dupRate,exhausted,exploration};
+    if(exhausted&&!exploration){
+      await redis.hIncrBy(CONTROLLER_KEY,"yield_skipped_total",1);
       return false;
     }
+    if(exploration) await redis.hIncrBy(CONTROLLER_KEY,"yield_exploration_total",1);
   }
   let cityPassKey="",cityField="",cityMarked=false;
   if(coveragePass>=3&&!denseLaterPass){
@@ -272,7 +285,7 @@ async function seedOne(area){
     if(!firstForCity) return false;
     cityMarked=true;
   }
-  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_latitude:area.latitude,source_longitude:area.longitude,created_at:now,updated_at:now};
+  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_latitude:area.latitude,source_longitude:area.longitude,yield_exploration:Boolean(yieldDecision.exploration),prior_area_attempts:yieldDecision.attempts,prior_area_net_new:yieldDecision.netNew,prior_area_duplicate_rate:yieldDecision.dupRate,created_at:now,updated_at:now};
   const claim=await claimCoverage(redis,job,{source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,partition_state:job.partition_state,partition_city:job.partition_city,coverage_pass:job.coverage_pass,shard_id});
   if(!claim.claimed){
     if(cityMarked) await redis.sRem(cityPassKey,cityField);
@@ -284,7 +297,7 @@ async function seedOne(area){
 while(true){
   try{
     const scoped=await redis.sCard(scopeSet),nyScoped=await redis.sCard(NY_SCOPE_SET),queue=await redis.lLen(ACTIVE_QUEUE),pausedNational=await redis.lLen(PAUSED_NATIONAL_QUEUE);
-    await redis.hSet(CONTROLLER_KEY,{scoped_count:String(scoped),queue_len:String(queue),queue_high_water:String(QUEUE_HIGH_WATER),seed_batch_size:String(SEED_BATCH_SIZE),worker_count:String(scheduler.workerCount),maps_lane_count:String(scheduler.mapsLaneCount),shard_count:String(SHARD_COUNT),cursor:String(cursor),coverage_pass:String(coveragePass),partition_state:String(areas[cursor]?.partition_state||areas[cursor]?.state||""),partition_city:String(areas[cursor]?.partition_city||areas[cursor]?.city||""),area_count:String(areas.length),updated_at:new Date().toISOString(),milestone_1000:scoped>=FIRST_MILESTONE?"reached":"pending",ny_priority_count:String(nyScoped),ny_priority_milestone:nyScoped>=NY_FIRST_MILESTONE?"reached":"pending",paused_national_count:String(pausedNational),national_resume_state:(!ENFORCE_NY_FIRST||nyScoped>=NY_FIRST_MILESTONE)?(pausedNational>0?"draining_parked":"active"):"waiting_for_ny",target_100k:scoped>=TARGET_TOTAL?"reached":"pending"});
+    await redis.hSet(CONTROLLER_KEY,{scoped_count:String(scoped),queue_len:String(queue),queue_high_water:String(QUEUE_HIGH_WATER),seed_batch_size:String(SEED_BATCH_SIZE),worker_count:String(scheduler.workerCount),maps_lane_count:String(scheduler.mapsLaneCount),shard_count:String(SHARD_COUNT),cursor:String(cursor),coverage_pass:String(coveragePass),partition_state:String(areas[cursor]?.partition_state||areas[cursor]?.state||""),partition_city:String(areas[cursor]?.partition_city||areas[cursor]?.city||""),area_count:String(areas.length),updated_at:new Date().toISOString(),milestone_1000:scoped>=FIRST_MILESTONE?"reached":"pending",ny_priority_count:String(nyScoped),ny_priority_milestone:nyScoped>=NY_FIRST_MILESTONE?"reached":"pending",paused_national_count:String(pausedNational),national_resume_state:(!ENFORCE_NY_FIRST||nyScoped>=NY_FIRST_MILESTONE)?(pausedNational>0?"draining_parked":"active"):"waiting_for_ny",target_total:String(TARGET_TOTAL),target_100k:scoped>=100000?"reached":"pending",target_1m:scoped>=TARGET_TOTAL?"reached":"pending"});
     if(ENFORCE_NY_FIRST&&nyScoped<NY_FIRST_MILESTONE){console.log(JSON.stringify({event:"ny_priority_hold",nyScoped,nyTarget:NY_FIRST_MILESTONE,scoped,queue,pausedNational,cursor}));await new Promise(r=>setTimeout(r,LOOP_MS));continue;}
     const nyPriorityLen=await redis.lLen(NY_PRIORITY_QUEUE);if(!ENFORCE_NY_FIRST&&nyPriorityLen>0){const parkedNy=await parkNySurplus();console.log(JSON.stringify({event:"ny_surplus_parked",nyScoped,nyTarget:NY_FIRST_MILESTONE,...parkedNy}));}
     if(pausedNational>0){const capacity=Math.max(0,QUEUE_HIGH_WATER-queue);if(capacity>0){const resumed=await resumePausedNational(Math.min(capacity,SEED_BATCH_SIZE));console.log(JSON.stringify({event:"national_resume_parked",nyScoped,nyTarget:NY_FIRST_MILESTONE,queue_before:queue,capacity,...resumed}));}else console.log(JSON.stringify({event:"national_resume_backpressure",nyScoped,queue,pausedNational}));await new Promise(r=>setTimeout(r,LOOP_MS));continue;}
