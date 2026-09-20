@@ -217,6 +217,9 @@ async function upgradeQueuedNationalJobs(){
     const partitionZip=String(job.partition_zip||job.source_zip||"").trim();
     const denseLaterPass=pass>=3&&Number(job.source_population||0)>=10000;
     const cityScopedPass=pass>=5;
+    if(cityScopedPass&&!String(job.query_family||"").trim()){
+      job.query_family=latePassServiceFamily(job,pass);
+    }
     const serviceFamily=String(job.query_family||"").trim().toLowerCase();
     const yieldField=[partitionState.toLowerCase(),partitionCity.toLowerCase(),(cityScopedPass||pass>=3&&!denseLaterPass)?"*":partitionZip.toLowerCase(),cityScopedPass?serviceFamily:""].join("|");
     if(pass>=2&&yieldField!=="||"){
