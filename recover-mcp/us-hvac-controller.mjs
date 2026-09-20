@@ -8,7 +8,7 @@ if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
 
 const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||
   "https://raw.githubusercontent.com/ReadyAPIs-com/curated-us-zips/main/data/us-zips.csv";
-const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||100000);
+const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||1000000);
 const NY_FIRST_MILESTONE=Number(process.env.NY_HOME_COMFORT_FIRST_MILESTONE||1000);
 const ENFORCE_NY_FIRST=String(process.env.ENFORCE_NY_FIRST_MILESTONE||"0")==="1";
 const NY_SCOPE_SET="recover:leadstore:ny-home-comfort";
@@ -21,7 +21,7 @@ const MAX_ROUNDS=1;
 const LOOP_MS=Number(process.env.US_HVAC_CONTROLLER_LOOP_MS||15000);
 const TTL=Number(process.env.ACQUISITION_TTL_SECONDS||604800);
 const CONTROLLER_KEY="recover:controller:us-core-home-service:v2";
-const BATCH_ID=process.env.US_HVAC_BATCH_ID||"us-core-home-service-100k-v2-2026-09-10";
+const BATCH_ID=process.env.US_HVAC_BATCH_ID||"us-core-home-service-1m-v3-2026-09-20";
 const PAUSED_NATIONAL_QUEUE="recover:acquisition:queue:paused-national";
 const ACTIVE_QUEUE="recover:acquisition:queue";
 const NY_PRIORITY_QUEUE="recover:acquisition:queue:ny-priority";
@@ -158,6 +158,47 @@ function partitionNationwideAreas(rows){
     if(!added) break;
   }
   return out;
+}
+
+function normalizeAreaToken(value=""){
+  return String(value||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+}
+function areaYieldFieldForController(area,pass){
+  const denseLaterPass=Number(pass||1)>=3&&Number(area.population||0)>=10000;
+  return [
+    normalizeAreaToken(area.partition_state||area.state||""),
+    normalizeAreaToken(area.partition_city||area.city||""),
+    Number(pass||1)>=3&&!denseLaterPass ? "*" : normalizeAreaToken(area.partition_zip||area.zip||"")
+  ].join("|");
+}
+function areaExplorationSample(area,pass){
+  const seed=`${area.state||""}|${area.city||""}|${area.zip||""}|p${pass}`;
+  let hash=0;
+  for(const ch of seed) hash=(hash*31+ch.charCodeAt(0))>>>0;
+  return hash%20===0;
+}
+async function areaYieldDecision(redis,area,pass){
+  if(Number(pass||1)<=2) return {schedule:true,reason:"early_pass"};
+  const field=areaYieldFieldForController(area,pass);
+  const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
+    redis.hGet("recover:yield:area:attempts",field),
+    redis.hGet("recover:yield:area:new",field),
+    redis.hGet("recover:yield:area:duplicates",field)
+  ]);
+  const attempts=Number(attemptsRaw||0);
+  const netNew=Number(newRaw||0);
+  const duplicates=Number(dupRaw||0);
+  const avgNew=attempts?netNew/attempts:0;
+  const dupRate=(netNew+duplicates)?duplicates/(netNew+duplicates):0;
+  const exhausted=(attempts>=2&&netNew===0&&duplicates>=5) ||
+    (attempts>=3&&avgNew<0.5&&dupRate>=0.85) ||
+    (attempts>=5&&avgNew<1);
+  const exploration=exhausted&&areaExplorationSample(area,pass);
+  return {
+    schedule:!exhausted||exploration,
+    reason:exhausted?(exploration?"exploration_sample":"yield_exhausted"):"yield_active",
+    field,attempts,netNew,duplicates,avgNew,dupRate
+  };
 }
 
 async function fetchZipAreas(){
@@ -417,7 +458,8 @@ while(true){
       ny_priority_milestone:nyScoped>=NY_FIRST_MILESTONE?"reached":"pending",
       paused_national_count:String(pausedNational),
       national_resume_state:(!ENFORCE_NY_FIRST || nyScoped>=NY_FIRST_MILESTONE)?(pausedNational>0?"draining_parked":"active"):"waiting_for_ny",
-      target_100k:scoped>=TARGET_TOTAL?"reached":"pending"
+      target_100k:scoped>=100000?"reached":"pending",
+      target_1m:scoped>=TARGET_TOTAL?"reached":"pending"
     });
 
     if(ENFORCE_NY_FIRST && nyScoped<NY_FIRST_MILESTONE){
@@ -470,10 +512,18 @@ while(true){
       continue;
     }
 
-    let seeded=0, checked=0;
+    let seeded=0, checked=0, yieldSkipped=0, explorationSeeded=0;
     while(seeded<SEED_BATCH_SIZE && cursor<areas.length && queue+seeded<QUEUE_HIGH_WATER){
       const area=areas[cursor++];
       checked++;
+      const decision=await areaYieldDecision(redis,area,coveragePass);
+      if(!decision.schedule){
+        yieldSkipped++;
+        await redis.hIncrBy(CONTROLLER_KEY,"yield_skipped_total",1);
+        await redis.hSet(CONTROLLER_KEY,"cursor",String(cursor));
+        continue;
+      }
+      if(decision.reason==="exploration_sample") explorationSeeded++;
       if(await seedOne(area)) seeded++;
       await redis.hSet(CONTROLLER_KEY,"cursor",String(cursor));
     }
@@ -484,6 +534,8 @@ while(true){
       queue_before:queue,
       checked,
       seeded,
+      yieldSkipped,
+      explorationSeeded,
       cursor,
       coveragePass,
       partition_state:String(areas[Math.max(0,cursor-1)]?.partition_state||""),
