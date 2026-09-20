@@ -252,16 +252,18 @@ function sameRequestedState(lead,job={}){
 function locationCandidateSet(records=[],job={}){
   if(String(job.search_profile||"")!=="core-home-service") return records.filter(lead=>matchesAcquisitionLocation(lead,job));
   const strict=records.filter(lead=>matchesAcquisitionLocation(lead,job));
-  if(strict.length>=5) return strict;
-  // Google Maps commonly returns nearby suburbs for ZIP/city searches. When
-  // strict local results are sparse, admit only a small top-ranked same-state
-  // fallback so we harvest nearby businesses without going back to state-wide
-  // acceptance and duplicate explosions.
+  const passNum=Number(String(job.coverage_pass||"").match(/p(\d+)$/)?.[1]||1);
+  const fallbackCap=passNum>=4?24:12;
+  if(strict.length>=fallbackCap) return strict;
+  // Maps ZIP searches routinely surface nearby suburbs/service-area businesses.
+  // Keep strict matches first, then admit a bounded same-state tail from the
+  // same Maps result set. Later passes widen this tail because those passes are
+  // explicitly for discovering businesses missed by the exact ZIP/city slice.
   const strictKeys=new Set(strict.map(permanentLeadIdentity));
   const nearby=records
     .filter(lead=>!strictKeys.has(permanentLeadIdentity(lead))&&sameRequestedState(lead,job))
-    .slice(0,Math.max(0,12-strict.length));
-  if(nearby.length) console.log(JSON.stringify({event:"location_relaxation",acquisition_id:job.id,strict:strict.length,nearby:nearby.length,location:job.location}));
+    .slice(0,Math.max(0,fallbackCap-strict.length));
+  if(nearby.length) console.log(JSON.stringify({event:"location_relaxation",acquisition_id:job.id,strict:strict.length,nearby:nearby.length,cap:fallbackCap,coverage_pass:job.coverage_pass,location:job.location}));
   return [...strict,...nearby];
 }
 
@@ -753,13 +755,21 @@ async function processAcquisition(id) {
       const querySeed=`${String(job.location||job.id||"")}|${String(job.coverage_pass||"pass1")}`;
       for (const ch of querySeed) hash=(hash*31+ch.charCodeAt(0))>>>0;
       const passNum=Number(String(job.coverage_pass||"").match(/p(\\d+)$/)?.[1]||1);
-      const bundleTarget=passNum>=4 ? 2 : 3;
-      const bundleCount=configuredMaxRounds===1 ? Math.min(bundleTarget,variants.length) : Math.min(2,variants.length);
+      const bundleTarget=passNum>=4 ? 4 : 3;
+      const bundleCount=configuredMaxRounds===1 ? Math.min(bundleTarget,variants.length) : Math.min(3,variants.length);
       const exploitCount=passNum>=4 ? Math.min(1,bundleCount) : Math.min(2,bundleCount);
       const chosen=variants.slice(0,exploitCount);
       const explorationPool=variants.slice(exploitCount);
-      for(let i=chosen.length;i<bundleCount&&explorationPool.length;i++){
-        chosen.push(explorationPool[(hash+i-exploitCount)%explorationPool.length]);
+      if(explorationPool.length){
+        const needed=bundleCount-chosen.length;
+        for(let i=0;i<needed;i++){
+          // Spread exploration across the ranked list instead of choosing
+          // adjacent near-duplicate query families.
+          const segmentStart=Math.floor((i*explorationPool.length)/Math.max(1,needed));
+          const segmentEnd=Math.max(segmentStart+1,Math.floor(((i+1)*explorationPool.length)/Math.max(1,needed)));
+          const width=Math.max(1,segmentEnd-segmentStart);
+          chosen.push(explorationPool[segmentStart+((hash+i)%width)]);
+        }
       }
       variants=[...new Set(chosen)].slice(0,bundleCount);
     }
@@ -775,10 +785,10 @@ async function processAcquisition(id) {
       const currentCoveragePass=Number(String(job.coverage_pass||"").match(/p(\d+)$/)?.[1]||1);
       const denseArea=Number(job.source_population||0)>=10000;
       const fastNyDepthCap=isFastHomeService
-        ? (currentCoveragePass>=5 ? (denseArea?8:5) : 6)
+        ? (currentCoveragePass>=5 ? (denseArea?12:7) : (currentCoveragePass>=3?(denseArea?9:6):6))
         : MAPS_ROUND_DEPTH_CAP;
       const fastNyMaxTime=isFastHomeService
-        ? (currentCoveragePass>=5 ? (denseArea?120:75) : 60)
+        ? (currentCoveragePass>=5 ? (denseArea?150:90) : (currentCoveragePass>=3?90:60))
         : MAPS_ROUND_MAX_TIME_SECONDS;
       const mapsKeywords=(isFastHomeService && configuredMaxRounds===1) ? variants : [variants[round]];
       job.current_query_families=mapsKeywords.map(queryFamily);
