@@ -77,9 +77,17 @@ function cleanName(title=""){
     .replace(/\s*[|–—-]\s*(?:Yellow Pages|Yelp|BBB|Better Business Bureau|Chamber of Commerce|Manta).*$/i,"")
     .replace(/\s*\|\s*.*$/,"").trim();
 }
-function locationMatches(text,city,state){
+function locationMatches(text,city,state,url=""){
   const hay=normalizeText(text),c=normalizeText(city),s=normalizeText(state);
-  return Boolean(c&&hay.includes(c)) && Boolean(s&&new RegExp("\\b"+s+"\\b").test(hay));
+  const cityInText=Boolean(c&&hay.includes(c));
+  const stateInText=Boolean(s&&new RegExp("\\b"+s+"\\b").test(hay));
+  let cityInUrl=false;
+  try{
+    const u=new URL(url);
+    const slug=normalizeText(u.pathname);
+    cityInUrl=Boolean(c&&slug.includes(c));
+  }catch{}
+  return (cityInText&&stateInText) || cityInText || cityInUrl;
 }
 function permanentKey(lead){
   const phone=normalizePhone(lead.phone||"");
@@ -119,7 +127,7 @@ async function saveCandidate({result,city,state,family,domain}){
   if(!result?.url||!isDirectoryUrl(result.url)) return {accepted:false,reason:"not_directory"};
   const scrape=result.scrape||{};
   const page=[result.title,result.snippet,scrape.markdown,scrape.fit_markdown].filter(Boolean).join("\n");
-  if(!locationMatches(page,city,state)) return {accepted:false,reason:"location"};
+  if(!locationMatches(page,city,state,result.url)) return {accepted:false,reason:"location"};
   const owned=explicitWebsiteFromHtml(scrape.raw_html||scrape.html||"");
   if(owned) return {accepted:false,reason:"owned_website"};
   const phones=phonesFrom(page),emails=emailsFrom(page);
