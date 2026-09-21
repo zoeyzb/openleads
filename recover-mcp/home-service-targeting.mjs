@@ -7,7 +7,8 @@ const REJECT_CATEGORY=/\b(pest control|exterminator|extermination|auto air condi
 
 const STRONG_CATEGORY=/\b(hvac contractor|hvac service|hvac repair service|hvac maintenance|heating contractor|heating service|heating repair service|heating and air conditioning service|air conditioning contractor|air conditioning service|air conditioning repair service|ac repair service|ac service|cooling contractor|cooling service|plumber|emergency plumber|emergency plumbing service|plumbing contractor|plumbing service|plumbing repair service|furnace repair service|furnace service|furnace contractor|boiler repair service|boiler service|boiler contractor|air duct cleaning service|duct cleaning service|air duct contractor|ductwork contractor|ventilation contractor|refrigeration contractor|refrigeration service|heat pump contractor|heat pump service|heat pump repair service|water heater contractor|water heater service|water heater repair service|water heater installation|drain cleaning service|drain service|drainage service|sewer service|sewer repair service|pipe repair service|gas fitter|geothermal contractor|geothermal heating service|indoor air quality service|thermostat installation service|comfort control service|climate control service)\b/;
 
-const SERVICE_SIGNAL=/\b(hvac|heating|cooling|air conditioning|ac repair|ac service|furnace|boiler|air duct|duct cleaning|ductwork|ventilation|plumb|refrigeration|heat pump|water heater|drain cleaning|drain service|sewer|pipe repair|mechanical|geothermal|thermostat|indoor air quality|comfort control|comfort controls|climate control|system replacement|equipment replacement|system installation|equipment installation|maintenance|preventive maintenance|emergency service|emergency repair)\b/;
+const CORE_TRADE_SIGNAL=/\b(hvac|heating|cooling|air conditioning|ac repair|ac service|furnace|boiler|air duct|duct cleaning|ductwork|ventilation|plumb|refrigeration|heat pump|water heater|drain cleaning|drain service|sewer|pipe repair|geothermal|thermostat|indoor air quality|comfort control|comfort controls|climate control)\b/;
+const OFFER_SIGNAL=/\b(system replacement|equipment replacement|system installation|equipment installation|maintenance|preventive maintenance|emergency service|emergency repair|24 hour service|same day service)\b/;
 const REJECT_ANYWHERE=/\b(pest control|exterminator|extermination|septic|septic tank|septic service|motor repair|motor service|motors|appliance|wholesale|wholesaler|supplier|supply|distributor|distributors|manufacturer|hardware|retail|home depot|homedepot|rental|rentals|general contractor|construction|demolition|excavation|excavating|roofing|roofer|landscaping|landscape contractor|remodeling|property management|home warranty|warranty|hvac filters?|filter supply|auto air conditioning|car air conditioning|auto repair|automotive|auto parts|automobile parts|car parts|car dealer|vehicle repair|auto body|body shop|tire shop|tire service|oil change)\b/;
 
 export function isCoreHomeServiceLead(lead={}){
@@ -26,11 +27,11 @@ export function isCoreHomeServiceLead(lead={}){
   if(/\b(supplier|supply|distributor|distributors|wholesale|manufacturer|parts|retail store|equipment store|warranty|septic|motors|construction|demolition|excavation|excavating|roofing|landscaping|remodeling|rental|rentals)\b/.test(category)) return false;
 
   if(/\b(mechanical contractor|mechanical service|contractor|home service)\b/.test(category)){
-    return SERVICE_SIGNAL.test(evidence);
+    return CORE_TRADE_SIGNAL.test(evidence);
   }
 
   if(!category || /\b(service establishment|business to business service)\b/.test(category)){
-    return SERVICE_SIGNAL.test(categoryAndName);
+    return CORE_TRADE_SIGNAL.test([categoryAndName,desc].filter(Boolean).join(" "));
   }
 
   return false;
