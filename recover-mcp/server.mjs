@@ -2089,9 +2089,73 @@ async function telnyxLookupSmsSuitability(phone, redis) {
   };
 }
 
+let telnyxRouteStatusCache = { at:0, value:null };
+
+async function telnyxSendingRouteStatus() {
+  const now = Date.now();
+  if (telnyxRouteStatusCache.value && now - telnyxRouteStatusCache.at < 60000) return telnyxRouteStatusCache.value;
+  const from = normalizeInboxPhone(TELNYX_FROM_NUMBER);
+  if (!from) {
+    const value={ok:false,reason:"missing_from_number",checked_at:new Date().toISOString()};
+    telnyxRouteStatusCache={at:now,value};
+    return value;
+  }
+
+  let assignment;
+  try {
+    assignment = await telnyxApiRequest(`/10dlc/phoneNumberCampaign/${encodeURIComponent(from)}`);
+  } catch (error) {
+    const message=String(error?.message||error);
+    const value={ok:false,reason:/Telnyx 404/.test(message)?"number_not_assigned_to_10dlc":"assignment_lookup_failed",detail:message.slice(0,300),checked_at:new Date().toISOString()};
+    telnyxRouteStatusCache={at:now,value};
+    return value;
+  }
+
+  const data=assignment?.data||assignment||{};
+  const campaignId=String(data?.campaignId||data?.campaign_id||"").trim();
+  if(!campaignId){
+    const value={ok:false,reason:"assignment_missing_campaign_id",checked_at:new Date().toISOString()};
+    telnyxRouteStatusCache={at:now,value};
+    return value;
+  }
+
+  let campaign;
+  try { campaign=await telnyxApiRequest(`/10dlc/campaignBuilder/${encodeURIComponent(campaignId)}`); }
+  catch(error){
+    const value={ok:false,reason:"campaign_lookup_failed",campaign_id_hint:campaignId.slice(-6),detail:String(error?.message||error).slice(0,300),checked_at:new Date().toISOString()};
+    telnyxRouteStatusCache={at:now,value};
+    return value;
+  }
+  const campaignData=campaign?.data||campaign||{};
+  const campaignStatus=String(campaignData?.status||"").trim().toUpperCase();
+
+  let operationStatus=null;
+  try {
+    const op=await telnyxApiRequest(`/10dlc/campaign/${encodeURIComponent(campaignId)}/operationStatus`);
+    operationStatus=op?.data||op||null;
+  } catch {}
+  const mnoValues=operationStatus && typeof operationStatus==="object" ? Object.values(operationStatus).map(v=>String(v||"").toUpperCase()) : [];
+  const mnoApproved=!mnoValues.length || mnoValues.every(v=>v==="APPROVED");
+  const ok=campaignStatus==="ACTIVE" && mnoApproved;
+  const value={ok,reason:ok?"verified_10dlc_route":"10dlc_not_fully_approved",campaign_status:campaignStatus||null,mno_statuses:mnoValues,checked_at:new Date().toISOString()};
+  telnyxRouteStatusCache={at:now,value};
+  return value;
+}
+
+async function assertTelnyxSendingRouteReady() {
+  const route=await telnyxSendingRouteStatus();
+  if(!route.ok){
+    const error=new Error(`sender_route_unverified:${route.reason}`);
+    error.route=route;
+    throw error;
+  }
+  return route;
+}
+
 async function telnyxSendMessage(to, text) {
   if (!TELNYX_API_KEY) throw new Error("TELNYX_API_KEY is not configured");
   if (!TELNYX_FROM_NUMBER) throw new Error("TELNYX_FROM_NUMBER is not configured");
+  await assertTelnyxSendingRouteReady();
   let lastError = null;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
@@ -2626,6 +2690,7 @@ if (TELNYX_AUTO_CONFIGURE_PROFILE) {
     .catch(error => console.error("Telnyx messaging profile auto-configure failed", error?.message || error));
 }
 
+void telnyxSendingRouteStatus().then(route => console.log("Telnyx sending route verification", { ok:route.ok, reason:route.reason, campaign_status:route.campaign_status||null, mno_statuses:route.mno_statuses||[] })).catch(error => console.error("Telnyx sending route verification error", error?.message||error));
 void sendOneTimeSmsProbe().catch(error => console.error("One-time SMS probe error", error?.message || error));
 void startSmsWorker().catch(error => console.error("SMS worker startup error", error));
 setTimeout(() => {
@@ -2757,6 +2822,7 @@ const httpServer = createHttpServer((req, res) => {
       const messageCount = await redis.hLen("recover:sms:inbox:messages");
       const suppressedCount = await redis.sCard("recover:sms:suppressed");
       const failureBreakdown = await inboxFailureBreakdown();
+      const routeStatus = await telnyxSendingRouteStatus().catch(error => ({ok:false,reason:"route_status_error",detail:String(error?.message||error)}));
       const unavailable = await listUnavailableSmsNumbers({ limit: 1000 });
       const replyThreads = await redis.zCard("recover:sms:inbox:reply-threads");
       const replyPhones = await redis.zRange("recover:sms:inbox:reply-threads", 0, -1);
@@ -2804,7 +2870,8 @@ const httpServer = createHttpServer((req, res) => {
         suppressed:suppressedCount,
         bulk_paused:SMS_BULK_PAUSED,
         bulk_autostart:SMS_BULK_AUTOSTART,
-        registration_approved:SMS_10DLC_APPROVED
+        registration_approved:SMS_10DLC_APPROVED,
+        sending_route:routeStatus
       }));
     })().catch(error => {
       res.writeHead(500, {"content-type":"application/json","cache-control":"no-store"});
