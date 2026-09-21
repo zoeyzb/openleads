@@ -188,15 +188,39 @@ async function chooseLatePassServiceFamily(area={},pass=5){
       const areaAttempts=Number(aAttempts?.[i]||0);
       const avgNew=attempts?netNew/attempts:0;
       const dupRate=(netNew+dup)?dup/(netNew+dup):0;
-      // Untried city/family slices first; among them, favor permanent net-new
-      // families while retaining a modest exploration prior for globally
-      // under-sampled families.
-      const score=(areaAttempts===0?1000:0)+(avgNew*100)-(dupRate*10)+(attempts<8?6:0)-areaAttempts*100;
-      return {family,score,areaAttempts,attempts,avgNew,dupRate};
-    }).sort((a,b)=>b.score-a.score||b.avgNew-a.avgNew||a.attempts-b.attempts);
-    const pick=ranked[0];
-    if(pick) {
-      console.log(JSON.stringify({event:"adaptive_family_pick",coveragePass:pass,state,city,family:pick.family,areaAttempts:pick.areaAttempts,globalAttempts:pick.attempts,globalAvgNew:Number(pick.avgNew.toFixed(3)),globalDupRate:Number(pick.dupRate.toFixed(3))}));
+      const utility=(avgNew*120)-(dupRate*18)+(attempts<12?8:0);
+      return {family,utility,areaAttempts,attempts,avgNew,dupRate};
+    });
+
+    const minAreaAttempts=Math.min(...ranked.map(x=>x.areaAttempts));
+    const cityEligible=ranked.filter(x=>x.areaAttempts===minAreaAttempts);
+    const exploit=[...cityEligible].sort((a,b)=>b.utility-a.utility||b.avgNew-a.avgNew||a.attempts-b.attempts);
+    const explore=[...cityEligible].sort((a,b)=>a.attempts-b.attempts||a.dupRate-b.dupRate||b.avgNew-a.avgNew);
+
+    let hash=0;
+    for(const ch of `${state}|${city}|p${pass}`) hash=(hash*31+ch.charCodeAt(0))>>>0;
+    const exploration=(hash%100)<28;
+    let pick;
+    if(exploration){
+      const pool=explore.slice(0,Math.min(8,explore.length));
+      pick=pool[pool.length?hash%pool.length:0];
+    }else{
+      // Never let the single global winner monopolize the fleet. Spread
+      // exploitation over the top six families with deterministic weights.
+      const pool=exploit.slice(0,Math.min(6,exploit.length));
+      const weights=[32,22,16,12,10,8].slice(0,pool.length);
+      const total=weights.reduce((s,x)=>s+x,0)||1;
+      let slot=(hash>>>8)%total,idx=0;
+      while(idx<weights.length-1&&slot>=weights[idx]){slot-=weights[idx];idx++;}
+      pick=pool[idx]||pool[0];
+    }
+    if(pick){
+      console.log(JSON.stringify({
+        event:"adaptive_family_pick",coveragePass:pass,state,city,family:pick.family,
+        mode:exploration?"explore":"exploit",poolSize:exploration?Math.min(8,explore.length):Math.min(6,exploit.length),
+        areaAttempts:pick.areaAttempts,globalAttempts:pick.attempts,
+        globalAvgNew:Number(pick.avgNew.toFixed(3)),globalDupRate:Number(pick.dupRate.toFixed(3))
+      }));
       return pick.family;
     }
   }catch(error){console.warn("adaptive family pick failed",error?.message||error);}
