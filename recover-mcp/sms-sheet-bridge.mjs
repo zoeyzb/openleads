@@ -208,6 +208,33 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     return rows;
   }
 
+  async function readBasicRecoveryRows({ spreadsheetId, tabName, startRow, endRow }) {
+    const start = Math.max(1, Number(startRow || 1));
+    const end = Math.max(start, Number(endRow || start));
+    if (end - start + 1 > 5000) throw new Error("SMS recovery range may contain at most 5000 rows");
+    const range = `${quoteTab(tabName)}!A${start}:J${end}`;
+    const json = await request(spreadsheetId, `/values/${encodeURIComponent(range)}?majorDimension=ROWS`);
+    const values = json.values || [];
+    const rows = [];
+    for (let offset = 0; offset < end - start + 1; offset++) {
+      const value = values[offset] || [];
+      rows.push({
+        row: start + offset,
+        phone: clean(value[0]),
+        message: clean(value[1]),
+        business_name: clean(value[2]),
+        helper: clean(value[3]),
+        link: clean(value[4]),
+        sms_status: clean(value[5]),
+        telnyx_message_id: clean(value[6]),
+        sms_updated_at: clean(value[7]),
+        reachability: clean(value[8]),
+        retry_status: clean(value[9]),
+      });
+    }
+    return rows;
+  }
+
   async function resolveBasicStatusColumns(spreadsheetId, tabName) {
     if (!basicStatusColumnsPromise) {
       basicStatusColumnsPromise = (async () => {
@@ -405,6 +432,7 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     schema: smsSheetSchema(),
     readRows,
     readBasicRows,
+    readBasicRecoveryRows,
     writeBasicReachability,
     writeBasicRetryStatus,
     writeBasicSendResult,
