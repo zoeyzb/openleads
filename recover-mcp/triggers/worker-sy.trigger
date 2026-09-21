@@ -18,3 +18,4 @@ consolidated-geo-pass-yield 2026-09-21T01:29Z
 fast-geo-sy-city-radius 2026-09-21T01:36Z
 rollout strict-targeting-city-density 2026-09-21T04:30Z
 rollout core-trade-evidence 2026-09-21T04:45Z
+rollout phone-required 2026-09-21T07:35Z
