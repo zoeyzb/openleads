@@ -93,3 +93,39 @@ test("override campaign stops when observed delivery failures reach its cutoff",
     "",
   );
 });
+
+test("API-accepted and pending messages are not reported as sent", () => {
+  assert.deepEqual(smsDeliveryGuard.smsDeliveryStatusBucket?.("accepted"), {
+    submitted: 1,
+    sent: 0,
+    delivered: 0,
+    failed: 0,
+  });
+  assert.deepEqual(smsDeliveryGuard.smsDeliveryStatusBucket?.("queued"), {
+    submitted: 1,
+    sent: 0,
+    delivered: 0,
+    failed: 0,
+  });
+});
+
+test("carrier-finalized SMS statuses are counted explicitly", () => {
+  assert.deepEqual(smsDeliveryGuard.smsDeliveryStatusBucket?.("sent"), {
+    submitted: 0,
+    sent: 1,
+    delivered: 0,
+    failed: 0,
+  });
+  assert.deepEqual(smsDeliveryGuard.smsDeliveryStatusBucket?.("delivered"), {
+    submitted: 0,
+    sent: 1,
+    delivered: 1,
+    failed: 0,
+  });
+  assert.deepEqual(smsDeliveryGuard.smsDeliveryStatusBucket?.("delivery_failed"), {
+    submitted: 0,
+    sent: 0,
+    delivered: 0,
+    failed: 1,
+  });
+});
