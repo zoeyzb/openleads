@@ -255,9 +255,9 @@ function geoCellCandidatesForArea(area={},pass=1){
   const population=Number(area.population||0);
   if(pass<8||population<10000) return [area];
   const key=`${String(area.partition_state||area.state||"").toLowerCase()}|${String(area.partition_city||area.city||"").toLowerCase()}`;
-  const items=cityCellAreas.get(key)||[area];
+  const items=(cityCellAreas.get(key)||[area]).filter(x=>Number(x.population||0)>=10000);
   const cap=population>=25000?3:2;
-  return items.slice(0,cap);
+  return (items.length?items:[area]).slice(0,cap);
 }
 const scopeSet=campaignLeadSetKey(profileJob); await normalizeSocialOnlyLeadstore(redis); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0); let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pass")||1));
