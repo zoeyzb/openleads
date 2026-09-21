@@ -241,23 +241,30 @@ async function chooseLatePassServiceFamily(area={},pass=5){
 }
 const areas=await fetchZipAreas();
 const cityCellAreas=new Map();
+const cityPopulationTotals=new Map();
 for(const area of areas){
   const key=`${String(area.partition_state||area.state||"").toLowerCase()}|${String(area.partition_city||area.city||"").toLowerCase()}`;
   if(!key||key==="|") continue;
   if(!cityCellAreas.has(key)) cityCellAreas.set(key,[]);
   cityCellAreas.get(key).push(area);
+  cityPopulationTotals.set(key,Number(cityPopulationTotals.get(key)||0)+Number(area.population||0));
 }
 for(const [key,items] of cityCellAreas){
   items.sort((a,b)=>Number(b.population||0)-Number(a.population||0)||String(a.zip||"").localeCompare(String(b.zip||"")));
-  cityCellAreas.set(key,items.slice(0,3));
+  const total=Number(cityPopulationTotals.get(key)||0);
+  cityCellAreas.set(key,items.slice(0,total>=300000?6:total>=100000?5:total>=50000?4:3).map(x=>({...x,city_population:total})));
+}
+function geoCellCapForPopulation(total=0){
+  const p=Number(total||0);
+  return p>=300000?6:p>=100000?5:p>=50000?4:p>=25000?3:2;
 }
 function geoCellCandidatesForArea(area={},pass=1){
-  const population=Number(area.population||0);
-  if(pass<8||population<10000) return [area];
   const key=`${String(area.partition_state||area.state||"").toLowerCase()}|${String(area.partition_city||area.city||"").toLowerCase()}`;
-  const items=(cityCellAreas.get(key)||[area]).filter(x=>Number(x.population||0)>=10000);
-  const cap=population>=25000?3:2;
-  return (items.length?items:[area]).slice(0,cap);
+  const total=Number(cityPopulationTotals.get(key)||area.city_population||area.population||0);
+  if(pass<8||total<10000) return [area];
+  const items=(cityCellAreas.get(key)||[{...area,city_population:total}]).filter(x=>Number(x.population||0)>=5000);
+  const cap=geoCellCapForPopulation(total);
+  return (items.length?items:[{...area,city_population:total}]).slice(0,cap);
 }
 const scopeSet=campaignLeadSetKey(profileJob); await normalizeSocialOnlyLeadstore(redis); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0); let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pass")||1));
@@ -379,12 +386,13 @@ async function upgradeQueuedNationalJobs(){
       const city=String(job.partition_city||"").trim();
       const state=String(job.partition_state||"").trim();
       const population=Number(job.source_population||0);
+      const cityPopulation=Number(job.source_city_population||population);
       const zip=String(job.partition_zip||job.source_zip||"").trim();
-      const geoCellMode=pass>=8&&population>=10000&&Boolean(zip);
+      const geoCellMode=pass>=8&&cityPopulation>=10000&&Boolean(zip);
       const cityKey=(pass+"|"+state+"|"+city).toLowerCase();
       if(city&&state){
         const seen=Number(seenLaterPassCities.get(cityKey)||0);
-        const cap=geoCellMode?(population>=25000?3:2):1;
+        const cap=geoCellMode?geoCellCapForPopulation(cityPopulation):1;
         if(seen>=cap){
           await redis.lRem(ACTIVE_QUEUE,0,String(id));
           job.status="parked";
@@ -444,8 +452,9 @@ async function seedOne(area){
   }
   let cityPassKey="",cityField="",cityMarked=false,cityMarkMode="";
   const sourcePopulation=Number(area.population||0);
-  const geoCellMode=coveragePass>=8&&sourcePopulation>=10000;
-  const geoCellCap=sourcePopulation>=25000?3:2;
+  const sourceCityPopulation=Number(area.city_population||sourcePopulation);
+  const geoCellMode=coveragePass>=8&&sourceCityPopulation>=10000;
+  const geoCellCap=geoCellCapForPopulation(sourceCityPopulation);
   const coverageCell=geoCellMode?`zip:${String(area.partition_zip||area.zip||"").trim()}`:"";
   if(coveragePass>=3&&(!denseLaterPass||coveragePass>=5)){
     cityField=`${String(partitionState||"").toLowerCase()}|${String(partitionCity||"").toLowerCase()}`;
@@ -468,7 +477,7 @@ async function seedOne(area){
       cityMarkMode="set";
     }
   }
-  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,coverage_cell:coverageCell,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),query_family:queryFamily,target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_latitude:area.latitude,source_longitude:area.longitude,yield_exploration:Boolean(yieldDecision.exploration),prior_area_attempts:yieldDecision.attempts,prior_area_net_new:yieldDecision.netNew,prior_area_duplicate_rate:yieldDecision.dupRate,created_at:now,updated_at:now};
+  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,coverage_cell:coverageCell,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),query_family:queryFamily,target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_city_population:sourceCityPopulation,source_latitude:area.latitude,source_longitude:area.longitude,yield_exploration:Boolean(yieldDecision.exploration),prior_area_attempts:yieldDecision.attempts,prior_area_net_new:yieldDecision.netNew,prior_area_duplicate_rate:yieldDecision.dupRate,created_at:now,updated_at:now};
   const claim=await claimCoverage(redis,job,{source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,partition_state:job.partition_state,partition_city:job.partition_city,coverage_pass:job.coverage_pass,coverage_cell:job.coverage_cell,shard_id});
   if(!claim.claimed){
     if(cityMarked){
