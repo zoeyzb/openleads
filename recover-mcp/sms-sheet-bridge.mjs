@@ -351,6 +351,7 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
 
   return {
     configured: Boolean(serviceAccount && allowed.size),
+    writer_email: serviceAccount?.client_email || "",
     target_count: allowed.size,
     targets: [...allowed].map((key) => {
       const split = key.indexOf(":");
