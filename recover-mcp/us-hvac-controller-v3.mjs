@@ -175,10 +175,13 @@ async function chooseLatePassServiceFamily(area={},pass=5){
     const state=String(area.partition_state||area.state||"").trim().toLowerCase();
     const city=String(area.partition_city||area.city||"").trim().toLowerCase();
     const areaFields=keys.map(k=>[state,city,"*",k].join("|"));
-    const [qAttempts,qNew,qDup,aAttempts]=await Promise.all([
+    const [qAttempts,qNew,qDup,pAttempts,pNew,pDup,aAttempts]=await Promise.all([
       redis.hmGet("recover:yield:query:attempts",keys),
       redis.hmGet("recover:yield:query:new",keys),
       redis.hmGet("recover:yield:query:duplicates",keys),
+      redis.hmGet(`recover:yield:query:p${pass}:attempts`,keys),
+      redis.hmGet(`recover:yield:query:p${pass}:new`,keys),
+      redis.hmGet(`recover:yield:query:p${pass}:duplicates`,keys),
       redis.hmGet("recover:yield:area:attempts",areaFields),
     ]);
     const ranked=families.map((family,i)=>{
@@ -188,8 +191,16 @@ async function chooseLatePassServiceFamily(area={},pass=5){
       const areaAttempts=Number(aAttempts?.[i]||0);
       const avgNew=attempts?netNew/attempts:0;
       const dupRate=(netNew+dup)?dup/(netNew+dup):0;
-      const utility=(avgNew*120)-(dupRate*18)+(attempts<12?8:0);
-      return {family,utility,areaAttempts,attempts,avgNew,dupRate};
+      const recentAttempts=Number(pAttempts?.[i]||0);
+      const recentNew=Number(pNew?.[i]||0);
+      const recentDup=Number(pDup?.[i]||0);
+      const recentAvg=recentAttempts?recentNew/recentAttempts:0;
+      const recentDupRate=(recentNew+recentDup)?recentDup/(recentNew+recentDup):0;
+      const recentWeight=Math.min(1,recentAttempts/8);
+      const blendedAvg=(recentAvg*recentWeight)+(avgNew*(1-recentWeight));
+      const blendedDup=(recentDupRate*recentWeight)+(dupRate*(1-recentWeight));
+      const utility=(blendedAvg*150)-(blendedDup*20)+(recentAttempts<4?7:0)+(attempts<12?3:0);
+      return {family,utility,areaAttempts,attempts,avgNew,dupRate,recentAttempts,recentAvg,recentDupRate};
     });
 
     const minAreaAttempts=Math.min(...ranked.map(x=>x.areaAttempts));
@@ -219,7 +230,9 @@ async function chooseLatePassServiceFamily(area={},pass=5){
         event:"adaptive_family_pick",coveragePass:pass,state,city,family:pick.family,
         mode:exploration?"explore":"exploit",poolSize:exploration?Math.min(8,explore.length):Math.min(6,exploit.length),
         areaAttempts:pick.areaAttempts,globalAttempts:pick.attempts,
-        globalAvgNew:Number(pick.avgNew.toFixed(3)),globalDupRate:Number(pick.dupRate.toFixed(3))
+        globalAvgNew:Number(pick.avgNew.toFixed(3)),globalDupRate:Number(pick.dupRate.toFixed(3)),
+        recentAttempts:pick.recentAttempts,recentAvgNew:Number(pick.recentAvg.toFixed(3)),
+        recentDupRate:Number(pick.recentDupRate.toFixed(3))
       }));
       return pick.family;
     }
