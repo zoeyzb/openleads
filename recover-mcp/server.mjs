@@ -1385,6 +1385,31 @@ async function telnyxSendMessage(to, text) {
   throw lastError || new Error("Telnyx send failed");
 }
 
+
+async function sendOneTimeSmsProbe() {
+  const testId = String(process.env.SMS_ONE_TIME_TEST_ID || "").trim();
+  const phone = normalizeE164(process.env.SMS_ONE_TIME_TEST_PHONE || "");
+  const message = String(process.env.SMS_ONE_TIME_TEST_TEXT || "").trim();
+  if (!testId || !phone || !message || !ACQUISITION_REDIS_URL) return;
+
+  const redis = await getAcquisitionRedis();
+  const key = `recover:sms:one-time-test:${testId}`;
+  if (await redis.get(key)) {
+    console.log("One-time SMS probe already sent", { testId, phoneHint: `••••${phone.slice(-4)}` });
+    return;
+  }
+
+  const response = await telnyxSendMessage(phone, message);
+  const providerMessageId = response?.data?.id || null;
+  await redis.set(key, JSON.stringify({
+    test_id: testId,
+    phone_hint: `••••${phone.slice(-4)}`,
+    provider_message_id: providerMessageId,
+    sent_at: new Date().toISOString()
+  }), { EX: 2592000 });
+  console.log("One-time SMS probe accepted", { testId, phoneHint: `••••${phone.slice(-4)}`, providerMessageId });
+}
+
 async function startSmsWorker() {
   if (!ACQUISITION_REDIS_URL) return;
   const base = await getAcquisitionRedis();
@@ -1486,6 +1511,7 @@ async function startSmsWorker() {
 const handler = createMcpHandler(buildServer);
 const nodeHandler = toNodeHandler(handler);
 
+void sendOneTimeSmsProbe().catch(error => console.error("One-time SMS probe error", error?.message || error));
 void startSmsWorker().catch(error => console.error("SMS worker startup error", error));
 
 startQualifiedGoogleSheetSync({
