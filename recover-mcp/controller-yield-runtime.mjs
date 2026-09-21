@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
@@ -37,11 +38,30 @@ export function patchControllerSource(source='') {
   return out;
 }
 
+async function startSecondaryDiscoveryChild(){
+  if(String(process.env.SECONDARY_DISCOVERY_ENABLED||"1")==="0") return;
+  const child=spawn(process.execPath,["recover-mcp/secondary-discovery-worker.mjs"],{
+    cwd:process.cwd(),
+    env:process.env,
+    stdio:"inherit"
+  });
+  child.on("exit",(code,signal)=>{
+    console.warn(JSON.stringify({event:"secondary_discovery_child_exit",code,signal}));
+  });
+  child.on("error",error=>{
+    console.warn(JSON.stringify({event:"secondary_discovery_child_error",error:String(error?.message||error)}));
+  });
+  process.on("SIGTERM",()=>{try{child.kill("SIGTERM")}catch{}});
+  process.on("SIGINT",()=>{try{child.kill("SIGINT")}catch{}});
+  console.log(JSON.stringify({event:"secondary_discovery_child_started",pid:child.pid}));
+}
+
 async function main(){
   const sourceUrl=new URL('./us-hvac-controller-v3.mjs',import.meta.url);
   const runtimeUrl=new URL('./us-hvac-controller-v3.runtime.mjs',import.meta.url);
   const source=fs.readFileSync(sourceUrl,'utf8');
   fs.writeFileSync(runtimeUrl,patchControllerSource(source));
+  await startSecondaryDiscoveryChild();
   await import(pathToFileURL(runtimeUrl.pathname).href+`?v=${Date.now()}`);
 }
 
