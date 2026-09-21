@@ -34,6 +34,13 @@ const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER || "";
 const TELNYX_WEBHOOK_URL = (process.env.TELNYX_WEBHOOK_URL || "").trim();
 const SMS_SEND_INTERVAL_MS = Math.max(100, Number(process.env.SMS_SEND_INTERVAL_MS || 30000));
 const SMS_MAX_BATCH_RECIPIENTS = Math.max(1, Number(process.env.SMS_MAX_BATCH_RECIPIENTS || 5000));
+const SMS_BULK_CAMPAIGN_ID = String(process.env.SMS_BULK_CAMPAIGN_ID || "").trim();
+const SMS_BULK_SPREADSHEET_ID = String(process.env.SMS_BULK_SPREADSHEET_ID || "").trim();
+const SMS_BULK_TAB_NAME = String(process.env.SMS_BULK_TAB_NAME || "").trim();
+const SMS_BULK_START_ROW = Math.max(1, Number(process.env.SMS_BULK_START_ROW || 0));
+const SMS_BULK_END_ROW = Math.max(1, Number(process.env.SMS_BULK_END_ROW || 0));
+const SMS_BULK_USER_CONFIRMED_CONSENT = String(process.env.SMS_BULK_USER_CONFIRMED_CONSENT || "").toLowerCase() === "true";
+const SMS_BULK_AUTOSTART = String(process.env.SMS_BULK_AUTOSTART || "").toLowerCase() === "true";
 const RECOVER_REVENUE_SMS_CALLBACK_URL = (process.env.RECOVER_REVENUE_SMS_CALLBACK_URL || "").replace(/\/$/, "");
 const RECOVER_REVENUE_SMS_CALLBACK_SECRET = process.env.RECOVER_REVENUE_SMS_CALLBACK_SECRET || "";
 const GOOGLE_SERVICE_ACCOUNT_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
@@ -1410,6 +1417,115 @@ async function sendOneTimeSmsProbe() {
   console.log("One-time SMS probe accepted", { testId, phoneHint: `••••${phone.slice(-4)}`, providerMessageId });
 }
 
+
+async function startConfiguredBulkSmsCampaign() {
+  if (!SMS_BULK_AUTOSTART || !SMS_BULK_CAMPAIGN_ID) return { configured: false };
+  if (!SMS_BULK_USER_CONFIRMED_CONSENT) throw new Error("SMS_BULK_USER_CONFIRMED_CONSENT must be true");
+  if (!SMS_BULK_SPREADSHEET_ID || !SMS_BULK_TAB_NAME) throw new Error("Bulk SMS spreadsheet configuration is incomplete");
+  if (!SMS_BULK_START_ROW || !SMS_BULK_END_ROW || SMS_BULK_END_ROW < SMS_BULK_START_ROW)
+    throw new Error("Bulk SMS row range is invalid");
+  const expectedCount = SMS_BULK_END_ROW - SMS_BULK_START_ROW + 1;
+  if (expectedCount > SMS_MAX_BATCH_RECIPIENTS)
+    throw new Error(`Bulk SMS range exceeds SMS_MAX_BATCH_RECIPIENTS (${SMS_MAX_BATCH_RECIPIENTS})`);
+
+  const redis = await getAcquisitionRedis();
+  const campaignKey = `recover:sms:bulk-campaign:${SMS_BULK_CAMPAIGN_ID}`;
+  const existingBatchId = await redis.get(campaignKey);
+  if (existingBatchId) {
+    const raw = await redis.get(`recover:sms:batch:${existingBatchId}`);
+    if (raw) {
+      const batch = JSON.parse(raw);
+      if (["queued", "running"].includes(batch.status)) {
+        await redis.lPush("recover:sms:queue", existingBatchId);
+        console.log("Recovered bulk SMS campaign queue", {
+          campaignId: SMS_BULK_CAMPAIGN_ID,
+          batchId: existingBatchId,
+          status: batch.status,
+          processedCount: batch.processed_count || 0,
+          acceptedCount: batch.accepted_count || 0
+        });
+      } else {
+        console.log("Bulk SMS campaign already finalized", {
+          campaignId: SMS_BULK_CAMPAIGN_ID,
+          batchId: existingBatchId,
+          status: batch.status
+        });
+      }
+      return { configured: true, existing: true, batch_id: existingBatchId, status: batch.status };
+    }
+  }
+
+  const lockKey = `${campaignKey}:lock`;
+  const locked = await redis.set(lockKey, process.pid.toString(), { NX: true, EX: 120 });
+  if (!locked) return { configured: true, locked: true };
+
+  try {
+    const rows = await SMS_SHEET_BRIDGE.readBasicRows({
+      spreadsheetId: SMS_BULK_SPREADSHEET_ID,
+      tabName: SMS_BULK_TAB_NAME,
+      startRow: SMS_BULK_START_ROW,
+      endRow: SMS_BULK_END_ROW
+    });
+    if (rows.length !== expectedCount)
+      throw new Error(`Bulk SMS sheet returned ${rows.length} rows; expected ${expectedCount}`);
+
+    const seen = new Set();
+    const recipients = rows.map((row) => {
+      const phone = normalizeE164(row.phone);
+      const message = String(row.message || "").trim();
+      const link = String(row.link || "").trim();
+      const businessName = String(row.business_name || "").trim();
+      if (!phone) throw new Error(`Bulk SMS row ${row.row} has invalid phone`);
+      if (seen.has(phone)) throw new Error(`Bulk SMS row ${row.row} duplicates phone ${phone}`);
+      seen.add(phone);
+      if (!message) throw new Error(`Bulk SMS row ${row.row} has empty message`);
+      if (!link || !/^https:\/\//i.test(link)) throw new Error(`Bulk SMS row ${row.row} has invalid link`);
+      if (!message.includes(link)) throw new Error(`Bulk SMS row ${row.row} message/link mismatch`);
+      if (!businessName) throw new Error(`Bulk SMS row ${row.row} has empty business name`);
+      return {
+        phone,
+        message,
+        consent: true,
+        contact_id: `sheet-row-${row.row}`,
+        metadata: {
+          campaign_id: SMS_BULK_CAMPAIGN_ID,
+          sheet_spreadsheet_id: SMS_BULK_SPREADSHEET_ID,
+          sheet_tab_name: SMS_BULK_TAB_NAME,
+          sheet_row: row.row,
+          business_name: businessName,
+          link,
+          consent_source: "user_confirmed_bulk_consent",
+          consent_confirmed_at: new Date().toISOString()
+        }
+      };
+    });
+
+    const preview = await prepareSmsBatch({
+      recipients,
+      label: `Bulk SMS ${SMS_BULK_CAMPAIGN_ID} rows ${SMS_BULK_START_ROW}-${SMS_BULK_END_ROW}`
+    });
+    if (preview.accepted_count !== expectedCount || preview.invalid.length || preview.suppressed.length) {
+      throw new Error(
+        `Bulk SMS validation failed accepted=${preview.accepted_count} invalid=${preview.invalid.length} suppressed=${preview.suppressed.length}`
+      );
+    }
+    const queued = await enqueuePreparedSmsBatch(preview.id, preview.confirmation_token);
+    await redis.set(campaignKey, queued.id, { EX: 2592000 });
+    console.log("Bulk SMS campaign queued", {
+      campaignId: SMS_BULK_CAMPAIGN_ID,
+      batchId: queued.id,
+      startRow: SMS_BULK_START_ROW,
+      endRow: SMS_BULK_END_ROW,
+      acceptedCount: queued.accepted_count,
+      estimatedSegments: queued.estimated_segments,
+      sendIntervalMs: SMS_SEND_INTERVAL_MS
+    });
+    return { configured: true, queued: true, batch_id: queued.id, accepted_count: queued.accepted_count };
+  } finally {
+    await redis.del(lockKey).catch(() => null);
+  }
+}
+
 async function startSmsWorker() {
   if (!ACQUISITION_REDIS_URL) return;
   const base = await getAcquisitionRedis();
@@ -1512,7 +1628,13 @@ const handler = createMcpHandler(buildServer);
 const nodeHandler = toNodeHandler(handler);
 
 void sendOneTimeSmsProbe().catch(error => console.error("One-time SMS probe error", error?.message || error));
-void startSmsWorker().catch(error => console.error("SMS worker startup error", error));
+void startConfiguredBulkSmsCampaign()
+  .then(() => startSmsWorker())
+  .catch(error => {
+    console.error("Bulk SMS campaign startup error", error?.message || error);
+    return startSmsWorker();
+  })
+  .catch(error => console.error("SMS worker startup error", error));
 
 startQualifiedGoogleSheetSync({
   getRedis: getAcquisitionRedis,
