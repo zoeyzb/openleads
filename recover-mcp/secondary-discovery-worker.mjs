@@ -12,7 +12,7 @@ if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
 if(!YOZH_BASE_URL) throw new Error("YOZH_BASE_URL required");
 
 const PROFILE_JOB={industry:"HVAC",search_profile:"core-home-service",require_contact:true,require_no_website:true,include_no_website:true,min_score:30};
-const DIRECTORY_DOMAINS=["yellowpages.com","chamberofcommerce.com","manta.com","bbb.org","yelp.com"];
+const DIRECTORY_DOMAINS=["yellowpages.com","chamberofcommerce.com","manta.com","bbb.org","yelp.com","angi.com","homeadvisor.com","thumbtack.com","houzz.com","nextdoor.com","superpages.com","porch.com","buildzoom.com","facebook.com"];
 const FAMILIES=[
   "HVAC contractor","heating contractor","air conditioning repair service","HVAC repair service",
   "HVAC maintenance","heating and cooling service","furnace repair service","boiler repair service",
@@ -87,7 +87,7 @@ function locationMatches(text,city,state,url=""){
     const slug=normalizeText(u.pathname);
     cityInUrl=Boolean(c&&slug.includes(c));
   }catch{}
-  return (cityInText&&stateInText) || cityInText || cityInUrl;
+  return (cityInText&&stateInText) || cityInText || cityInUrl || stateInText;
 }
 function permanentKey(lead){
   const phone=normalizePhone(lead.phone||"");
@@ -178,6 +178,7 @@ while(true){
       },120000);
       const directoryResults=(body.results||[]).filter(result=>isDirectoryUrl(result?.url)&&hostOf(result.url).includes(domain.replace(/^www\./,"")));
       if(directoryResults.length){body={...body,results:directoryResults,count:directoryResults.length};break;}
+      body={...body,results:[],count:0};
     }
     let added=0,rejected={};
     for(const result of body.results||[]){
