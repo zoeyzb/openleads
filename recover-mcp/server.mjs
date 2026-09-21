@@ -1535,7 +1535,7 @@ async function cleanupTerminalAcquisitionRaw({ maxKeys = 5000, olderThanMs = 6 *
   return { scanned, deleted_raw_keys:deleted, raw_rows_freed:rowsFreed };
 }
 
-async function queueCarrierRegistrationRetry({ messageId = "", message = null, event = null } = {}) {
+async function queueCarrierRegistrationRetry({ messageId = "", message = null, event = null, writeSheet = true } = {}) {
   const redis = await getAcquisitionRedis();
   let msg = message;
   if (!msg && messageId) {
@@ -1569,7 +1569,7 @@ async function queueCarrierRegistrationRetry({ messageId = "", message = null, e
   await redis.hSet("recover:sms:retry:40010", id, JSON.stringify(item));
   await redis.zAdd("recover:sms:retry:40010:index", [{ score:Date.now(), value:id }]);
 
-  if (item.sheet_spreadsheet_id && item.sheet_tab_name && item.sheet_row) {
+  if (writeSheet && item.sheet_spreadsheet_id && item.sheet_tab_name && item.sheet_row) {
     await SMS_SHEET_BRIDGE.writeBasicRetryStatus("RETRY_40010", {
       sheet_spreadsheet_id:item.sheet_spreadsheet_id,
       sheet_tab_name:item.sheet_tab_name,
@@ -1668,10 +1668,10 @@ async function rebuildSmsInboxFromSheet({ limit = 2000 } = {}) {
     const errors = Array.isArray(payload?.errors) ? payload.errors : [];
     const codes = errors.map(e => String(e?.code || ""));
     if (codes.includes("40001")) {
-      await quarantineNonRoutableSms({ messageId, message:saved || { id:messageId, phone, text, status, raw }, event:raw, quiet:true }).catch(() => null);
+      await quarantineNonRoutableSms({ messageId, message:saved || { id:messageId, phone, text, status, raw }, event:raw, quiet:true, writeSheet:false }).catch(() => null);
     }
     if (isCarrierRegistrationError(codes)) {
-      const queued = await queueCarrierRegistrationRetry({ messageId, message:saved || { id:messageId, phone, text, status, raw }, event:raw }).catch(() => null);
+      const queued = await queueCarrierRegistrationRetry({ messageId, message:saved || { id:messageId, phone, text, status, raw }, event:raw, writeSheet:false }).catch(() => null);
       if (queued?.queued) retry40010++;
     }
 
@@ -1787,7 +1787,7 @@ async function backfillSmsSender10dlcBlock({ limit = 5000 } = {}) {
   return { blocked:false, scanned };
 }
 
-async function quarantineNonRoutableSms({ messageId = "", message = null, event = null, quiet = false } = {}) {
+async function quarantineNonRoutableSms({ messageId = "", message = null, event = null, quiet = false, writeSheet = true } = {}) {
   const redis = await getAcquisitionRedis();
   let msg = message;
   if (!msg && messageId) {
@@ -1820,7 +1820,7 @@ async function quarantineNonRoutableSms({ messageId = "", message = null, event 
     sheet_tab_name: profile?.sheet_tab_name || SMS_BULK_TAB_NAME,
     sheet_row: profile?.sheet_row || null
   };
-  if (metadata.sheet_spreadsheet_id && metadata.sheet_tab_name && metadata.sheet_row) {
+  if (writeSheet && metadata.sheet_spreadsheet_id && metadata.sheet_tab_name && metadata.sheet_row) {
     await SMS_SHEET_BRIDGE.writeBasicSendResult({
       status:"blocked_not_routable",
       telnyx_message_id:String(messageId || msg.id || ""),
