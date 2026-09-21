@@ -1598,6 +1598,90 @@ async function backfillCarrierRegistrationRetries({ limit = 5000 } = {}) {
   return { scanned, queued };
 }
 
+async function rebuildSmsInboxFromSheet({ limit = 2000 } = {}) {
+  if (!SMS_BULK_SPREADSHEET_ID || !SMS_BULK_TAB_NAME) return { configured:false, scanned:0, restored:0 };
+  const redis = await getAcquisitionRedis();
+  const rows = await SMS_SHEET_BRIDGE.readBasicRecoveryRows({
+    spreadsheetId:SMS_BULK_SPREADSHEET_ID,
+    tabName:SMS_BULK_TAB_NAME,
+    startRow:172,
+    endRow:SMS_BULK_END_ROW || 3478
+  });
+  let scanned = 0;
+  let restored = 0;
+  let failedFetches = 0;
+  let retry40010 = 0;
+  let suppressed = 0;
+
+  for (const row of rows || []) {
+    if (scanned >= limit) break;
+    const phone = normalizeE164(row.phone);
+    if (!phone) continue;
+
+    await saveInboxContactProfile(phone, {
+      business_name:row.business_name,
+      campaign_id:SMS_BULK_CAMPAIGN_ID,
+      sheet_row:row.row,
+      sheet_spreadsheet_id:SMS_BULK_SPREADSHEET_ID,
+      sheet_tab_name:SMS_BULK_TAB_NAME,
+      link:row.link
+    }).catch(() => null);
+
+    if (String(row.reachability || "").toUpperCase() === "SKIP") {
+      await redis.sAdd("recover:sms:suppressed", phone);
+      await redis.hSet("recover:sms:suppression:reasons", phone, JSON.stringify({
+        reason:"sheet_reachability_skip",
+        at:new Date().toISOString(),
+        sheet_row:row.row
+      }));
+      suppressed++;
+    }
+
+    const messageId = String(row.telnyx_message_id || "").trim();
+    if (!messageId) continue;
+    scanned++;
+
+    let provider = null;
+    try {
+      provider = await telnyxApiRequest(`/messages/${encodeURIComponent(messageId)}`);
+    } catch (error) {
+      failedFetches++;
+    }
+
+    const payload = provider?.data || {};
+    const status = String(payload?.to?.[0]?.status || payload?.status || row.sms_status || "accepted").trim();
+    const text = String(payload?.text || row.message || "");
+    const at = payload?.sent_at || payload?.completed_at || row.sms_updated_at || new Date().toISOString();
+    const raw = provider?.data ? { data:{ event_type:"message.recovered", payload } } : { recovered_from_sheet:true, sheet_status:row.sms_status };
+
+    const saved = await saveInboxMessage({
+      id:messageId,
+      phone,
+      direction:"outbound",
+      text,
+      status,
+      at,
+      raw
+    }).catch(() => null);
+    if (saved) restored++;
+
+    const errors = Array.isArray(payload?.errors) ? payload.errors : [];
+    const codes = errors.map(e => String(e?.code || ""));
+    if (codes.includes("40001")) {
+      await quarantineNonRoutableSms({ messageId, message:saved || { id:messageId, phone, text, status, raw }, event:raw, quiet:true }).catch(() => null);
+    }
+    if (isCarrierRegistrationError(codes)) {
+      const queued = await queueCarrierRegistrationRetry({ messageId, message:saved || { id:messageId, phone, text, status, raw }, event:raw }).catch(() => null);
+      if (queued?.queued) retry40010++;
+    }
+
+    if (scanned % 50 === 0) await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  const replies = await rebuildInboxReplyIndex().catch(() => ({ reply_threads:0 }));
+  return { configured:true, scanned, restored, failed_fetches:failedFetches, retry_40010:retry40010, suppressed, ...replies };
+}
+
 async function inboxFailureBreakdown() {
   const redis = await getAcquisitionRedis();
   const all = await redis.hVals("recover:sms:inbox:messages");
@@ -2829,6 +2913,12 @@ setTimeout(() => {
 }, 7000);
 
 
+
+setTimeout(() => {
+  void rebuildSmsInboxFromSheet({ limit:2000 })
+    .then(result => console.log("Recover SMS sheet/Telnyx rebuild complete", result))
+    .catch(error => console.error("Recover SMS sheet/Telnyx rebuild error", error?.message || error));
+}, 16000);
 
 setTimeout(() => {
   void cleanupTerminalAcquisitionRaw({ maxKeys:5000 })
