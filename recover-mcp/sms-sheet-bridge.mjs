@@ -236,6 +236,28 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     return basicStatusColumnsPromise;
   }
 
+  async function writeBasicReachability(status, metadata = {}, detail = "") {
+    const spreadsheetId = clean(metadata.sheet_spreadsheet_id);
+    const tabName = clean(metadata.sheet_tab_name);
+    const row = Number(metadata.sheet_row || 0);
+    if (!spreadsheetId || !tabName || row < 1) return { updated: 0 };
+    const value = clean(status).toUpperCase();
+    if (!["CHECK","SEND","SKIP"].includes(value)) throw new Error("Reachability must be CHECK, SEND, or SKIP");
+    const headerRange = `${quoteTab(tabName)}!I1:I1`;
+    const rowRange = `${quoteTab(tabName)}!I${row}:I${row}`;
+    await request(spreadsheetId, "/values:batchUpdate", {
+      method: "POST",
+      body: {
+        valueInputOption: "RAW",
+        data: [
+          { range: headerRange, majorDimension: "ROWS", values: [["Reachability"]] },
+          { range: rowRange, majorDimension: "ROWS", values: [[value]] }
+        ]
+      }
+    });
+    return { updated: 1, status: value, detail: clean(detail) };
+  }
+
   async function writeBasicSendResult(result, metadata = {}) {
     const spreadsheetId = clean(metadata.sheet_spreadsheet_id);
     const tabName = clean(metadata.sheet_tab_name);
@@ -362,6 +384,7 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     schema: smsSheetSchema(),
     readRows,
     readBasicRows,
+    writeBasicReachability,
     writeBasicSendResult,
     writeRows,
     markBatchQueued,
