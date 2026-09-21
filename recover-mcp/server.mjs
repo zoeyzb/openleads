@@ -1461,6 +1461,8 @@ async function saveInboxContactProfile(phone, metadata = {}) {
     business_name: String(metadata?.business_name || "").trim() || null,
     campaign_id: String(metadata?.campaign_id || "").trim() || null,
     sheet_row: metadata?.sheet_row ?? null,
+    sheet_spreadsheet_id: String(metadata?.sheet_spreadsheet_id || "").trim() || null,
+    sheet_tab_name: String(metadata?.sheet_tab_name || "").trim() || null,
     link: String(metadata?.link || "").trim() || null,
     updated_at: new Date().toISOString()
   };
@@ -1517,6 +1519,71 @@ async function inboxFailureBreakdown() {
     failure_rate_percent: outbound ? Number(((failed/outbound)*100).toFixed(1)) : 0,
     reasons: sorted
   };
+}
+
+async function quarantineNonRoutableSms({ messageId = "", message = null, event = null } = {}) {
+  const redis = await getAcquisitionRedis();
+  let msg = message;
+  if (!msg && messageId) {
+    const raw = await redis.hGet("recover:sms:inbox:messages", String(messageId)).catch(() => null);
+    try { msg = raw ? JSON.parse(raw) : null; } catch { msg = null; }
+  }
+  if (!msg?.phone) return { quarantined:false, reason:"missing_phone" };
+
+  const payload = event?.data?.payload || event?.payload || msg?.raw?.data?.payload || msg?.raw?.payload || msg?.raw || {};
+  const errors = Array.isArray(payload?.errors) ? payload.errors : [];
+  const codes = errors.map(e => String(e?.code || ""));
+  if (!codes.includes("40001")) return { quarantined:false, reason:"not_non_routable" };
+
+  await redis.sAdd("recover:sms:suppressed", msg.phone);
+  await redis.hSet("recover:sms:suppression:reasons", msg.phone, JSON.stringify({
+    reason:"telnyx_non_routable_40001",
+    at:new Date().toISOString(),
+    source:"telnyx_delivery_failure",
+    message_id:String(messageId || msg.id || "")
+  }));
+
+  let profile = null;
+  try {
+    const rawProfile = await redis.get(`recover:sms:inbox:contact:${msg.phone}`);
+    profile = rawProfile ? JSON.parse(rawProfile) : null;
+  } catch {}
+
+  const metadata = {
+    sheet_spreadsheet_id: profile?.sheet_spreadsheet_id || SMS_BULK_SPREADSHEET_ID,
+    sheet_tab_name: profile?.sheet_tab_name || SMS_BULK_TAB_NAME,
+    sheet_row: profile?.sheet_row || null
+  };
+  if (metadata.sheet_spreadsheet_id && metadata.sheet_tab_name && metadata.sheet_row) {
+    await SMS_SHEET_BRIDGE.writeBasicSendResult({
+      status:"blocked_not_routable",
+      telnyx_message_id:String(messageId || msg.id || ""),
+      at:new Date().toISOString()
+    }, metadata).catch(error => console.error("SMS non-routable sheet writeback error", error?.message || error));
+  }
+
+  console.log("SMS number quarantined as non-routable", {
+    messageId:String(messageId || msg.id || ""),
+    sheetRow: metadata.sheet_row || null,
+    phoneHint:`••••${String(msg.phone).slice(-4)}`
+  });
+  return { quarantined:true, sheet_row:metadata.sheet_row || null };
+}
+
+async function backfillNonRoutableSmsSuppressions({ limit = 5000 } = {}) {
+  const redis = await getAcquisitionRedis();
+  const all = await redis.hGetAll("recover:sms:inbox:messages");
+  let scanned=0, quarantined=0;
+  for (const [id, raw] of Object.entries(all || {})) {
+    if (scanned >= limit) break;
+    let msg;
+    try { msg = JSON.parse(raw); } catch { continue; }
+    if (msg?.direction !== "outbound") continue;
+    scanned++;
+    const result = await quarantineNonRoutableSms({ messageId:id, message:msg });
+    if (result?.quarantined) quarantined++;
+  }
+  return { scanned, quarantined };
 }
 
 async function listInboxThreads(limit = 100) {
@@ -2187,6 +2254,12 @@ setTimeout(() => {
     .catch(error => console.error("Recover inbox history backfill error", error?.message || error));
 }, 5000);
 setTimeout(() => {
+  void backfillNonRoutableSmsSuppressions({ limit: 5000 })
+    .then(result => console.log("Recover non-routable SMS suppression backfill complete", result))
+    .catch(error => console.error("Recover non-routable SMS suppression backfill error", error?.message || error));
+}, 9000);
+
+setTimeout(() => {
   void logInboxDeliveryFailureDiagnostics({ limit: 100 })
     .then(result => console.log("Recover inbox failure diagnostics complete", result))
     .catch(error => console.error("Recover inbox failure diagnostics error", error?.message || error));
@@ -2439,7 +2512,11 @@ const httpServer = createHttpServer((req, res) => {
         }
       } else if(messageId && /^message\./.test(type)) {
         const status=String(payload?.to?.[0]?.status||payload?.status||type.replace(/^message\./,""));
-        await updateInboxMessageStatus(messageId,status,event);
+        const updatedMessage = await updateInboxMessageStatus(messageId,status,event);
+        const errorCodes = (Array.isArray(payload?.errors) ? payload.errors : []).map(e => String(e?.code || ""));
+        if (errorCodes.includes("40001")) {
+          await quarantineNonRoutableSms({ messageId, message:updatedMessage, event });
+        }
         if (/(fail|reject|undeliver|expired|blocked)/i.test(status)) {
           const errors = Array.isArray(payload?.errors) ? payload.errors : [];
           console.log("SMS delivery failure webhook", {
