@@ -309,7 +309,6 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
   async function writeBasicRetryStatuses({ spreadsheetId, tabName, rows = [], status = "RETRY_40010" }) {
     const uniqueRows = [...new Set((rows || []).map(Number).filter(row => Number.isInteger(row) && row > 0))];
     if (!spreadsheetId || !tabName || !uniqueRows.length) return { updated: 0 };
-    assertAllowed(spreadsheetId, tabName);
     const value = clean(status).toUpperCase();
     const data = [
       { range: `${quoteTab(tabName)}!J1:J1`, majorDimension:"ROWS", values:[["Retry Status"]] },
