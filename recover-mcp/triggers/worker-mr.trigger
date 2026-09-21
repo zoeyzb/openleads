@@ -14,3 +14,4 @@ rollout 1m-yield-fix 2026-09-20T02:15Z
 rollout service-family-slices 2026-09-20T03:45Z
 geo-cell-rollout 2026-09-21T01:21Z
 geo-cell-depth10 2026-09-21T01:23Z
+consolidated-geo-pass-yield 2026-09-21T01:29Z
