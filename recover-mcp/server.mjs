@@ -11,9 +11,11 @@ import { startQualifiedGoogleSheetSync } from "./google-sheet-direct-sync.mjs";
 import { createSmsSheetBridge } from "./sms-sheet-bridge.mjs";
 import {
   bulkSmsBlockReason,
+  bulkSmsOverrideStopReason,
   isCarrierRegistrationError,
   reachabilityForLookupDecision,
   shouldPostSmsResultCallback,
+  shouldResumePausedSmsBatch,
 } from "./sms-delivery-guard.mjs";
 // Lead-sheet template rows 1-6 are reserved for title, KPIs, and headers.
 
@@ -53,6 +55,8 @@ const SMS_BULK_AUTOSTART = String(process.env.SMS_BULK_AUTOSTART || "").toLowerC
 const SMS_BULK_PAUSED = String(process.env.SMS_BULK_PAUSED || "").toLowerCase() === "true";
 // Sending is fail-closed until carrier registration is explicitly confirmed.
 const SMS_10DLC_APPROVED = String(process.env.SMS_10DLC_APPROVED || "").toLowerCase() === "true";
+const SMS_UNREGISTERED_SEND_OVERRIDE = String(process.env.SMS_UNREGISTERED_SEND_OVERRIDE || "").toLowerCase() === "true";
+const SMS_OVERRIDE_FAILURE_CUTOFF_PERCENT = Math.min(100, Math.max(1, Number(process.env.SMS_OVERRIDE_FAILURE_CUTOFF_PERCENT || 70)));
 const RECOVER_REVENUE_SMS_CALLBACK_URL = (process.env.RECOVER_REVENUE_SMS_CALLBACK_URL || "").replace(/\/$/, "");
 const RECOVER_REVENUE_SMS_CALLBACK_SECRET = process.env.RECOVER_REVENUE_SMS_CALLBACK_SECRET || "";
 const GOOGLE_SERVICE_ACCOUNT_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
@@ -2126,7 +2130,8 @@ async function sendOneTimeSmsProbe() {
 async function startConfiguredBulkSmsCampaign() {
   if (!SMS_BULK_AUTOSTART || !SMS_BULK_CAMPAIGN_ID) return { configured: false };
   if (SMS_BULK_PAUSED) return { configured:true, queued:false, paused:true, reason:"configured_pause" };
-  if (!SMS_10DLC_APPROVED) return { configured:true, queued:false, paused:true, reason:"10dlc_not_approved" };
+  if (!SMS_10DLC_APPROVED && !SMS_UNREGISTERED_SEND_OVERRIDE)
+    return { configured:true, queued:false, paused:true, reason:"10dlc_not_approved" };
   if (!SMS_BULK_USER_CONFIRMED_CONSENT) throw new Error("SMS_BULK_USER_CONFIRMED_CONSENT must be true");
   if (!SMS_BULK_SPREADSHEET_ID || !SMS_BULK_TAB_NAME) throw new Error("Bulk SMS spreadsheet configuration is incomplete");
   if (!SMS_BULK_START_ROW || !SMS_BULK_END_ROW || SMS_BULK_END_ROW < SMS_BULK_START_ROW)
@@ -2136,6 +2141,14 @@ async function startConfiguredBulkSmsCampaign() {
     throw new Error(`Bulk SMS range exceeds SMS_MAX_BATCH_RECIPIENTS (${SMS_MAX_BATCH_RECIPIENTS})`);
 
   const redis = await getAcquisitionRedis();
+  const senderBlockRaw = await redis.get("recover:sms:sender-block:40010");
+  const startBlockReason = bulkSmsBlockReason({
+    configuredPause: SMS_BULK_PAUSED,
+    registrationApproved: SMS_10DLC_APPROVED,
+    carrierBlocked: Boolean(senderBlockRaw),
+    unregisteredSendOverride: SMS_UNREGISTERED_SEND_OVERRIDE,
+  });
+  if (startBlockReason) return { configured:true, queued:false, paused:true, reason:startBlockReason };
   const campaignKey = `recover:sms:bulk-campaign:${SMS_BULK_CAMPAIGN_ID}`;
   const existingBatchId = await redis.get(campaignKey);
   if (existingBatchId) {
@@ -2151,6 +2164,18 @@ async function startConfiguredBulkSmsCampaign() {
           processedCount: batch.processed_count || 0,
           acceptedCount: batch.accepted_count || 0
         });
+      } else if (shouldResumePausedSmsBatch({ status:batch.status, blockReason:startBlockReason })) {
+        batch.status = "queued";
+        batch.updated_at = new Date().toISOString();
+        delete batch.pause_reason;
+        await redis.set(`recover:sms:batch:${existingBatchId}`, JSON.stringify(batch), { EX: 604800 });
+        await redis.lPush("recover:sms:queue", existingBatchId);
+        console.log("Resumed paused bulk SMS campaign", {
+          campaignId: SMS_BULK_CAMPAIGN_ID,
+          batchId: existingBatchId,
+          processedCount: batch.processed_count || 0,
+          sendIntervalMs: SMS_SEND_INTERVAL_MS,
+        });
       } else {
         console.log("Bulk SMS campaign already finalized", {
           campaignId: SMS_BULK_CAMPAIGN_ID,
@@ -2158,7 +2183,13 @@ async function startConfiguredBulkSmsCampaign() {
           status: batch.status
         });
       }
-      return { configured: true, existing: true, batch_id: existingBatchId, status: batch.status };
+      return {
+        configured: true,
+        existing: true,
+        resumed: batch.status === "queued",
+        batch_id: existingBatchId,
+        status: batch.status,
+      };
     }
   }
 
@@ -2270,6 +2301,7 @@ async function startSmsWorker() {
             configuredPause: SMS_BULK_PAUSED,
             registrationApproved: SMS_10DLC_APPROVED,
             carrierBlocked: Boolean(senderBlockRaw),
+            unregisteredSendOverride: SMS_UNREGISTERED_SEND_OVERRIDE,
           });
           if (blockReason) {
             batch.status = "paused";
@@ -2284,6 +2316,27 @@ async function startSmsWorker() {
               reason:blockReason,
             });
             break;
+          }
+          if (SMS_UNREGISTERED_SEND_OVERRIDE) {
+            const delivery = await inboxFailureBreakdown();
+            const stopReason = bulkSmsOverrideStopReason({
+              overrideEnabled: true,
+              outboundMessages: delivery.outbound_messages,
+              failureRatePercent: delivery.failure_rate_percent,
+              cutoffPercent: SMS_OVERRIDE_FAILURE_CUTOFF_PERCENT,
+            });
+            if (stopReason) {
+              batch.status = "paused";
+              batch.updated_at = new Date().toISOString();
+              batch.pause_reason = stopReason;
+              await save();
+              console.error("Bulk SMS halted by delivery failure cutoff", {
+                batchId,
+                failureRatePercent: delivery.failure_rate_percent,
+                cutoffPercent: SMS_OVERRIDE_FAILURE_CUTOFF_PERCENT,
+              });
+              break;
+            }
           }
         }
 
@@ -2444,8 +2497,8 @@ async function startSmsWorker() {
             }), { EX: 2592000 });
             await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
             if (shouldPostSmsResultCallback(recipient?.metadata)) {
-            await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
-          }
+              await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
+            }
             if (recipient?.metadata?.campaign_id) {
               await SMS_SHEET_BRIDGE.writeBasicSendResult(result, recipient.metadata || {}).catch(error => console.error("SMS basic sheet send writeback error", error.message));
             } else {
@@ -2788,7 +2841,7 @@ const httpServer = createHttpServer((req, res) => {
       if(!phone||!text||text.length>1600) throw new Error("invalid_reply");
       const redis=await getAcquisitionRedis();
       const senderBlockRaw=await redis.get("recover:sms:sender-block:40010");
-      const blockReason=bulkSmsBlockReason({configuredPause:SMS_BULK_PAUSED,registrationApproved:SMS_10DLC_APPROVED,carrierBlocked:Boolean(senderBlockRaw)});
+      const blockReason=bulkSmsBlockReason({configuredPause:SMS_BULK_PAUSED,registrationApproved:SMS_10DLC_APPROVED,carrierBlocked:Boolean(senderBlockRaw),unregisteredSendOverride:SMS_UNREGISTERED_SEND_OVERRIDE});
       if(blockReason) throw new Error(`sms_sender_blocked:${blockReason}`);
       if(await redis.sIsMember("recover:sms:suppressed",phone)) throw new Error("recipient_is_suppressed");
       const sent=await telnyxSendMessage(phone,text);
