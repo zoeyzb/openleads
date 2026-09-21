@@ -1586,6 +1586,41 @@ async function backfillNonRoutableSmsSuppressions({ limit = 5000 } = {}) {
   return { scanned, quarantined };
 }
 
+async function reconcileAmbiguousLookupSuppressions({ limit = 5000 } = {}) {
+  const redis = await getAcquisitionRedis();
+  const reasons = await redis.hGetAll("recover:sms:suppression:reasons");
+  let scanned = 0;
+  let restoredToCheck = 0;
+  for (const [phone, raw] of Object.entries(reasons || {})) {
+    if (scanned >= limit) break;
+    scanned++;
+    let reason = null;
+    try { reason = raw ? JSON.parse(raw) : null; } catch {}
+    if (reason?.reason !== "telnyx_lookup_not_sms_capable") continue;
+    const type = String(reason?.line_type || "").toLowerCase().replace(/[\s-]+/g, "_");
+    if (!["voip","fixed_line_or_mobile","unknown",""].includes(type)) continue;
+
+    await redis.sRem("recover:sms:suppressed", phone);
+    const row = Number(reason?.sheet_row || 0);
+    if (row > 0 && SMS_BULK_SPREADSHEET_ID && SMS_BULK_TAB_NAME) {
+      await SMS_SHEET_BRIDGE.writeBasicReachability("CHECK", {
+        sheet_spreadsheet_id: SMS_BULK_SPREADSHEET_ID,
+        sheet_tab_name: SMS_BULK_TAB_NAME,
+        sheet_row: row
+      }, `ambiguous_${type || "unknown"}`).catch(error =>
+        console.error("SMS ambiguous lookup CHECK repair error", error?.message || error)
+      );
+    }
+    await redis.hSet("recover:sms:suppression:reasons", phone, JSON.stringify({
+      ...reason,
+      reason:"telnyx_lookup_ambiguous_requires_check",
+      restored_at:new Date().toISOString()
+    }));
+    restoredToCheck++;
+  }
+  return { scanned, restored_to_check: restoredToCheck };
+}
+
 async function listUnavailableSmsNumbers({ limit = 500 } = {}) {
   const redis = await getAcquisitionRedis();
   const reasons = await redis.hGetAll("recover:sms:suppression:reasons");
@@ -1930,11 +1965,17 @@ async function telnyxLookupSmsSuitability(phone, redis) {
       const rawType = String(carrier?.type || "").trim().toLowerCase();
       const type = rawType.replace(/[\s-]+/g, "_");
       const smsCapable = ["mobile","wireless"].includes(type);
+      const definitelyNonSms = ["fixed_line","landline"].includes(type);
+      const decision = smsCapable ? "SEND" : definitelyNonSms ? "SKIP" : "CHECK";
       const result = {
-        decision: smsCapable ? "SEND" : "SKIP",
+        decision,
         line_type: type || "unknown",
         carrier_name: String(carrier?.name || carrier?.carrier_name || "").trim() || null,
-        reason: smsCapable ? "confirmed_mobile" : (type ? `line_type_${type}` : "carrier_unknown"),
+        reason: smsCapable
+          ? "confirmed_mobile"
+          : definitelyNonSms
+            ? `confirmed_non_sms_${type}`
+            : `ambiguous_line_type_${type || "unknown"}`,
         checked_at: new Date().toISOString(),
         cached:false
       };
@@ -2399,6 +2440,12 @@ setTimeout(() => {
     })
     .catch(error => console.error("Recover inbox history backfill error", error?.message || error));
 }, 5000);
+setTimeout(() => {
+  void reconcileAmbiguousLookupSuppressions({ limit: 5000 })
+    .then(result => console.log("Recover ambiguous lookup suppression reconciliation complete", result))
+    .catch(error => console.error("Recover ambiguous lookup suppression reconciliation error", error?.message || error));
+}, 11000);
+
 setTimeout(() => {
   void backfillNonRoutableSmsSuppressions({ limit: 5000 })
     .then(result => console.log("Recover non-routable SMS suppression backfill complete", result))
