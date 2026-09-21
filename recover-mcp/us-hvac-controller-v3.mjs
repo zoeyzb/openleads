@@ -166,6 +166,12 @@ async function fetchZipAreas(){
 
 const redis=createClient({url:REDIS_URL}); redis.on("error",e=>console.error("Redis error",e)); await redis.connect();
 
+function cityFamilyReservationKey(area={},pass=5){
+  const state=String(area.partition_state||area.state||"").trim().toLowerCase();
+  const city=String(area.partition_city||area.city||"").trim().toLowerCase();
+  return `recover:coverage:city-family:p${pass}:${state}:${city}`;
+}
+
 async function chooseLatePassServiceFamily(area={},pass=5){
   const fallback=latePassServiceFamily(area,pass);
   if(pass<5||!LATE_PASS_SERVICE_FAMILIES.length) return fallback;
@@ -203,8 +209,12 @@ async function chooseLatePassServiceFamily(area={},pass=5){
       return {family,utility,areaAttempts,attempts,avgNew,dupRate,recentAttempts,recentAvg,recentDupRate};
     });
 
+    const usedKey=cityFamilyReservationKey(area,pass);
+    const used=new Set((await redis.sMembers(usedKey)).map(x=>String(x||"").trim().toLowerCase()));
     const minAreaAttempts=Math.min(...ranked.map(x=>x.areaAttempts));
-    const cityEligible=ranked.filter(x=>x.areaAttempts===minAreaAttempts);
+    let cityEligible=ranked.filter(x=>x.areaAttempts===minAreaAttempts&&!used.has(String(x.family||"").trim().toLowerCase()));
+    if(!cityEligible.length) cityEligible=ranked.filter(x=>!used.has(String(x.family||"").trim().toLowerCase()));
+    if(!cityEligible.length) cityEligible=ranked;
     const exploit=[...cityEligible].sort((a,b)=>b.utility-a.utility||b.avgNew-a.avgNew||a.attempts-b.attempts);
     const explore=[...cityEligible].sort((a,b)=>a.attempts-b.attempts||a.dupRate-b.dupRate||b.avgNew-a.avgNew);
 
@@ -477,9 +487,15 @@ async function seedOne(area){
       cityMarkMode="set";
     }
   }
+  const familyReservationKey=(cityScopedPass&&queryFamily)?cityFamilyReservationKey(area,coveragePass):"";
+  if(familyReservationKey){
+    await redis.sAdd(familyReservationKey,String(queryFamily).trim().toLowerCase());
+    await redis.expire(familyReservationKey,TTL);
+  }
   const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,coverage_cell:coverageCell,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),query_family:queryFamily,target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_city_population:sourceCityPopulation,source_latitude:area.latitude,source_longitude:area.longitude,yield_exploration:Boolean(yieldDecision.exploration),prior_area_attempts:yieldDecision.attempts,prior_area_net_new:yieldDecision.netNew,prior_area_duplicate_rate:yieldDecision.dupRate,created_at:now,updated_at:now};
-  const claim=await claimCoverage(redis,job,{source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,partition_state:job.partition_state,partition_city:job.partition_city,coverage_pass:job.coverage_pass,coverage_cell:job.coverage_cell,shard_id});
+  const claim=await claimCoverage(redis,job,{source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_city_population:sourceCityPopulation,partition_state:job.partition_state,partition_city:job.partition_city,coverage_pass:job.coverage_pass,coverage_cell:job.coverage_cell,shard_id});
   if(!claim.claimed){
+    if(familyReservationKey) await redis.sRem(familyReservationKey,String(queryFamily).trim().toLowerCase());
     if(cityMarked){
       if(cityMarkMode==="hash") await redis.hIncrBy(cityPassKey,cityField,-1);
       else await redis.sRem(cityPassKey,cityField);
