@@ -127,20 +127,21 @@ async function saveCandidate({result,city,state,family,domain}){
   if(!result?.url||!isDirectoryUrl(result.url)) return {accepted:false,reason:"not_directory"};
   const scrape=result.scrape||{};
   const page=[result.title,result.snippet,scrape.markdown,scrape.fit_markdown].filter(Boolean).join("\n");
-  if(!locationMatches(page,city,state,result.url)) return {accepted:false,reason:"location"};
+  const locationOk=locationMatches(page,city,state,result.url);
   const owned=explicitWebsiteFromHtml(scrape.raw_html||scrape.html||"");
   if(owned) return {accepted:false,reason:"owned_website"};
   const phones=phonesFrom(page),emails=emailsFrom(page);
   if(!phones.length&&!emails.length) return {accepted:false,reason:"contact"};
+  if(!locationOk&&!phones.length) return {accepted:false,reason:"location"};
   const lead={
     name:cleanName(result.title||""),
     category:"",
     description:[result.snippet,scrape.markdown].filter(Boolean).join(" ").slice(0,8000),
     address:"",
-    city,region:state,website:"",
+    city:locationOk?city:"",region:locationOk?state:"",website:"",
     social_profile_url:result.url,
     phone:phones[0]||"",emails,
-    source:"secondary_directory_search",source_directory:domain,source_query_family:family
+    source:"secondary_directory_search",source_directory:domain,source_query_family:family,discovery_query_location:`${city}, ${state}`
   };
   if(!lead.name||!isCoreHomeServiceLead(lead)) return {accepted:false,reason:"industry"};
   const key=permanentKey(lead);
