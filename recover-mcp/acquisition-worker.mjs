@@ -582,7 +582,7 @@ async function orderVariantsByNetNewYield(redis,variants=[]){
     .sort((a,b)=>b.score-a.score||a.attempts-b.attempts)
     .map(x=>x.query);
 }
-async function recordQueryYield(redis,queries=[],stats={},seed=""){
+async function recordQueryYield(redis,queries=[],stats={},seed="",coveragePass=""){
   const families=[...new Set((queries||[]).map(queryFamily).filter(Boolean))];
   if(!families.length) return;
   const netNew=Math.max(0,Number(stats.newAdded||0));
@@ -597,11 +597,20 @@ async function recordQueryYield(redis,queries=[],stats={},seed=""){
     const rotated=(i-offset+families.length)%families.length;
     const newShare=baseNew+(rotated<remNew?1:0);
     const dupShare=baseDup+(rotated<remDup?1:0);
-    await Promise.all([
+    const passNum=Number(String(coveragePass||"").match(/p(\d+)$/)?.[1]||0);
+    const ops=[
       redis.hIncrBy("recover:yield:query:attempts",family,1),
       redis.hIncrBy("recover:yield:query:new",family,newShare),
       redis.hIncrBy("recover:yield:query:duplicates",family,dupShare),
-    ]);
+    ];
+    if(passNum>0){
+      ops.push(
+        redis.hIncrBy(`recover:yield:query:p${passNum}:attempts`,family,1),
+        redis.hIncrBy(`recover:yield:query:p${passNum}:new`,family,newShare),
+        redis.hIncrBy(`recover:yield:query:p${passNum}:duplicates`,family,dupShare),
+      );
+    }
+    await Promise.all(ops);
   }
 }
 
@@ -994,7 +1003,7 @@ async function processAcquisition(id) {
       const persisted=upsertQualifiedLeads(existingPersisted,compactQualified);
       await replaceList(resultsKey(id),persisted);
       const permanentStats=await persistPermanentQualified(redis, job, leads);
-      await recordQueryYield(redis,job.current_query_families||[job.current_query],permanentStats,job.id);
+      await recordQueryYield(redis,job.current_query_families||[job.current_query],permanentStats,job.id,job.coverage_pass);
       job.stored_count=persisted.length;
       job.permanent_new_count=Number(job.permanent_new_count||0)+permanentStats.newAdded;
       job.permanent_duplicate_count=Number(job.permanent_duplicate_count||0)+permanentStats.duplicates;
