@@ -32,6 +32,9 @@ const ACQUISITION_REDIS_URL = process.env.ACQUISITION_REDIS_URL || "";
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || "";
 const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER || "";
 const TELNYX_WEBHOOK_URL = (process.env.TELNYX_WEBHOOK_URL || "").trim();
+const INBOX_ACCESS_PASSWORD = String(process.env.INBOX_ACCESS_PASSWORD || "");
+const TELNYX_AUTO_CONFIGURE_PROFILE = String(process.env.TELNYX_AUTO_CONFIGURE_PROFILE || "").toLowerCase() === "true";
+const RAILWAY_PUBLIC_DOMAIN = String(process.env.RAILWAY_PUBLIC_DOMAIN || "").trim();
 const SMS_SEND_INTERVAL_MS = Math.max(100, Number(process.env.SMS_SEND_INTERVAL_MS || 30000));
 const SMS_MAX_BATCH_RECIPIENTS = Math.max(1, Number(process.env.SMS_MAX_BATCH_RECIPIENTS || 5000));
 const SMS_BULK_CAMPAIGN_ID = String(process.env.SMS_BULK_CAMPAIGN_ID || "").trim();
@@ -1309,6 +1312,145 @@ async function postSmsResultCallback(payload) {
   return { configured:true, ok:true };
 }
 
+
+function inboxSessionToken() {
+  if (!INBOX_ACCESS_PASSWORD || !MCP_AUTH_TOKEN) return "";
+  return createHmac("sha256", MCP_AUTH_TOKEN).update("recover-inbox:" + INBOX_ACCESS_PASSWORD).digest("base64url");
+}
+
+function inboxWebhookToken() {
+  if (!MCP_AUTH_TOKEN) return "";
+  return createHmac("sha256", MCP_AUTH_TOKEN).update("recover-telnyx-webhook").digest("hex");
+}
+
+function inboxCookie(req) {
+  const source = String(req.headers.cookie || "");
+  for (const part of source.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx < 0) continue;
+    if (part.slice(0, idx).trim() === "recover_inbox") return decodeURIComponent(part.slice(idx + 1).trim());
+  }
+  return "";
+}
+
+function inboxAuthorized(req) {
+  const expected = inboxSessionToken();
+  return Boolean(expected) && secureEqual(inboxCookie(req), expected);
+}
+
+async function readRawBody(req, maxBytes = 1024 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error("request_too_large");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function normalizeInboxPhone(value = "") {
+  const text = String(value || "").trim();
+  const digits = text.replace(/\D/g, "");
+  if (!digits) return "";
+  return "+" + digits;
+}
+
+async function saveInboxMessage({ id, phone, direction, text, status = "", at = "", raw = null }) {
+  const redis = await getAcquisitionRedis();
+  const normalized = normalizeInboxPhone(phone);
+  if (!normalized) return null;
+  const messageId = String(id || randomUUID());
+  const occurredAt = at || new Date().toISOString();
+  const score = Math.max(0, Date.parse(occurredAt) || Date.now());
+  const key = "recover:sms:inbox:messages";
+  let prior = null;
+  try {
+    const rawPrior = await redis.hGet(key, messageId);
+    prior = rawPrior ? JSON.parse(rawPrior) : null;
+  } catch {}
+  const value = {
+    id: messageId,
+    phone: normalized,
+    direction: direction === "inbound" ? "inbound" : "outbound",
+    text: String(text || prior?.text || ""),
+    status: String(status || prior?.status || ""),
+    at: occurredAt,
+    raw: raw || prior?.raw || null
+  };
+  await redis.hSet(key, messageId, JSON.stringify(value));
+  await redis.zAdd(\`recover:sms:inbox:thread:\${normalized}\`, [{ score, value: messageId }]);
+  await redis.zAdd("recover:sms:inbox:threads", [{ score, value: normalized }]);
+  return value;
+}
+
+async function updateInboxMessageStatus(messageId, status, raw = null) {
+  const redis = await getAcquisitionRedis();
+  const key = "recover:sms:inbox:messages";
+  const existingRaw = await redis.hGet(key, String(messageId || ""));
+  if (!existingRaw) return null;
+  const existing = JSON.parse(existingRaw);
+  const next = { ...existing, status: String(status || existing.status || ""), raw: raw || existing.raw || null };
+  await redis.hSet(key, String(messageId), JSON.stringify(next));
+  return next;
+}
+
+async function listInboxThreads(limit = 100) {
+  const redis = await getAcquisitionRedis();
+  const phones = await redis.zRange("recover:sms:inbox:threads", 0, Math.max(0, limit - 1), { REV: true });
+  const messagesHash = "recover:sms:inbox:messages";
+  const out = [];
+  for (const phone of phones) {
+    const ids = await redis.zRange(\`recover:sms:inbox:thread:\${phone}\`, 0, 0, { REV: true });
+    const latestRaw = ids[0] ? await redis.hGet(messagesHash, ids[0]) : null;
+    const latest = latestRaw ? JSON.parse(latestRaw) : null;
+    out.push({ phone, latest });
+  }
+  return out;
+}
+
+async function readInboxThread(phone, limit = 300) {
+  const redis = await getAcquisitionRedis();
+  const normalized = normalizeInboxPhone(phone);
+  const ids = await redis.zRange(\`recover:sms:inbox:thread:\${normalized}\`, 0, Math.max(0, limit - 1), { REV: false });
+  if (!ids.length) return { phone: normalized, messages: [] };
+  const values = await redis.hmGet("recover:sms:inbox:messages", ids);
+  const messages = values.map((raw) => {
+    try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+  }).filter(Boolean);
+  return { phone: normalized, messages };
+}
+
+function telnyxWebhookTarget() {
+  if (TELNYX_WEBHOOK_URL) return TELNYX_WEBHOOK_URL;
+  if (!RAILWAY_PUBLIC_DOMAIN || !MCP_AUTH_TOKEN) return "";
+  return \`https://\${RAILWAY_PUBLIC_DOMAIN}/webhooks/telnyx?token=\${inboxWebhookToken()}\`;
+}
+
+function inboxLoginHtml(error = "") {
+  return \`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>Recover Inbox</title><style>
+  *{box-sizing:border-box}body{margin:0;background:#0a0c0f;color:#f6f7f8;font-family:Inter,system-ui,-apple-system,sans-serif;min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(420px,100%);background:#11151a;border:1px solid #262c34;border-radius:22px;padding:28px}.brand{font-size:21px;font-weight:800}.muted{color:#929ba7}.err{background:#30191c;color:#ffc1c5;padding:10px;border-radius:10px;margin:12px 0}input{width:100%;background:#0d1014;color:white;border:1px solid #333a44;border-radius:12px;padding:13px;margin:8px 0 12px;font-size:16px}button{width:100%;border:0;border-radius:12px;padding:13px;font-weight:800;background:#f4f4f3;color:#111}</style></head><body><form class="card" method="post" action="/inbox/login"><div class="brand">Recover Inbox</div><p class="muted">Your Telnyx SMS conversations</p>\${error ? \`<div class="err">\${escapeHtml(error)}</div>\` : ""}<label>Password</label><input name="password" type="password" required autofocus autocomplete="current-password"><button type="submit">Open inbox</button></form></body></html>\`;
+}
+
+function inboxAppHtml() {
+  return \`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta charset="utf-8"><meta name="theme-color" content="#0a0c0f"><title>Recover Inbox</title><style>
+  :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#090b0e;color:#f5f6f7;font:14px/1.4 Inter,system-ui,-apple-system,sans-serif}.app{height:100dvh;display:grid;grid-template-columns:340px 1fr}.side{background:#0d1014;border-right:1px solid #242a32;display:flex;flex-direction:column;min-width:0}.head{padding:16px;border-bottom:1px solid #242a32;display:flex;justify-content:space-between;align-items:center}.brand{font-weight:850;font-size:18px}.green{font-size:10px;color:#79d9a3;background:#10251a;border:1px solid #1f4e34;border-radius:999px;padding:4px 7px}.search{margin:12px;border:1px solid #303741;background:#11151a;color:#fff;border-radius:11px;padding:10px 12px}.list{flex:1;overflow:auto}.row{padding:14px 16px;border-bottom:1px solid #1c2127;cursor:pointer}.row:hover,.row.active{background:#151a20}.phone{font-weight:750}.preview{color:#929ba7;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.time{font-size:10px;color:#6f7883;margin-top:3px}.thread{display:grid;grid-template-rows:auto 1fr auto;min-width:0}.threadHead{padding:14px 18px;border-bottom:1px solid #242a32;background:#0d1014;display:flex;gap:10px;align-items:center}.msgs{overflow:auto;padding:20px;display:flex;flex-direction:column;gap:9px}.bubble{max-width:min(76%,680px);padding:10px 13px;border-radius:16px;white-space:pre-wrap;word-break:break-word}.in{align-self:flex-start;background:#191f26;border:1px solid #29323c}.out{align-self:flex-end;background:#f0f1f2;color:#111}.meta{font-size:10px;opacity:.58;margin-top:5px}.composer{display:grid;grid-template-columns:1fr auto;gap:10px;padding:13px;border-top:1px solid #242a32;background:#0d1014}.composer textarea{min-height:48px;max-height:140px;resize:none;background:#11151a;color:#fff;border:1px solid #303741;border-radius:12px;padding:12px;font:inherit}.composer button,.smallbtn{border:0;border-radius:11px;font-weight:750}.composer button{padding:0 16px;background:#f0f1f2;color:#111}.smallbtn{padding:8px 10px;background:#171c22;color:#cbd1d7}.empty{display:grid;place-items:center;color:#707a86;padding:28px;text-align:center}.mobileBack{display:none}.error{padding:9px 12px;background:#30191c;color:#ffc2c6}
+  @media(max-width:720px){.app{display:block}.side{height:100dvh;border:0}.thread{height:100dvh;display:none}.app.open .side{display:none}.app.open .thread{display:grid}.mobileBack{display:inline-block}.bubble{max-width:88%}.msgs{padding:14px}}
+  </style></head><body><div class="app" id="app"><aside class="side"><div class="head"><div><div class="brand">Recover Inbox</div><div style="color:#707985;font-size:11px">Telnyx</div></div><span class="green">LIVE</span></div><input id="search" class="search" placeholder="Search number or message"><div id="err"></div><div id="list" class="list"><div class="empty">Loading…</div></div><div class="head" style="border-top:1px solid #242a32;border-bottom:0"><button id="refresh" class="smallbtn">Refresh</button><form method="post" action="/inbox/logout"><button class="smallbtn" type="submit">Log out</button></form></div></aside><main class="thread"><div class="threadHead"><button id="back" class="smallbtn mobileBack">←</button><div><strong id="threadPhone">Conversation</strong><div style="color:#75808c;font-size:11px">SMS conversation</div></div></div><div id="messages" class="msgs"><div class="empty">Choose a conversation</div></div><form id="composer" class="composer"><textarea id="reply" maxlength="1600" placeholder="Write a reply…" disabled></textarea><button id="send" disabled>Send</button></form></main></div><script>
+  const state={threads:[],selected:""};const q=id=>document.getElementById(id),app=q("app");
+  const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const fmt=t=>{const d=new Date(t||0);return Number.isNaN(d.getTime())?"":d.toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})};
+  async function api(url,opts={}){const r=await fetch(url,{cache:"no-store",...opts,headers:{"content-type":"application/json",...(opts.headers||{})}});const j=await r.json().catch(()=>({}));if(r.status===401){location.href="/inbox";throw new Error("Session expired")}if(!r.ok)throw new Error(j.error||"Request failed");return j}
+  function error(m){q("err").innerHTML=m?'<div class="error">'+esc(m)+'</div>':""}
+  function filtered(){const s=q("search").value.toLowerCase().trim();return s?state.threads.filter(x=>JSON.stringify(x).toLowerCase().includes(s)):state.threads}
+  function render(){const rows=filtered();q("list").innerHTML=rows.length?rows.map(x=>'<div class="row '+(x.phone===state.selected?"active":"")+'" data-phone="'+esc(x.phone)+'"><div class="phone">'+esc(x.phone)+'</div><div class="preview">'+esc(x.latest?.text||"No preview")+'</div><div class="time">'+esc(fmt(x.latest?.at))+'</div></div>').join(""):'<div class="empty">No SMS conversations yet.</div>';document.querySelectorAll(".row").forEach(r=>r.onclick=()=>openThread(r.dataset.phone))}
+  async function load(){try{error("");const j=await api("/inbox/api/threads");state.threads=j.threads||[];render()}catch(e){error(e.message)}}
+  async function openThread(phone){state.selected=phone;render();app.classList.add("open");q("threadPhone").textContent=phone;q("messages").innerHTML='<div class="empty">Loading…</div>';try{const j=await api("/inbox/api/thread?phone="+encodeURIComponent(phone));q("messages").innerHTML=(j.messages||[]).map(m=>'<div class="bubble '+(m.direction==="outbound"?"out":"in")+'">'+esc(m.text||"")+'<div class="meta">'+esc(fmt(m.at))+' · '+esc(m.status||"")+'</div></div>').join("")||'<div class="empty">No messages yet.</div>';q("messages").scrollTop=q("messages").scrollHeight;q("reply").disabled=false;q("send").disabled=false}catch(e){error(e.message)}}
+  q("composer").onsubmit=async e=>{e.preventDefault();const text=q("reply").value.trim();if(!text||!state.selected)return;q("send").disabled=true;try{await api("/inbox/api/reply",{method:"POST",body:JSON.stringify({phone:state.selected,text})});q("reply").value="";await openThread(state.selected);await load()}catch(e){error(e.message)}finally{q("send").disabled=false}};
+  q("search").oninput=render;q("refresh").onclick=load;q("back").onclick=()=>app.classList.remove("open");setInterval(load,15000);load();
+  </script></body></html>\`;
+}
+
 async function telnyxApiRequest(path, init = {}) {
   if (!TELNYX_API_KEY) throw new Error("TELNYX_API_KEY is not configured");
   const response = await fetch(`https://api.telnyx.com/v2${path}`, {
@@ -1353,7 +1495,8 @@ async function telnyxAccountInventory() {
 }
 
 async function configureTelnyxMessagingProfile({ profileId = "", name = "Recover Revenue" } = {}) {
-  if (!TELNYX_WEBHOOK_URL) throw new Error("TELNYX_WEBHOOK_URL is not configured");
+  const targetWebhook = telnyxWebhookTarget();
+  if (!targetWebhook) throw new Error("Telnyx webhook target is not configured");
   const inventory = await telnyxAccountInventory();
   let profile = profileId
     ? inventory.messaging_profiles.find((row) => row.id === profileId)
@@ -1362,7 +1505,7 @@ async function configureTelnyxMessagingProfile({ profileId = "", name = "Recover
   const payload = {
     name: profile?.name || name,
     enabled: true,
-    webhook_url: TELNYX_WEBHOOK_URL,
+    webhook_url: targetWebhook,
     webhook_api_version: "2",
     whitelisted_destinations: ["US"]
   };
@@ -1406,7 +1549,19 @@ async function telnyxSendMessage(to, text) {
       const raw = await response.text();
       let body;
       try { body = raw ? JSON.parse(raw) : {}; } catch { body = { raw }; }
-      if (response.ok) return body;
+      if (response.ok) {
+        const id = body?.data?.id || randomUUID();
+        await saveInboxMessage({
+          id,
+          phone: to,
+          direction: "outbound",
+          text,
+          status: body?.data?.to?.[0]?.status || "accepted",
+          at: body?.data?.sent_at || new Date().toISOString(),
+          raw: body?.data || null
+        }).catch(error => console.error("Inbox outbound persistence error", error?.message || error));
+        return body;
+      }
       const error = new Error(`Telnyx ${response.status}: ${JSON.stringify(body)}`);
       error.status = response.status;
       if (response.status !== 429 && response.status < 500) throw error;
@@ -1744,6 +1899,13 @@ async function startSmsWorker() {
 const handler = createMcpHandler(buildServer);
 const nodeHandler = toNodeHandler(handler);
 
+
+if (TELNYX_AUTO_CONFIGURE_PROFILE) {
+  void configureTelnyxMessagingProfile({ name: "Recover Revenue" })
+    .then(result => console.log("Telnyx messaging profile webhook configured", { created: result?.created, profile_id: result?.profile?.id || null, webhook_url: telnyxWebhookTarget() }))
+    .catch(error => console.error("Telnyx messaging profile auto-configure failed", error?.message || error));
+}
+
 void sendOneTimeSmsProbe().catch(error => console.error("One-time SMS probe error", error?.message || error));
 void startSmsWorker().catch(error => console.error("SMS worker startup error", error));
 setTimeout(() => {
@@ -1783,6 +1945,104 @@ const httpServer = createHttpServer((req, res) => {
     return;
   }
 
+
+
+  if (requestUrl.pathname === "/inbox" && req.method === "GET") {
+    res.writeHead(200, {"content-type":"text/html; charset=utf-8","cache-control":"no-store","x-frame-options":"DENY"});
+    res.end(inboxAuthorized(req) ? inboxAppHtml() : inboxLoginHtml());
+    return;
+  }
+
+  if (requestUrl.pathname === "/inbox/login" && req.method === "POST") {
+    void (async () => {
+      if (!INBOX_ACCESS_PASSWORD || !MCP_AUTH_TOKEN) {
+        res.writeHead(503, {"content-type":"text/html; charset=utf-8"});
+        res.end(inboxLoginHtml("Inbox login is not configured."));
+        return;
+      }
+      const form = await readForm(req);
+      if (!secureEqual(form.get("password") || "", INBOX_ACCESS_PASSWORD)) {
+        res.writeHead(401, {"content-type":"text/html; charset=utf-8"});
+        res.end(inboxLoginHtml("Wrong password."));
+        return;
+      }
+      res.writeHead(303,{location:"/inbox","set-cookie":\`recover_inbox=\${encodeURIComponent(inboxSessionToken())}; Path=/inbox; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000\`});
+      res.end();
+    })().catch(error => {
+      res.writeHead(422, {"content-type":"text/html; charset=utf-8"});
+      res.end(inboxLoginHtml(error?.message || "Login failed"));
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/inbox/logout" && req.method === "POST") {
+    res.writeHead(303,{location:"/inbox","set-cookie":"recover_inbox=; Path=/inbox; HttpOnly; Secure; SameSite=Lax; Max-Age=0"});res.end();return;
+  }
+
+  if (requestUrl.pathname === "/inbox/api/threads" && req.method === "GET") {
+    void (async () => {
+      if (!inboxAuthorized(req)) { res.writeHead(401,{"content-type":"application/json"});res.end(JSON.stringify({error:"unauthorized"}));return; }
+      const threads=await listInboxThreads(150);
+      res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify({threads}));
+    })().catch(error=>{res.writeHead(500,{"content-type":"application/json"});res.end(JSON.stringify({error:error?.message||"thread_list_failed"}));});
+    return;
+  }
+
+  if (requestUrl.pathname === "/inbox/api/thread" && req.method === "GET") {
+    void (async () => {
+      if (!inboxAuthorized(req)) { res.writeHead(401,{"content-type":"application/json"});res.end(JSON.stringify({error:"unauthorized"}));return; }
+      const phone=requestUrl.searchParams.get("phone")||"";
+      const data=await readInboxThread(phone,400);
+      res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify(data));
+    })().catch(error=>{res.writeHead(500,{"content-type":"application/json"});res.end(JSON.stringify({error:error?.message||"thread_read_failed"}));});
+    return;
+  }
+
+  if (requestUrl.pathname === "/inbox/api/reply" && req.method === "POST") {
+    void (async () => {
+      if (!inboxAuthorized(req)) { res.writeHead(401,{"content-type":"application/json"});res.end(JSON.stringify({error:"unauthorized"}));return; }
+      const input=JSON.parse(await readRawBody(req,65536)||"{}");
+      const phone=normalizeInboxPhone(input.phone);
+      const text=String(input.text||"").trim();
+      if(!phone||!text||text.length>1600) throw new Error("invalid_reply");
+      const redis=await getAcquisitionRedis();
+      if(await redis.sIsMember("recover:sms:suppressed",phone)) throw new Error("recipient_is_suppressed");
+      const sent=await telnyxSendMessage(phone,text);
+      res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({ok:true,id:sent?.data?.id||null}));
+    })().catch(error=>{res.writeHead(422,{"content-type":"application/json"});res.end(JSON.stringify({error:error?.message||"reply_failed"}));});
+    return;
+  }
+
+  if (requestUrl.pathname === "/webhooks/telnyx" && req.method === "POST") {
+    void (async () => {
+      const expected=inboxWebhookToken();
+      const supplied=requestUrl.searchParams.get("token")||"";
+      if (!expected || !secureEqual(supplied,expected)) {
+        res.writeHead(401,{"content-type":"application/json"});res.end(JSON.stringify({error:"invalid_webhook_token"}));return;
+      }
+      const raw=await readRawBody(req);
+      const event=JSON.parse(raw||"{}");
+      const data=event?.data||{};
+      const payload=data?.payload||{};
+      const type=String(data?.event_type||"");
+      const messageId=String(payload?.id||"");
+      if(type==="message.received"){
+        const from=normalizeInboxPhone(payload?.from?.phone_number||payload?.from);
+        const text=String(payload?.text||"");
+        await saveInboxMessage({id:messageId||data.id,phone:from,direction:"inbound",text,status:"received",at:data?.occurred_at||payload?.received_at||new Date().toISOString(),raw:event});
+        if(/^(stop|stopall|unsubscribe|cancel|end|quit)$/i.test(text.trim())){
+          const redis=await getAcquisitionRedis();
+          await redis.sAdd("recover:sms:suppressed",from);
+          await redis.hSet("recover:sms:suppression:reasons",from,JSON.stringify({reason:"recipient_opt_out",at:new Date().toISOString(),source:"telnyx_webhook"}));
+        }
+      } else if(messageId && /^message\./.test(type)) {
+        const status=String(payload?.to?.[0]?.status||payload?.status||type.replace(/^message\./,""));
+        await updateInboxMessageStatus(messageId,status,event);
+      }
+      res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({ok:true}));
+    })().catch(error=>{console.error("Telnyx inbox webhook error",error);if(!res.headersSent){res.writeHead(422,{"content-type":"application/json"});res.end(JSON.stringify({error:error?.message||"webhook_failed"}));}});
+    return;
+  }
 
   if (requestUrl.pathname === "/stats/qualified-leads" && req.method === "GET") {
     void (async () => {
