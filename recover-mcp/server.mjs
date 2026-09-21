@@ -1908,6 +1908,53 @@ async function assignTelnyxNumberToProfile({ phoneNumberId, messagingProfileId }
   return updated?.data || updated;
 }
 
+async function telnyxLookupSmsSuitability(phone, redis) {
+  const normalized = normalizeE164(phone);
+  if (!normalized) return { decision:"SKIP", line_type:"invalid", reason:"invalid_e164", cached:false };
+
+  const cacheKey = `recover:sms:number-lookup:${normalized}`;
+  const cachedRaw = await redis.get(cacheKey).catch(() => null);
+  if (cachedRaw) {
+    try {
+      const cached = JSON.parse(cachedRaw);
+      if (cached?.decision === "SEND" || cached?.decision === "SKIP") return { ...cached, cached:true };
+    } catch {}
+  }
+
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const body = await telnyxApiRequest(`/number_lookup/${encodeURIComponent(normalized)}?type=carrier`);
+      const data = body?.data || {};
+      const carrier = data?.carrier || {};
+      const rawType = String(carrier?.type || "").trim().toLowerCase();
+      const type = rawType.replace(/[\s-]+/g, "_");
+      const smsCapable = ["mobile","wireless"].includes(type);
+      const result = {
+        decision: smsCapable ? "SEND" : "SKIP",
+        line_type: type || "unknown",
+        carrier_name: String(carrier?.name || carrier?.carrier_name || "").trim() || null,
+        reason: smsCapable ? "confirmed_mobile" : (type ? `line_type_${type}` : "carrier_unknown"),
+        checked_at: new Date().toISOString(),
+        cached:false
+      };
+      await redis.set(cacheKey, JSON.stringify(result), { EX: 2592000 });
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 500 * (2 ** attempt)));
+    }
+  }
+  return {
+    decision:"CHECK",
+    line_type:"unknown",
+    reason:"lookup_error",
+    error:String(lastError?.message || lastError || "lookup_failed"),
+    checked_at:new Date().toISOString(),
+    cached:false
+  };
+}
+
 async function telnyxSendMessage(to, text) {
   if (!TELNYX_API_KEY) throw new Error("TELNYX_API_KEY is not configured");
   if (!TELNYX_FROM_NUMBER) throw new Error("TELNYX_FROM_NUMBER is not configured");
@@ -2117,6 +2164,10 @@ async function startSmsWorker() {
         const recipient = recipients[i];
         const suppressed = await redis.sIsMember("recover:sms:suppressed", recipient.phone);
         if (suppressed) {
+          if (recipient?.metadata?.campaign_id) {
+            await SMS_SHEET_BRIDGE.writeBasicReachability("SKIP", recipient.metadata || {}, "suppressed")
+              .catch(error => console.error("SMS reachability suppression writeback error", error.message));
+          }
           const result = {
             batch_id:batchId,
             index:i,
@@ -2143,6 +2194,63 @@ async function startSmsWorker() {
           await save();
           console.log("Bulk SMS campaign paused", { batchId, processedCount: batch.processed_count || 0 });
           break;
+        }
+
+        if (recipient?.metadata?.campaign_id) {
+          await SMS_SHEET_BRIDGE.writeBasicReachability("CHECK", recipient.metadata || {}, "lookup_pending")
+            .catch(error => console.error("SMS reachability CHECK writeback error", error.message));
+
+          const lookup = await telnyxLookupSmsSuitability(recipient.phone, redis);
+          if (lookup.decision !== "SEND") {
+            const reachability = lookup.decision === "SKIP" ? "SKIP" : "CHECK";
+            await SMS_SHEET_BRIDGE.writeBasicReachability(reachability, recipient.metadata || {}, lookup.reason || lookup.line_type || "")
+              .catch(error => console.error("SMS reachability decision writeback error", error.message));
+
+            if (lookup.decision === "SKIP") {
+              await redis.sAdd("recover:sms:suppressed", recipient.phone);
+              await redis.hSet("recover:sms:suppression:reasons", recipient.phone, JSON.stringify({
+                reason:"telnyx_lookup_not_sms_capable",
+                line_type:lookup.line_type || "unknown",
+                carrier_name:lookup.carrier_name || null,
+                checked_at:lookup.checked_at || new Date().toISOString(),
+                sheet_row:recipient?.metadata?.sheet_row || null
+              }));
+            }
+
+            const result = {
+              batch_id:batchId,
+              index:i,
+              phone:recipient.phone,
+              contact_id:recipient.contact_id || "",
+              status:lookup.decision === "SKIP" ? "skipped_lookup" : "lookup_check",
+              error:lookup.error || lookup.reason || "",
+              at:new Date().toISOString()
+            };
+            await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
+            batch.processed_count = i + 1;
+            batch.updated_at = new Date().toISOString();
+            batch.skipped_count = Number(batch.skipped_count || 0) + 1;
+            await save();
+            console.log("SMS lookup gate skipped send", {
+              batchId,
+              sheetRow:recipient?.metadata?.sheet_row || null,
+              phoneHint:`••••${recipient.phone.slice(-4)}`,
+              decision:lookup.decision,
+              lineType:lookup.line_type || "unknown",
+              cached:Boolean(lookup.cached)
+            });
+            continue;
+          }
+
+          await SMS_SHEET_BRIDGE.writeBasicReachability("SEND", recipient.metadata || {}, lookup.line_type || "mobile")
+            .catch(error => console.error("SMS reachability SEND writeback error", error.message));
+          console.log("SMS lookup gate approved send", {
+            batchId,
+            sheetRow:recipient?.metadata?.sheet_row || null,
+            phoneHint:`••••${recipient.phone.slice(-4)}`,
+            lineType:lookup.line_type || "mobile",
+            cached:Boolean(lookup.cached)
+          });
         }
 
         for (let j = 0; j < recipient.messages.length; j++) {
