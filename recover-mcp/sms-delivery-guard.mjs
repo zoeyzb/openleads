@@ -37,3 +37,17 @@ export function bulkSmsOverrideStopReason({
   if (!overrideEnabled || Number(outboundMessages) < 20) return "";
   return Number(failureRatePercent) >= Number(cutoffPercent) ? "delivery_failure_cutoff" : "";
 }
+
+export function smsDeliveryStatusBucket(status = "") {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (/fail|undeliver|reject|expire|cancel|error|blocked/.test(normalized)) {
+    return { submitted: 0, sent: 0, delivered: 0, failed: 1 };
+  }
+  if (normalized === "delivered") {
+    return { submitted: 0, sent: 1, delivered: 1, failed: 0 };
+  }
+  if (normalized === "sent") {
+    return { submitted: 0, sent: 1, delivered: 0, failed: 0 };
+  }
+  return { submitted: 1, sent: 0, delivered: 0, failed: 0 };
+}
