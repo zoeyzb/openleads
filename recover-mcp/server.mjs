@@ -1381,7 +1381,7 @@ async function saveInboxMessage({ id, phone, direction, text, status = "", at = 
     id: messageId,
     phone: normalized,
     direction: direction === "inbound" ? "inbound" : "outbound",
-    text: String(text || prior?.text || ""),
+    text: String(prior?.text || text || ""),
     status: String(status || prior?.status || ""),
     at: occurredAt,
     raw: raw || prior?.raw || null
@@ -1487,6 +1487,8 @@ async function backfillInboxFromSmsBatches({ maxBatches = 250 } = {}) {
       const messageIndex = Number(result.message_index || 0);
       const recipient = Number.isInteger(index) ? batch.recipients[index] : null;
       if (!recipient?.phone) { skipped++; continue; }
+      const existingInboxRaw = await redis.hGet("recover:sms:inbox:messages", String(result.telnyx_message_id)).catch(() => null);
+      if (existingInboxRaw) { accepted++; skipped++; continue; }
       const messages = Array.isArray(recipient.messages) ? recipient.messages : [];
       const original = String(messages[messageIndex] || recipient.message || "");
       const outboundText = String(original || "");
@@ -1505,6 +1507,32 @@ async function backfillInboxFromSmsBatches({ maxBatches = 250 } = {}) {
     }
   }
   return { scanned_batches: scanned, accepted_results: accepted, restored_messages: restored, skipped };
+}
+
+async function repairBackfilledInboxBodiesFromTelnyx({ limit = 500 } = {}) {
+  if (!TELNYX_API_KEY) return { scanned: 0, repaired: 0, skipped: 0, failed: 0 };
+  const redis = await getAcquisitionRedis();
+  const all = await redis.hGetAll("recover:sms:inbox:messages");
+  let scanned = 0, repaired = 0, skipped = 0, failed = 0;
+  for (const [id, raw] of Object.entries(all || {})) {
+    if (scanned >= limit) break;
+    let existing;
+    try { existing = JSON.parse(raw); } catch { skipped++; continue; }
+    if (existing?.direction !== "outbound" || !existing?.raw?.backfilled) { skipped++; continue; }
+    scanned++;
+    try {
+      const remote = await telnyxApiRequest(`/messages/${encodeURIComponent(id)}`);
+      const remoteText = String(remote?.data?.text || "");
+      if (!remoteText) { skipped++; continue; }
+      const next = { ...existing, text: remoteText, raw: remote?.data || existing.raw };
+      await redis.hSet("recover:sms:inbox:messages", id, JSON.stringify(next));
+      repaired++;
+    } catch (error) {
+      failed++;
+      console.error("Inbox Telnyx body repair error", { id, error: error?.message || String(error) });
+    }
+  }
+  return { scanned, repaired, skipped, failed };
 }
 
 function telnyxWebhookTarget() {
@@ -2004,6 +2032,11 @@ setTimeout(() => {
     .then(result => console.log("Recover inbox history backfill complete", result))
     .catch(error => console.error("Recover inbox history backfill error", error?.message || error));
 }, 5000);
+setTimeout(() => {
+  void repairBackfilledInboxBodiesFromTelnyx({ limit: 500 })
+    .then(result => console.log("Recover inbox Telnyx body repair complete", result))
+    .catch(error => console.error("Recover inbox Telnyx body repair error", error?.message || error));
+}, 8000);
 setTimeout(() => {
   void startConfiguredBulkSmsCampaign().catch(error =>
     console.error("Bulk SMS campaign startup error", error?.message || error)
