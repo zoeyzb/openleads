@@ -1997,19 +1997,15 @@ async function telnyxLookupSmsSuitability(phone, redis) {
     try {
       const cached = JSON.parse(cachedRaw);
       const cachedType = String(cached?.line_type || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
-      if (cached?.decision === "SEND") return { ...cached, cached:true };
-      if (cached?.decision === "SKIP") {
-        if (["voip","fixed_line_or_mobile","unknown",""].includes(cachedType)) {
-          return {
-            ...cached,
-            decision:"CHECK",
-            reason:`ambiguous_line_type_${cachedType || "unknown"}`,
-            cached:true
-          };
-        }
+      if (cached?.decision === "SEND" && ["mobile","wireless"].includes(cachedType)) {
         return { ...cached, cached:true };
       }
-      if (cached?.decision === "CHECK") return { ...cached, cached:true };
+      return {
+        ...cached,
+        decision:"SKIP",
+        reason:`cost_first_non_mobile_${cachedType || "unknown"}`,
+        cached:true
+      };
     } catch {}
   }
 
@@ -2022,17 +2018,14 @@ async function telnyxLookupSmsSuitability(phone, redis) {
       const rawType = String(carrier?.type || "").trim().toLowerCase();
       const type = rawType.replace(/[\s-]+/g, "_");
       const smsCapable = ["mobile","wireless"].includes(type);
-      const definitelyNonSms = ["fixed_line","landline"].includes(type);
-      const decision = smsCapable ? "SEND" : definitelyNonSms ? "SKIP" : "CHECK";
+      const decision = smsCapable ? "SEND" : "SKIP";
       const result = {
         decision,
         line_type: type || "unknown",
         carrier_name: String(carrier?.name || carrier?.carrier_name || "").trim() || null,
         reason: smsCapable
           ? "confirmed_mobile"
-          : definitelyNonSms
-            ? `confirmed_non_sms_${type}`
-            : `ambiguous_line_type_${type || "unknown"}`,
+          : `cost_first_non_mobile_${type || "unknown"}`,
         checked_at: new Date().toISOString(),
         cached:false
       };
@@ -2301,7 +2294,7 @@ async function startSmsWorker() {
 
           const lookup = await telnyxLookupSmsSuitability(recipient.phone, redis);
           if (lookup.decision !== "SEND") {
-            const reachability = lookup.decision === "SKIP" ? "SKIP" : "CHECK";
+            const reachability = "SKIP";
             await SMS_SHEET_BRIDGE.writeBasicReachability(reachability, recipient.metadata || {}, lookup.reason || lookup.line_type || "")
               .catch(error => console.error("SMS reachability decision writeback error", error.message));
 
