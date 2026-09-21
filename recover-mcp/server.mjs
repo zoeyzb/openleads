@@ -16,6 +16,7 @@ import {
   reachabilityForLookupDecision,
   shouldPostSmsResultCallback,
   shouldResumePausedSmsBatch,
+  smsDeliveryStatusBucket,
 } from "./sms-delivery-guard.mjs";
 // Lead-sheet template rows 1-6 are reserved for title, KPIs, and headers.
 
@@ -1486,6 +1487,9 @@ async function inboxFailureBreakdown() {
   const redis = await getAcquisitionRedis();
   const all = await redis.hVals("recover:sms:inbox:messages");
   let outbound = 0;
+  let submitted = 0;
+  let sent = 0;
+  let delivered = 0;
   let failed = 0;
   const reasons = new Map();
   for (const raw of all || []) {
@@ -1494,8 +1498,12 @@ async function inboxFailureBreakdown() {
     if (msg?.direction !== "outbound") continue;
     outbound++;
     const status = String(msg?.status || "").toLowerCase();
-    if (!/fail|undeliver|reject|expire|cancel|error|blocked/.test(status)) continue;
-    failed++;
+    const bucket = smsDeliveryStatusBucket(status);
+    submitted += bucket.submitted;
+    sent += bucket.sent;
+    delivered += bucket.delivered;
+    failed += bucket.failed;
+    if (!bucket.failed) continue;
     const payload = msg?.raw?.data?.payload || msg?.raw?.payload || msg?.raw || {};
     const errors = Array.isArray(payload?.errors) ? payload.errors : [];
     const to = Array.isArray(payload?.to) ? (payload.to[0] || {}) : {};
@@ -1527,7 +1535,9 @@ async function inboxFailureBreakdown() {
   return {
     outbound_messages: outbound,
     failed_messages: failed,
-    sent_messages: Math.max(0,outbound-failed),
+    submitted_messages: submitted,
+    sent_messages: sent,
+    delivered_messages: delivered,
     failure_rate_percent: outbound ? Number(((failed/outbound)*100).toFixed(1)) : 0,
     reasons: sorted
   };
@@ -1896,8 +1906,8 @@ function inboxAppHtml() {
   function filtered(){const term=q("search").value.toLowerCase().trim();let rows=state.threads;if(state.filter==="replies")rows=state.threads.filter(x=>x.replied);if(state.filter==="unread")rows=state.threads.filter(x=>x.unread_reply);if(state.filter==="drafts")rows=state.threads.filter(x=>draftFor(x.phone));return term?rows.filter(x=>JSON.stringify(x).toLowerCase().includes(term)):rows}
   function render(){const rows=filtered();q("list").innerHTML=rows.length?rows.map(x=>'<div class="row '+(x.unread_reply?"reply ":"")+(x.phone===state.selected?"active":"")+'" data-phone="'+esc(x.phone)+'">'+(x.unread_reply?'<span class="replyDot" title="Unread customer reply"></span>':'')+'<div class="phone">'+esc(x.profile?.business_name||x.phone)+(draftFor(x.phone)?'<span class="draftLabel">DRAFT</span>':'')+'</div><div style="color:#68717d;font-size:11px">'+esc(x.profile?.business_name?x.phone:"")+'</div><div class="preview">'+esc(draftFor(x.phone)||x.latest?.text||"No preview")+'</div>'+(x.unread_reply?'<div class="replyLabel">● NEW REPLY</div>':x.replied?'<div class="replyLabel" style="opacity:.55">REPLIED</div>':'')+'<div class="time">'+esc(fmt(x.latest?.at))+'</div></div>').join(""):'<div class="empty">'+(state.filter==="replies"?"No replied conversations yet.":state.filter==="unread"?"No unread replies.":state.filter==="drafts"?"No saved drafts.":"No SMS conversations yet.")+'</div>';document.querySelectorAll(".row").forEach(r=>r.onclick=()=>openThread(r.dataset.phone,{markRead:true}))}
   function toast(message){const t=q("toast");t.textContent=message;t.classList.add("show");clearTimeout(window.__toastTimer);window.__toastTimer=setTimeout(()=>t.classList.remove("show"),2200)}
-  async function load({sync=false}={}){try{error("");if(sync){const synced=await api("/inbox/api/sync",{method:"POST",body:"{}"});toast("Synced "+(synced.restored_messages||0)+" sent messages · "+(synced.reply_threads||0)+" reply threads")}const [j,stats]=await Promise.all([api("/inbox/api/threads"),api("/inbox/status")]);state.threads=j.threads||[];const replied=Number(stats.reply_threads??state.threads.filter(x=>x.replied).length);const unread=Number(stats.unread_replies??state.threads.filter(x=>x.unread_reply).length);q("replyCount").textContent=replied;q("unreadCount").textContent=unread;q("failedCount").textContent=(stats.failed_messages??0);q("inboxCount").textContent=(stats.threads??state.threads.length)+" conv · "+(stats.sent_messages??0)+" sent · "+(stats.failed_messages??0)+" failed";render();if(!state.selected&&state.threads.length&&window.innerWidth>720){await openThread(state.threads[0].phone,{markRead:false})}}catch(e){error(e.message)}}
-  async function openThread(phone,{markRead=true}={}){state.selected=phone;app.classList.add("open");let selected=state.threads.find(x=>x.phone===phone);q("threadPhone").innerHTML=esc(selected?.profile?.business_name||phone)+(selected?.unread_reply?' <span class="replyMeta">● New reply</span>':selected?.replied?' <span class="replyMeta" style="opacity:.65">● Replied</span>':'');q("threadSub").textContent=(selected?.profile?.business_name?phone+" · ":"")+"SMS conversation";q("messages").innerHTML='<div class="empty">Loading…</div>';try{const j=await api("/inbox/api/thread?phone="+encodeURIComponent(phone));q("messages").innerHTML=(j.messages||[]).map(m=>'<div class="bubble '+(m.direction==="outbound"?"out":"in")+'">'+linkify(m.text||"")+'<div class="meta">'+esc(fmt(m.at))+statusHtml(m)+'</div></div>').join("")||'<div class="empty">No messages yet.</div>';q("messages").scrollTop=q("messages").scrollHeight;q("reply").disabled=false;q("send").disabled=false;const savedDraft=draftFor(phone);if(savedDraft&&!q("reply").value.trim())q("reply").value=savedDraft;if(markRead&&selected?.unread_reply){await api("/inbox/api/read",{method:"POST",body:JSON.stringify({phone})});selected.unread_reply=false;const replied=state.threads.filter(x=>x.replied).length;const unread=state.threads.filter(x=>x.unread_reply).length;q("replyCount").textContent=replied;q("unreadCount").textContent=unread;const stats=await api("/inbox/status");q("inboxCount").textContent=(stats.threads??state.threads.length)+" conv · "+(stats.sent_messages??0)+" sent · "+(stats.failed_messages??0)+" failed";render();q("threadPhone").innerHTML=esc(selected?.profile?.business_name||phone)+(selected?.replied?' <span class="replyMeta" style="opacity:.65">● Replied</span>':'')}}catch(e){error(e.message)}}
+  async function load({sync=false}={}){try{error("");if(sync){const synced=await api("/inbox/api/sync",{method:"POST",body:"{}"});toast("Synced "+(synced.restored_messages||0)+" outbound messages · "+(synced.reply_threads||0)+" reply threads")}const [j,stats]=await Promise.all([api("/inbox/api/threads"),api("/inbox/status")]);state.threads=j.threads||[];const replied=Number(stats.reply_threads??state.threads.filter(x=>x.replied).length);const unread=Number(stats.unread_replies??state.threads.filter(x=>x.unread_reply).length);q("replyCount").textContent=replied;q("unreadCount").textContent=unread;q("failedCount").textContent=(stats.failed_messages??0);q("inboxCount").textContent=(stats.threads??state.threads.length)+" conv · "+(stats.sent_messages??0)+" sent · "+(stats.submitted_messages??0)+" pending · "+(stats.failed_messages??0)+" failed";render();if(!state.selected&&state.threads.length&&window.innerWidth>720){await openThread(state.threads[0].phone,{markRead:false})}}catch(e){error(e.message)}}
+  async function openThread(phone,{markRead=true}={}){state.selected=phone;app.classList.add("open");let selected=state.threads.find(x=>x.phone===phone);q("threadPhone").innerHTML=esc(selected?.profile?.business_name||phone)+(selected?.unread_reply?' <span class="replyMeta">● New reply</span>':selected?.replied?' <span class="replyMeta" style="opacity:.65">● Replied</span>':'');q("threadSub").textContent=(selected?.profile?.business_name?phone+" · ":"")+"SMS conversation";q("messages").innerHTML='<div class="empty">Loading…</div>';try{const j=await api("/inbox/api/thread?phone="+encodeURIComponent(phone));q("messages").innerHTML=(j.messages||[]).map(m=>'<div class="bubble '+(m.direction==="outbound"?"out":"in")+'">'+linkify(m.text||"")+'<div class="meta">'+esc(fmt(m.at))+statusHtml(m)+'</div></div>').join("")||'<div class="empty">No messages yet.</div>';q("messages").scrollTop=q("messages").scrollHeight;q("reply").disabled=false;q("send").disabled=false;const savedDraft=draftFor(phone);if(savedDraft&&!q("reply").value.trim())q("reply").value=savedDraft;if(markRead&&selected?.unread_reply){await api("/inbox/api/read",{method:"POST",body:JSON.stringify({phone})});selected.unread_reply=false;const replied=state.threads.filter(x=>x.replied).length;const unread=state.threads.filter(x=>x.unread_reply).length;q("replyCount").textContent=replied;q("unreadCount").textContent=unread;const stats=await api("/inbox/status");q("inboxCount").textContent=(stats.threads??state.threads.length)+" conv · "+(stats.sent_messages??0)+" sent · "+(stats.submitted_messages??0)+" pending · "+(stats.failed_messages??0)+" failed";render();q("threadPhone").innerHTML=esc(selected?.profile?.business_name||phone)+(selected?.replied?' <span class="replyMeta" style="opacity:.65">● Replied</span>':'')}}catch(e){error(e.message)}}
   function clearPendingBubble(){document.querySelectorAll("[data-pending-send]").forEach(el=>el.remove())}
   function hideUndo(){q("undoBar").classList.remove("show")}
   function cancelPendingSend(){if(!state.pendingSend)return;clearTimeout(state.pendingSend.timer);state.pendingSend=null;clearPendingBubble();hideUndo();q("send").disabled=false;toast("Message unsent")}
@@ -2716,21 +2726,18 @@ const httpServer = createHttpServer((req, res) => {
       }
       const allMessages = await redis.hVals("recover:sms:inbox:messages");
       let inboundMessages = 0;
-      let outboundMessages = 0;
-      let failedMessages = 0;
       for (const raw of allMessages || []) {
         try {
           const message = JSON.parse(raw);
           if (message?.direction === "inbound") inboundMessages++;
-          if (message?.direction === "outbound") {
-            outboundMessages++;
-            const status = String(message?.status || "").toLowerCase();
-            if (/fail|undeliver|reject|expire|cancel|error/.test(status)) failedMessages++;
-          }
         } catch {}
       }
-      const sentMessages = Math.max(0, outboundMessages - failedMessages);
-      const failureRate = outboundMessages ? Number(((failedMessages / outboundMessages) * 100).toFixed(1)) : 0;
+      const outboundMessages = failureBreakdown.outbound_messages;
+      const submittedMessages = failureBreakdown.submitted_messages;
+      const sentMessages = failureBreakdown.sent_messages;
+      const deliveredMessages = failureBreakdown.delivered_messages;
+      const failedMessages = failureBreakdown.failed_messages;
+      const failureRate = failureBreakdown.failure_rate_percent;
       res.writeHead(200, {"content-type":"application/json","cache-control":"no-store"});
       res.end(JSON.stringify({
         ok:true,
@@ -2744,7 +2751,9 @@ const httpServer = createHttpServer((req, res) => {
         unread_replies:unreadReplies,
         inbound_messages:inboundMessages,
         outbound_messages:outboundMessages,
+        submitted_messages:submittedMessages,
         sent_messages:sentMessages,
+        delivered_messages:deliveredMessages,
         failed_messages:failedMessages,
         failure_rate_percent:failureRate,
         live_clients:INBOX_SSE_CLIENTS.size,
