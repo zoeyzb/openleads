@@ -506,6 +506,32 @@ function normalizeE164(value = "") {
   return "";
 }
 
+function gsm7Safe(value = "") {
+  return String(value || "")
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—]/g, "-")
+    .replace(/…/g, "...")
+    .replace(/[^\x0A\x0D\x20-\x7E]/g, "");
+}
+
+function compactBulkSms(originalText = "", metadata = {}) {
+  const link = gsm7Safe(String(metadata?.link || "").trim());
+  const business = gsm7Safe(String(metadata?.business_name || "").trim());
+  const original = gsm7Safe(originalText).trim();
+
+  if (!link || !/^https:\/\//i.test(link)) return original;
+
+  const personalized = `${link}\nHey, I made this for ${business || "your business"}. Take a look and text me if you have questions. - Sierra`;
+  if (smsSegmentEstimate(personalized) <= 1) return personalized;
+
+  const shorter = `${link}\nHey, I made this for your business. Take a look and text me if you have questions. - Sierra`;
+  if (smsSegmentEstimate(shorter) <= 1) return shorter;
+
+  const shortest = `${link}\nMade this for your business. Take a look and text me with any questions. - Sierra`;
+  return shortest;
+}
+
 function smsSegmentEstimate(text = "") {
   const value = String(text || "");
   const ascii = /^[\x00-\x7F]*$/.test(value);
@@ -1568,7 +1594,11 @@ async function startSmsWorker() {
           };
           await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
           await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
-          await SMS_SHEET_BRIDGE.writeSendResult(result, recipient.metadata || {}).catch(error => console.error("SMS sheet suppression writeback error", error.message));
+          if (recipient?.metadata?.campaign_id) {
+            await SMS_SHEET_BRIDGE.writeBasicSendResult(result, recipient.metadata || {}).catch(error => console.error("SMS basic sheet suppression writeback error", error.message));
+          } else {
+            await SMS_SHEET_BRIDGE.writeSendResult(result, recipient.metadata || {}).catch(error => console.error("SMS sheet suppression writeback error", error.message));
+          }
           batch.processed_count = i + 1;
           await save();
           continue;
@@ -1576,7 +1606,10 @@ async function startSmsWorker() {
 
         for (let j = 0; j < recipient.messages.length; j++) {
           try {
-            const response = await telnyxSendMessage(recipient.phone, recipient.messages[j]);
+            const outboundText = recipient?.metadata?.campaign_id
+              ? compactBulkSms(recipient.messages[j], recipient.metadata || {})
+              : gsm7Safe(recipient.messages[j]);
+            const response = await telnyxSendMessage(recipient.phone, outboundText);
             const result = {
               batch_id:batchId,
               index:i,
@@ -1589,7 +1622,18 @@ async function startSmsWorker() {
             };
             await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
             await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
-            await SMS_SHEET_BRIDGE.writeSendResult(result, recipient.metadata || {}).catch(error => console.error("SMS sheet send writeback error", error.message));
+            if (recipient?.metadata?.campaign_id) {
+              await SMS_SHEET_BRIDGE.writeBasicSendResult(result, recipient.metadata || {}).catch(error => console.error("SMS basic sheet send writeback error", error.message));
+            } else {
+              await SMS_SHEET_BRIDGE.writeSendResult(result, recipient.metadata || {}).catch(error => console.error("SMS sheet send writeback error", error.message));
+            }
+            console.log("SMS accepted", {
+              batchId,
+              sheetRow: recipient?.metadata?.sheet_row || null,
+              phoneHint: `••••${recipient.phone.slice(-4)}`,
+              providerMessageId: result.telnyx_message_id,
+              estimatedSegments: smsSegmentEstimate(outboundText)
+            });
             batch.sent_count += 1;
           } catch (error) {
             batch.failed_count += 1;
@@ -1605,7 +1649,17 @@ async function startSmsWorker() {
             };
             await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
             await postSmsResultCallback(result).catch(callbackError => console.error("SMS callback error", callbackError.message));
-            await SMS_SHEET_BRIDGE.writeSendResult(result, recipient.metadata || {}).catch(sheetError => console.error("SMS sheet send writeback error", sheetError.message));
+            if (recipient?.metadata?.campaign_id) {
+              await SMS_SHEET_BRIDGE.writeBasicSendResult(result, recipient.metadata || {}).catch(sheetError => console.error("SMS basic sheet failure writeback error", sheetError.message));
+            } else {
+              await SMS_SHEET_BRIDGE.writeSendResult(result, recipient.metadata || {}).catch(sheetError => console.error("SMS sheet send writeback error", sheetError.message));
+            }
+            console.error("SMS failed", {
+              batchId,
+              sheetRow: recipient?.metadata?.sheet_row || null,
+              phoneHint: `••••${recipient.phone.slice(-4)}`,
+              error: result.error
+            });
           }
           await new Promise(resolve => setTimeout(resolve, SMS_SEND_INTERVAL_MS));
         }
