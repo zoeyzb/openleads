@@ -17,3 +17,4 @@ geo-cell-depth10 2026-09-21T01:23Z
 consolidated-geo-pass-yield 2026-09-21T01:29Z
 rollout strict-targeting-city-density 2026-09-21T04:30Z
 rollout core-trade-evidence 2026-09-21T04:45Z
+rollout phone-required 2026-09-21T07:35Z
