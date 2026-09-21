@@ -22,7 +22,10 @@ export function campaignLeadSetKey(job={}) {
 export function coverageField(job={}) {
   const base=[norm(job.industry), norm(job.location), qualificationProfile(job)].join("::");
   const pass=norm(job.coverage_pass||"");
-  return pass ? `${base}::pass:${pass}` : base;
+  const cell=norm(job.coverage_cell||"");
+  const passPart=pass ? `::pass:${pass}` : "";
+  const cellPart=cell ? `::cell:${cell}` : "";
+  return `${base}${passPart}${cellPart}`;
 }
 export async function readCoverage(redis, job) {
   const raw=await redis.hGet("recover:coverage:v1", coverageField(job));
