@@ -1952,7 +1952,20 @@ async function telnyxLookupSmsSuitability(phone, redis) {
   if (cachedRaw) {
     try {
       const cached = JSON.parse(cachedRaw);
-      if (cached?.decision === "SEND" || cached?.decision === "SKIP") return { ...cached, cached:true };
+      const cachedType = String(cached?.line_type || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+      if (cached?.decision === "SEND") return { ...cached, cached:true };
+      if (cached?.decision === "SKIP") {
+        if (["voip","fixed_line_or_mobile","unknown",""].includes(cachedType)) {
+          return {
+            ...cached,
+            decision:"CHECK",
+            reason:`ambiguous_line_type_${cachedType || "unknown"}`,
+            cached:true
+          };
+        }
+        return { ...cached, cached:true };
+      }
+      if (cached?.decision === "CHECK") return { ...cached, cached:true };
     } catch {}
   }
 
@@ -2256,6 +2269,15 @@ async function startSmsWorker() {
                 checked_at:lookup.checked_at || new Date().toISOString(),
                 sheet_row:recipient?.metadata?.sheet_row || null
               }));
+            } else {
+              await redis.sAdd("recover:sms:lookup-pending", recipient.phone);
+              await redis.hSet("recover:sms:lookup-pending-meta", recipient.phone, JSON.stringify({
+                sheet_row:recipient?.metadata?.sheet_row || null,
+                business_name:recipient?.metadata?.business_name || null,
+                line_type:lookup.line_type || "unknown",
+                reason:lookup.reason || "ambiguous_lookup",
+                checked_at:lookup.checked_at || new Date().toISOString()
+              }));
             }
 
             const result = {
@@ -2272,7 +2294,7 @@ async function startSmsWorker() {
             batch.updated_at = new Date().toISOString();
             batch.skipped_count = Number(batch.skipped_count || 0) + 1;
             await save();
-            console.log("SMS lookup gate skipped send", {
+            console.log(lookup.decision === "SKIP" ? "SMS lookup gate skipped send" : "SMS lookup gate held for review", {
               batchId,
               sheetRow:recipient?.metadata?.sheet_row || null,
               phoneHint:`••••${recipient.phone.slice(-4)}`,
