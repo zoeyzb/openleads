@@ -2604,16 +2604,38 @@ if (TELNYX_AUTO_CONFIGURE_PROFILE) {
     .then(async result => {
       const profileId = result?.profile?.id || null;
       console.log("Telnyx messaging profile webhook configured", { created:result?.created, profile_id:profileId, webhook_url:telnyxWebhookTarget() });
-      if (!TELNYX_10DLC_CAMPAIGN_ID || !profileId) return;
+      if (!profileId) throw new Error("missing_messaging_profile_id");
+
+      const inventory = await telnyxAccountInventory();
+      const configuredFrom = normalizeInboxPhone(TELNYX_FROM_NUMBER);
+      const fromNumber = (inventory.numbers || []).find(row => normalizeInboxPhone(row?.phone_number) === configuredFrom);
+      if (!fromNumber?.id) throw new Error("configured_from_number_not_found_in_telnyx_inventory");
+
+      if (String(fromNumber.messaging_profile_id || "") !== String(profileId)) {
+        await assignTelnyxNumberToProfile({ phoneNumberId:fromNumber.id, messagingProfileId:profileId });
+        console.log("Telnyx sending number attached to messaging profile", {
+          phone_hint:configuredFrom ? "••••" + configuredFrom.slice(-4) : null,
+          profile_id:profileId
+        });
+      } else {
+        console.log("Telnyx sending number already attached to messaging profile", {
+          phone_hint:configuredFrom ? "••••" + configuredFrom.slice(-4) : null,
+          profile_id:profileId
+        });
+      }
+
+      if (!TELNYX_10DLC_CAMPAIGN_ID) return;
       const assignment = await assignTelnyxProfileTo10dlcCampaign({
         messagingProfileId:profileId,
         campaignId:TELNYX_10DLC_CAMPAIGN_ID,
       });
+      const taskStatus = String(assignment?.task?.status || assignment?.task?.data?.status || "submitted").toLowerCase();
       console.log("Telnyx 10DLC profile assignment result", {
         campaign_id:TELNYX_10DLC_CAMPAIGN_ID,
         task_id:assignment?.assignment?.taskId || assignment?.assignment?.data?.taskId || null,
-        status:assignment?.task?.status || assignment?.task?.data?.status || "submitted",
+        status:taskStatus
       });
+      if (taskStatus === "failed") throw new Error("10dlc_profile_assignment_failed");
     })
     .catch(error => console.error("Telnyx messaging profile auto-configure failed", error?.message || error));
 }
