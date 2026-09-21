@@ -39,3 +39,57 @@ test("direct Sheet campaigns do not post results to the Revenue callback", () =>
 test("Revenue-created batches keep posting results to the Revenue callback", () => {
   assert.equal(smsDeliveryGuard.shouldPostSmsResultCallback?.({}), true);
 });
+
+test("explicit override permits throttled bulk sending despite registration and historical carrier blocks", () => {
+  assert.equal(
+    bulkSmsBlockReason({
+      configuredPause: false,
+      registrationApproved: false,
+      carrierBlocked: true,
+      unregisteredSendOverride: true,
+    }),
+    "",
+  );
+});
+
+test("configured pause still wins over the unregistered-send override", () => {
+  assert.equal(
+    bulkSmsBlockReason({
+      configuredPause: true,
+      registrationApproved: false,
+      carrierBlocked: true,
+      unregisteredSendOverride: true,
+    }),
+    "configured_pause",
+  );
+});
+
+test("paused batch resumes only when every active gate is clear", () => {
+  assert.equal(smsDeliveryGuard.shouldResumePausedSmsBatch?.({ status: "paused", blockReason: "" }), true);
+  assert.equal(
+    smsDeliveryGuard.shouldResumePausedSmsBatch?.({ status: "paused", blockReason: "configured_pause" }),
+    false,
+  );
+  assert.equal(smsDeliveryGuard.shouldResumePausedSmsBatch?.({ status: "completed", blockReason: "" }), false);
+});
+
+test("override campaign stops when observed delivery failures reach its cutoff", () => {
+  assert.equal(
+    smsDeliveryGuard.bulkSmsOverrideStopReason?.({
+      overrideEnabled: true,
+      outboundMessages: 775,
+      failureRatePercent: 70,
+      cutoffPercent: 70,
+    }),
+    "delivery_failure_cutoff",
+  );
+  assert.equal(
+    smsDeliveryGuard.bulkSmsOverrideStopReason?.({
+      overrideEnabled: true,
+      outboundMessages: 775,
+      failureRatePercent: 69.9,
+      cutoffPercent: 70,
+    }),
+    "",
+  );
+});
