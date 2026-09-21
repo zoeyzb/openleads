@@ -50,6 +50,7 @@ const SMS_BULK_END_ROW = Math.max(1, Number(process.env.SMS_BULK_END_ROW || 0));
 const SMS_BULK_USER_CONFIRMED_CONSENT = String(process.env.SMS_BULK_USER_CONFIRMED_CONSENT || "").toLowerCase() === "true";
 const SMS_BULK_AUTOSTART = String(process.env.SMS_BULK_AUTOSTART || "").toLowerCase() === "true";
 const SMS_BULK_PAUSED = String(process.env.SMS_BULK_PAUSED || "").toLowerCase() === "true";
+// Sending is fail-closed until carrier registration is explicitly confirmed.
 const SMS_10DLC_APPROVED = String(process.env.SMS_10DLC_APPROVED || "").toLowerCase() === "true";
 const RECOVER_REVENUE_SMS_CALLBACK_URL = (process.env.RECOVER_REVENUE_SMS_CALLBACK_URL || "").replace(/\/$/, "");
 const RECOVER_REVENUE_SMS_CALLBACK_SECRET = process.env.RECOVER_REVENUE_SMS_CALLBACK_SECRET || "";
