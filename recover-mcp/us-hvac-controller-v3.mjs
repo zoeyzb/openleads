@@ -209,7 +209,7 @@ async function chooseLatePassServiceFamily(area={},pass=5){
     const explore=[...cityEligible].sort((a,b)=>a.attempts-b.attempts||a.dupRate-b.dupRate||b.avgNew-a.avgNew);
 
     let hash=0;
-    for(const ch of `${state}|${city}|p${pass}`) hash=(hash*31+ch.charCodeAt(0))>>>0;
+    for(const ch of `${state}|${city}|${String(area.partition_zip||area.zip||"")}|p${pass}`) hash=(hash*31+ch.charCodeAt(0))>>>0;
     const exploration=(hash%100)<28;
     let pick;
     if(exploration){
@@ -241,6 +241,12 @@ async function chooseLatePassServiceFamily(area={},pass=5){
 }
 const areas=await fetchZipAreas(); const scopeSet=campaignLeadSetKey(profileJob); await normalizeSocialOnlyLeadstore(redis); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0); let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pass")||1));
+const geoMultiCellResetDone=String(await redis.hGet(CONTROLLER_KEY,"geo_multi_cell_v1")||"")==="1";
+if(TARGET_TOTAL>=1000000&&coveragePass>=8&&!geoMultiCellResetDone){
+  cursor=0;
+  await redis.hSet(CONTROLLER_KEY,{cursor:"0",geo_multi_cell_v1:"1"});
+  console.log(JSON.stringify({event:"geo_multi_cell_reset",coveragePass,cursor,reason:"enable_multi_cell_dense_city_coverage"}));
+}
 const hybridResetDone=String(await redis.hGet(CONTROLLER_KEY,"hybrid_zip_v3")||"")==="1";
 if(!hybridResetDone){
   coveragePass=Math.max(5,coveragePass);
@@ -280,7 +286,7 @@ async function parkLegacyNationalForV2(){
 async function upgradeQueuedNationalJobs(){
   const ids=await redis.lRange(ACTIVE_QUEUE,0,-1);
   let upgraded=0,skipped=0,cityDuplicatesParked=0,yieldExhaustedParked=0,yieldExplorationKept=0;
-  const seenLaterPassCities=new Set();
+  const seenLaterPassCities=new Map();
   for(const id of ids){
     const raw=await redis.get("recover:acq:"+id);
     if(!raw){skipped++;continue;}
@@ -352,19 +358,25 @@ async function upgradeQueuedNationalJobs(){
     if(pass>=3&&(Number(job.source_population||0)<10000||pass>=5)){
       const city=String(job.partition_city||"").trim();
       const state=String(job.partition_state||"").trim();
+      const population=Number(job.source_population||0);
+      const zip=String(job.partition_zip||job.source_zip||"").trim();
+      const geoCellMode=pass>=8&&population>=10000&&Boolean(zip);
       const cityKey=(pass+"|"+state+"|"+city).toLowerCase();
       if(city&&state){
-        if(seenLaterPassCities.has(cityKey)){
+        const seen=Number(seenLaterPassCities.get(cityKey)||0);
+        const cap=geoCellMode?(population>=25000?3:2):1;
+        if(seen>=cap){
           await redis.lRem(ACTIVE_QUEUE,0,String(id));
           job.status="parked";
-          job.phase="parked_duplicate_city_pass";
-          job.reason="duplicate_city_in_later_coverage_pass";
+          job.phase=geoCellMode?"parked_duplicate_city_cell_cap":"parked_duplicate_city_pass";
+          job.reason=geoCellMode?"geo_cell_cap_reached":"duplicate_city_in_later_coverage_pass";
           job.updated_at=new Date().toISOString();
           await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});
           cityDuplicatesParked++;
           continue;
         }
-        seenLaterPassCities.add(cityKey);
+        seenLaterPassCities.set(cityKey,seen+1);
+        if(geoCellMode) job.coverage_cell=job.coverage_cell||`zip:${zip}`;
         job.location=`${city}, ${state}`;
       }
     }
@@ -410,19 +422,39 @@ async function seedOne(area){
     }
     if(exploration) await redis.hIncrBy(CONTROLLER_KEY,"yield_exploration_total",1);
   }
-  let cityPassKey="",cityField="",cityMarked=false;
+  let cityPassKey="",cityField="",cityMarked=false,cityMarkMode="";
+  const sourcePopulation=Number(area.population||0);
+  const geoCellMode=coveragePass>=8&&sourcePopulation>=10000;
+  const geoCellCap=sourcePopulation>=25000?3:2;
+  const coverageCell=geoCellMode?`zip:${String(area.partition_zip||area.zip||"").trim()}`:"";
   if(coveragePass>=3&&(!denseLaterPass||coveragePass>=5)){
     cityField=`${String(partitionState||"").toLowerCase()}|${String(partitionCity||"").toLowerCase()}`;
-    cityPassKey=`recover:coverage:city-pass:${coveragePass}`;
-    const firstForCity=await redis.sAdd(cityPassKey,cityField);
-    await redis.expire(cityPassKey,TTL);
-    if(!firstForCity) return false;
-    cityMarked=true;
+    if(geoCellMode){
+      cityPassKey=`recover:coverage:city-pass-cells:${coveragePass}`;
+      const count=await redis.hIncrBy(cityPassKey,cityField,1);
+      await redis.expire(cityPassKey,TTL);
+      if(count>geoCellCap){
+        await redis.hIncrBy(cityPassKey,cityField,-1);
+        return false;
+      }
+      cityMarked=true;
+      cityMarkMode="hash";
+    }else{
+      cityPassKey=`recover:coverage:city-pass:${coveragePass}`;
+      const firstForCity=await redis.sAdd(cityPassKey,cityField);
+      await redis.expire(cityPassKey,TTL);
+      if(!firstForCity) return false;
+      cityMarked=true;
+      cityMarkMode="set";
+    }
   }
-  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),query_family:queryFamily,target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_latitude:area.latitude,source_longitude:area.longitude,yield_exploration:Boolean(yieldDecision.exploration),prior_area_attempts:yieldDecision.attempts,prior_area_net_new:yieldDecision.netNew,prior_area_duplicate_rate:yieldDecision.dupRate,created_at:now,updated_at:now};
-  const claim=await claimCoverage(redis,job,{source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,partition_state:job.partition_state,partition_city:job.partition_city,coverage_pass:job.coverage_pass,shard_id});
+  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,coverage_cell:coverageCell,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),query_family:queryFamily,target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_latitude:area.latitude,source_longitude:area.longitude,yield_exploration:Boolean(yieldDecision.exploration),prior_area_attempts:yieldDecision.attempts,prior_area_net_new:yieldDecision.netNew,prior_area_duplicate_rate:yieldDecision.dupRate,created_at:now,updated_at:now};
+  const claim=await claimCoverage(redis,job,{source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,partition_state:job.partition_state,partition_city:job.partition_city,coverage_pass:job.coverage_pass,coverage_cell:job.coverage_cell,shard_id});
   if(!claim.claimed){
-    if(cityMarked) await redis.sRem(cityPassKey,cityField);
+    if(cityMarked){
+      if(cityMarkMode==="hash") await redis.hIncrBy(cityPassKey,cityField,-1);
+      else await redis.sRem(cityPassKey,cityField);
+    }
     return false;
   }
   await redis.set("recover:acq:"+id,JSON.stringify(job),{EX:TTL});await redis.sAdd("recover:acq:index",id);await redis.sAdd("recover:batch:"+BATCH_ID+":jobs",id);await redis.expire("recover:batch:"+BATCH_ID+":jobs",TTL);if(await redis.lPos(ACTIVE_QUEUE,id)===null)await redis.lPush(ACTIVE_QUEUE,id);return true;
