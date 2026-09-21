@@ -829,6 +829,7 @@ async function processAcquisition(id) {
         mapsKeywords=[String(job.query_family).trim()];
       }
       job.current_query_families=mapsKeywords.map(queryFamily);
+      const geoFastMode=Boolean(geoBias && String(process.env.ACQUISITION_GEO_FAST_MODE||"")==="1");
       const mapsPayload={
         name:`Recover acquisition ${id} round ${round+1}`,
         keywords:mapsKeywords,
@@ -840,14 +841,15 @@ async function processAcquisition(id) {
           lat:String(geoBias.lat.toFixed(6)),
           lon:String(geoBias.lon.toFixed(6)),
           zoom:geoBias.zoom,
-          radius:geoBias.radius
+          radius:geoBias.radius,
+          fast_mode:geoFastMode
         }:{})
       };
       if(geoBias) console.log(JSON.stringify({
         event:"maps_geo_cell",acquisition_id:id,coverage_pass:job.coverage_pass,
         location:job.location,query_family:job.query_family,cell:geoBias.cell,
         lat:Number(geoBias.lat.toFixed(5)),lon:Number(geoBias.lon.toFixed(5)),
-        zoom:geoBias.zoom,radius:geoBias.radius
+        zoom:geoBias.zoom,radius:geoBias.radius,fastMode:geoFastMode
       }));
       const {mapsBase,create}=await createMapsJobWithFailover(id,mapsPayload);
       job.current_maps_base_url=mapsBase;
