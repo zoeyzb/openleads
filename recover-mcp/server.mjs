@@ -529,14 +529,22 @@ function compactBulkSms(originalText = "", metadata = {}) {
 
   if (!link || !/^https:\/\//i.test(link)) return original;
 
-  const personalized = `${link}\nHey, I made this for ${business || "your business"}. Take a look and text me if you have questions. - Sierra`;
-  if (smsSegmentEstimate(personalized) <= 1) return personalized;
+  const prefix = link + "\n";
+  const candidates = [
+    business ? `Made this for ${business}. Thoughts? - Sierra` : "",
+    "Made this for your business. Thoughts? - Sierra",
+    "Made this for you. Thoughts? - Sierra",
+    "Made this for you. - Sierra",
+    "- Sierra",
+    ""
+  ].filter((x, i, arr) => i === arr.indexOf(x));
 
-  const shorter = `${link}\nHey, I made this for your business. Take a look and text me if you have questions. - Sierra`;
-  if (smsSegmentEstimate(shorter) <= 1) return shorter;
+  for (const body of candidates) {
+    const text = body ? prefix + body : link;
+    if (smsSegmentEstimate(text) <= 1 && text.length <= 160) return text;
+  }
 
-  const shortest = `${link}\nMade this for your business. Take a look and text me with any questions. - Sierra`;
-  return shortest;
+  return link;
 }
 
 function smsSegmentEstimate(text = "") {
