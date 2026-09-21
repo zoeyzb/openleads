@@ -109,6 +109,7 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
   }
   let token = "";
   let tokenAt = 0;
+  let basicStatusColumnsPromise = null;
 
   async function auth() {
     if (!serviceAccount) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not configured");
@@ -207,6 +208,72 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     return rows;
   }
 
+  async function resolveBasicStatusColumns(spreadsheetId, tabName) {
+    if (!basicStatusColumnsPromise) {
+      basicStatusColumnsPromise = (async () => {
+        const range = `${quoteTab(tabName)}!A1:Z2`;
+        const json = await request(spreadsheetId, `/values/${encodeURIComponent(range)}?majorDimension=ROWS`);
+        const header = (json.values?.[0] || []).map(clean);
+        const linkIndex = header.findIndex((value) => /^link$/i.test(value));
+        const statusIndex = linkIndex >= 0 ? linkIndex + 1 : Math.max(header.length, 5);
+        const toCol = (index) => {
+          let n = index + 1;
+          let out = "";
+          while (n > 0) {
+            const rem = (n - 1) % 26;
+            out = String.fromCharCode(65 + rem) + out;
+            n = Math.floor((n - 1) / 26);
+          }
+          return out;
+        };
+        return {
+          status: toCol(statusIndex),
+          provider: toCol(statusIndex + 1),
+          updated: toCol(statusIndex + 2),
+        };
+      })();
+    }
+    return basicStatusColumnsPromise;
+  }
+
+  async function writeBasicSendResult(result, metadata = {}) {
+    const spreadsheetId = clean(metadata.sheet_spreadsheet_id);
+    const tabName = clean(metadata.sheet_tab_name);
+    const row = Number(metadata.sheet_row || 0);
+    if (!spreadsheetId || !tabName || row < 1) return { updated: 0 };
+    const cols = await resolveBasicStatusColumns(spreadsheetId, tabName);
+    const status = result.status === "accepted"
+      ? "Sent"
+      : result.status === "skipped_suppressed"
+        ? "Blocked - Suppressed"
+        : "Failed";
+    const headerRange = `${quoteTab(tabName)}!${cols.status}1:${cols.updated}1`;
+    const rowRange = `${quoteTab(tabName)}!${cols.status}${row}:${cols.updated}${row}`;
+    await request(spreadsheetId, "/values:batchUpdate", {
+      method: "POST",
+      body: {
+        valueInputOption: "RAW",
+        data: [
+          {
+            range: headerRange,
+            majorDimension: "ROWS",
+            values: [["SMS Status", "Telnyx Message ID", "SMS Updated At"]],
+          },
+          {
+            range: rowRange,
+            majorDimension: "ROWS",
+            values: [[
+              status,
+              clean(result.telnyx_message_id),
+              clean(result.at || new Date().toISOString()),
+            ]],
+          },
+        ],
+      },
+    });
+    return { updated: 1, status };
+  }
+
   async function writeRows({ spreadsheetId, tabName, updates }) {
     assertAllowed(spreadsheetId, tabName);
     if (!Array.isArray(updates) || !updates.length) return { updated: 0 };
@@ -292,6 +359,7 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     schema: smsSheetSchema(),
     readRows,
     readBasicRows,
+    writeBasicSendResult,
     writeRows,
     markBatchQueued,
     writeSendResult,
