@@ -823,7 +823,8 @@ async function processAcquisition(id) {
       await saveJob(job);
 
       const currentCoveragePass=Number(String(job.coverage_pass||"").match(/p(\d+)$/)?.[1]||1);
-      const denseArea=Number(job.source_population||0)>=10000;
+      const densityPopulation=Number(job.source_city_population||job.source_population||0);
+      const denseArea=densityPopulation>=10000;
       const fastNyDepthCap=isFastHomeService
         ? (currentCoveragePass>=5 ? (denseArea?12:7) : (currentCoveragePass>=3?(denseArea?9:6):6))
         : MAPS_ROUND_DEPTH_CAP;
