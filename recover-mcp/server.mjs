@@ -2261,23 +2261,6 @@ async function startSmsWorker() {
       for (let i = batch.processed_count; i < recipients.length; i++) {
         const recipient = recipients[i];
 
-        if (recipient?.metadata?.campaign_id) {
-          const senderBlockRaw = await redis.get("recover:sms:sender-block:40010");
-          if (senderBlockRaw) {
-            batch.status = "paused";
-            batch.updated_at = new Date().toISOString();
-            await save();
-            await SMS_SHEET_BRIDGE.writeBasicReachability("CHECK", recipient.metadata || {}, "sender_blocked_40010")
-              .catch(error => console.error("SMS sender-block sheet writeback error", error.message));
-            console.error("Bulk SMS halted by sender circuit breaker", {
-              batchId,
-              sheetRow:recipient?.metadata?.sheet_row || null,
-              reason:"40010_not_10dlc_registered"
-            });
-            break;
-          }
-        }
-
         const suppressed = await redis.sIsMember("recover:sms:suppressed", recipient.phone);
         if (suppressed) {
           if (recipient?.metadata?.campaign_id) {
@@ -2530,11 +2513,7 @@ setTimeout(() => {
     .catch(error => console.error("Recover ambiguous lookup suppression reconciliation error", error?.message || error));
 }, 11000);
 
-setTimeout(() => {
-  void backfillSmsSender10dlcBlock({ limit: 5000 })
-    .then(result => console.log("Recover sender 10DLC block backfill complete", result))
-    .catch(error => console.error("Recover sender 10DLC block backfill error", error?.message || error));
-}, 7000);
+
 
 setTimeout(() => {
   void backfillNonRoutableSmsSuppressions({ limit: 5000 })
@@ -2813,9 +2792,6 @@ const httpServer = createHttpServer((req, res) => {
         const errorCodes = (Array.isArray(payload?.errors) ? payload.errors : []).map(e => String(e?.code || ""));
         if (errorCodes.includes("40001")) {
           await quarantineNonRoutableSms({ messageId, message:updatedMessage, event });
-        }
-        if (errorCodes.includes("40010")) {
-          await blockSmsSenderFor10dlc({ messageId, event });
         }
         if (/(fail|reject|undeliver|expired|blocked)/i.test(status)) {
           const errors = Array.isArray(payload?.errors) ? payload.errors : [];
