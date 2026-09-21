@@ -1588,7 +1588,7 @@ async function backfillSmsSender10dlcBlock({ limit = 5000 } = {}) {
   return { blocked:false, scanned };
 }
 
-async function quarantineNonRoutableSms({ messageId = "", message = null, event = null } = {}) {
+async function quarantineNonRoutableSms({ messageId = "", message = null, event = null, quiet = false } = {}) {
   const redis = await getAcquisitionRedis();
   let msg = message;
   if (!msg && messageId) {
@@ -1629,7 +1629,7 @@ async function quarantineNonRoutableSms({ messageId = "", message = null, event 
     }, metadata).catch(error => console.error("SMS non-routable sheet writeback error", error?.message || error));
   }
 
-  console.log("SMS number quarantined as non-routable", {
+  if (!quiet) console.log("SMS number quarantined as non-routable", {
     messageId:String(messageId || msg.id || ""),
     sheetRow: metadata.sheet_row || null,
     phoneHint:`••••${String(msg.phone).slice(-4)}`
@@ -1647,7 +1647,7 @@ async function backfillNonRoutableSmsSuppressions({ limit = 5000 } = {}) {
     try { msg = JSON.parse(raw); } catch { continue; }
     if (msg?.direction !== "outbound") continue;
     scanned++;
-    const result = await quarantineNonRoutableSms({ messageId:id, message:msg });
+    const result = await quarantineNonRoutableSms({ messageId:id, message:msg, quiet:true });
     if (result?.quarantined) quarantined++;
   }
   return { scanned, quarantined };
