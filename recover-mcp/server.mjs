@@ -2792,7 +2792,10 @@ const httpServer = createHttpServer((req, res) => {
         live_clients:INBOX_SSE_CLIENTS.size,
         non_routable_unavailable:unavailable.count,
         failure_reasons:(failureBreakdown.reasons || []).slice(0,12),
-        suppressed:suppressedCount
+        suppressed:suppressedCount,
+        bulk_paused:SMS_BULK_PAUSED,
+        bulk_autostart:SMS_BULK_AUTOSTART,
+        registration_approved:SMS_10DLC_APPROVED
       }));
     })().catch(error => {
       res.writeHead(500, {"content-type":"application/json","cache-control":"no-store"});
@@ -2889,6 +2892,34 @@ const httpServer = createHttpServer((req, res) => {
       const sent=await telnyxSendMessage(phone,text);
       res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({ok:true,id:sent?.data?.id||null}));
     })().catch(error=>{res.writeHead(422,{"content-type":"application/json"});res.end(JSON.stringify({error:error?.message||"reply_failed"}));});
+    return;
+  }
+
+  if (requestUrl.pathname === "/inbox/api/resend" && req.method === "POST") {
+    void (async () => {
+      if (!inboxAuthorized(req)) { res.writeHead(401,{"content-type":"application/json"});res.end(JSON.stringify({error:"unauthorized"}));return; }
+      const input=JSON.parse(await readRawBody(req,16384)||"{}");
+      const messageId=String(input.message_id||"").trim();
+      if(!messageId) throw new Error("message_id_required");
+      const redis=await getAcquisitionRedis();
+      const raw=await redis.hGet("recover:sms:inbox:messages",messageId);
+      if(!raw) throw new Error("message_not_found");
+      let original; try { original=JSON.parse(raw); } catch { throw new Error("message_corrupt"); }
+      if(original?.direction!=="outbound") throw new Error("only_outbound_messages_can_be_resent");
+      const status=String(original?.status||"").toLowerCase();
+      if(!/(fail|undeliver|reject|expire|error|blocked)/.test(status)) throw new Error("message_is_not_failed");
+      const payload=original?.raw?.data?.payload||original?.raw?.payload||original?.raw||{};
+      const errors=Array.isArray(payload?.errors)?payload.errors:[];
+      const codes=errors.map(e=>String(e?.code||""));
+      if(codes.includes("40001")) throw new Error("recipient_not_routable");
+      const phone=normalizeInboxPhone(original?.phone);
+      const text=String(original?.text||"").trim();
+      if(!phone||!text) throw new Error("message_missing_phone_or_text");
+      if(await redis.sIsMember("recover:sms:suppressed",phone)) throw new Error("recipient_is_suppressed");
+      const sent=await telnyxSendMessage(phone,text);
+      res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({ok:true,id:sent?.data?.id||null,resent_from:messageId}));
+    })().catch(error=>{res.writeHead(422,{"content-type":"application/json"});res.end(JSON.stringify({error:error?.message||"resend_failed"}));});
     return;
   }
 
