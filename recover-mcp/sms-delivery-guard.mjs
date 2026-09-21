@@ -17,3 +17,7 @@ export function reachabilityForLookupDecision(decision = "") {
   const normalized = String(decision || "").trim().toUpperCase();
   return ["SEND", "SKIP"].includes(normalized) ? normalized : "CHECK";
 }
+
+export function shouldPostSmsResultCallback(metadata = {}) {
+  return !String(metadata?.campaign_id || "").trim();
+}
