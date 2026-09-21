@@ -26,6 +26,27 @@ const redis=createClient({url:REDIS_URL});
 redis.on("error",e=>console.error("Redis error",e));
 await redis.connect();
 
+const LEADER_KEY="recover:secondary:leader";
+const INSTANCE_ID=process.env.RAILWAY_REPLICA_ID||process.env.HOSTNAME||Math.random().toString(36).slice(2);
+async function acquireLeader(){
+  const ok=await redis.set(LEADER_KEY,INSTANCE_ID,{NX:true,EX:45});
+  return ok==="OK";
+}
+async function renewLeader(){
+  const current=await redis.get(LEADER_KEY);
+  if(current!==INSTANCE_ID) return false;
+  await redis.expire(LEADER_KEY,45);
+  return true;
+}
+if(!await acquireLeader()){
+  console.log(JSON.stringify({event:"secondary_discovery_standby",instance:INSTANCE_ID}));
+  while(true){
+    await new Promise(r=>setTimeout(r,15000));
+    if(await acquireLeader()) break;
+  }
+}
+setInterval(()=>renewLeader().catch(()=>{}),15000).unref();
+
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function normalizeText(v=""){return String(v||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
 function normalizePhone(v=""){return String(v||"").replace(/\D/g,"").slice(-10);}
