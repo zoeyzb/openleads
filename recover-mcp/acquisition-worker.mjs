@@ -832,7 +832,7 @@ async function processAcquisition(id) {
       const mapsPayload={
         name:`Recover acquisition ${id} round ${round+1}`,
         keywords:mapsKeywords,
-        depth:Math.min(Number(job.depth||10), fastNyDepthCap),
+        depth:geoBias?Math.min(10,Math.max(Number(job.depth||10),10)):Math.min(Number(job.depth||10), fastNyDepthCap),
         max_time:fastNyMaxTime,
         extra_reviews:false,
         lang:"en",
