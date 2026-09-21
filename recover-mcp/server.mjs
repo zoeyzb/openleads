@@ -43,6 +43,7 @@ const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER || "";
 const TELNYX_WEBHOOK_URL = (process.env.TELNYX_WEBHOOK_URL || "").trim();
 const INBOX_ACCESS_PASSWORD = String(process.env.INBOX_ACCESS_PASSWORD || "");
 const TELNYX_AUTO_CONFIGURE_PROFILE = String(process.env.TELNYX_AUTO_CONFIGURE_PROFILE || "").toLowerCase() === "true";
+const TELNYX_10DLC_CAMPAIGN_ID = String(process.env.TELNYX_10DLC_CAMPAIGN_ID || "").trim();
 const RAILWAY_PUBLIC_DOMAIN = String(process.env.RAILWAY_PUBLIC_DOMAIN || "").trim();
 const SMS_SEND_INTERVAL_MS = Math.max(100, Number(process.env.SMS_SEND_INTERVAL_MS || 30000));
 const SMS_MAX_BATCH_RECIPIENTS = Math.max(1, Number(process.env.SMS_MAX_BATCH_RECIPIENTS || 5000));
@@ -2009,6 +2010,25 @@ async function assignTelnyxNumberToProfile({ phoneNumberId, messagingProfileId }
   return updated?.data || updated;
 }
 
+async function assignTelnyxProfileTo10dlcCampaign({ messagingProfileId, campaignId }) {
+  if (!messagingProfileId || !campaignId) throw new Error("messagingProfileId and campaignId are required");
+  const assignment = await telnyxApiRequest("/10dlc/phoneNumberAssignmentByProfile", {
+    method:"POST",
+    body:JSON.stringify({ messagingProfileId, campaignId })
+  });
+  const taskId = String(assignment?.taskId || assignment?.data?.taskId || "");
+  if (!taskId) return { assignment, task:null };
+
+  let task = null;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    task = await telnyxApiRequest(`/10dlc/phoneNumberAssignmentByProfile/${encodeURIComponent(taskId)}`);
+    const status = String(task?.status || task?.data?.status || "").toLowerCase();
+    if (["completed", "failed"].includes(status)) break;
+  }
+  return { assignment, task };
+}
+
 async function telnyxLookupSmsSuitability(phone, redis) {
   const normalized = normalizeE164(phone);
   if (!normalized) return { decision:"SKIP", line_type:"invalid", reason:"invalid_e164", cached:false };
@@ -2580,7 +2600,20 @@ const nodeHandler = toNodeHandler(handler);
 
 if (TELNYX_AUTO_CONFIGURE_PROFILE) {
   void configureTelnyxMessagingProfile({ name: "Recover Revenue" })
-    .then(result => console.log("Telnyx messaging profile webhook configured", { created: result?.created, profile_id: result?.profile?.id || null, webhook_url: telnyxWebhookTarget() }))
+    .then(async result => {
+      const profileId = result?.profile?.id || null;
+      console.log("Telnyx messaging profile webhook configured", { created:result?.created, profile_id:profileId, webhook_url:telnyxWebhookTarget() });
+      if (!TELNYX_10DLC_CAMPAIGN_ID || !profileId) return;
+      const assignment = await assignTelnyxProfileTo10dlcCampaign({
+        messagingProfileId:profileId,
+        campaignId:TELNYX_10DLC_CAMPAIGN_ID,
+      });
+      console.log("Telnyx 10DLC profile assignment result", {
+        campaign_id:TELNYX_10DLC_CAMPAIGN_ID,
+        task_id:assignment?.assignment?.taskId || assignment?.assignment?.data?.taskId || null,
+        status:assignment?.task?.status || assignment?.task?.data?.status || "submitted",
+      });
+    })
     .catch(error => console.error("Telnyx messaging profile auto-configure failed", error?.message || error));
 }
 
