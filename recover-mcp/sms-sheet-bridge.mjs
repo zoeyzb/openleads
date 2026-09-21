@@ -258,6 +258,27 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     return { updated: 1, status: value, detail: clean(detail) };
   }
 
+  async function writeBasicRetryStatus(status, metadata = {}, detail = "") {
+    const spreadsheetId = clean(metadata.sheet_spreadsheet_id);
+    const tabName = clean(metadata.sheet_tab_name);
+    const row = Number(metadata.sheet_row || 0);
+    if (!spreadsheetId || !tabName || row < 1) return { updated: 0 };
+    const value = clean(status).toUpperCase();
+    const headerRange = `${quoteTab(tabName)}!J1:J1`;
+    const rowRange = `${quoteTab(tabName)}!J${row}:J${row}`;
+    await request(spreadsheetId, "/values:batchUpdate", {
+      method: "POST",
+      body: {
+        valueInputOption: "RAW",
+        data: [
+          { range: headerRange, majorDimension: "ROWS", values: [["Retry Status"]] },
+          { range: rowRange, majorDimension: "ROWS", values: [[value]] }
+        ]
+      }
+    });
+    return { updated: 1, status: value, detail: clean(detail) };
+  }
+
   async function writeBasicSendResult(result, metadata = {}) {
     const spreadsheetId = clean(metadata.sheet_spreadsheet_id);
     const tabName = clean(metadata.sheet_tab_name);
@@ -385,6 +406,7 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     readRows,
     readBasicRows,
     writeBasicReachability,
+    writeBasicRetryStatus,
     writeBasicSendResult,
     writeRows,
     markBatchQueued,
