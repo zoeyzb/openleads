@@ -1403,6 +1403,22 @@ async function updateInboxMessageStatus(messageId, status, raw = null) {
   return next;
 }
 
+async function saveInboxContactProfile(phone, metadata = {}) {
+  const redis = await getAcquisitionRedis();
+  const normalized = normalizeInboxPhone(phone);
+  if (!normalized) return null;
+  const profile = {
+    phone: normalized,
+    business_name: String(metadata?.business_name || "").trim() || null,
+    campaign_id: String(metadata?.campaign_id || "").trim() || null,
+    sheet_row: metadata?.sheet_row ?? null,
+    link: String(metadata?.link || "").trim() || null,
+    updated_at: new Date().toISOString()
+  };
+  await redis.set(`recover:sms:inbox:contact:${normalized}`, JSON.stringify(profile), { EX: 2592000 });
+  return profile;
+}
+
 async function listInboxThreads(limit = 100) {
   const redis = await getAcquisitionRedis();
   const phones = await redis.zRange("recover:sms:inbox:threads", 0, Math.max(0, limit - 1), { REV: true });
@@ -1412,7 +1428,12 @@ async function listInboxThreads(limit = 100) {
     const ids = await redis.zRange(`recover:sms:inbox:thread:${phone}`, 0, 0, { REV: true });
     const latestRaw = ids[0] ? await redis.hGet(messagesHash, ids[0]) : null;
     const latest = latestRaw ? JSON.parse(latestRaw) : null;
-    out.push({ phone, latest });
+    let profile = null;
+    try {
+      const rawProfile = await redis.get(`recover:sms:inbox:contact:${phone}`);
+      profile = rawProfile ? JSON.parse(rawProfile) : null;
+    } catch {}
+    out.push({ phone, latest, profile });
   }
   return out;
 }
@@ -1426,7 +1447,12 @@ async function readInboxThread(phone, limit = 300) {
   const messages = values.map((raw) => {
     try { return raw ? JSON.parse(raw) : null; } catch { return null; }
   }).filter(Boolean);
-  return { phone: normalized, messages };
+  let profile = null;
+  try {
+    const rawProfile = await redis.get(`recover:sms:inbox:contact:${normalized}`);
+    profile = rawProfile ? JSON.parse(rawProfile) : null;
+  } catch {}
+  return { phone: normalized, profile, messages };
 }
 
 function telnyxWebhookTarget() {
@@ -1454,9 +1480,9 @@ function inboxAppHtml() {
   async function api(url,opts={}){const r=await fetch(url,{cache:"no-store",...opts,headers:{"content-type":"application/json",...(opts.headers||{})}});const j=await r.json().catch(()=>({}));if(r.status===401){location.href="/inbox";throw new Error("Session expired")}if(!r.ok)throw new Error(j.error||"Request failed");return j}
   function error(m){q("err").innerHTML=m?'<div class="error">'+esc(m)+'</div>':""}
   function filtered(){const s=q("search").value.toLowerCase().trim();return s?state.threads.filter(x=>JSON.stringify(x).toLowerCase().includes(s)):state.threads}
-  function render(){const rows=filtered();q("list").innerHTML=rows.length?rows.map(x=>'<div class="row '+(x.phone===state.selected?"active":"")+'" data-phone="'+esc(x.phone)+'"><div class="phone">'+esc(x.phone)+'</div><div class="preview">'+esc(x.latest?.text||"No preview")+'</div><div class="time">'+esc(fmt(x.latest?.at))+'</div></div>').join(""):'<div class="empty">No SMS conversations yet.</div>';document.querySelectorAll(".row").forEach(r=>r.onclick=()=>openThread(r.dataset.phone))}
+  function render(){const rows=filtered();q("list").innerHTML=rows.length?rows.map(x=>'<div class="row '+(x.phone===state.selected?"active":"")+'" data-phone="'+esc(x.phone)+'"><div class="phone">'+esc(x.profile?.business_name||x.phone)+'</div><div style="color:#68717d;font-size:11px">'+esc(x.profile?.business_name?x.phone:"")+'</div><div class="preview">'+esc(x.latest?.text||"No preview")+'</div><div class="time">'+esc(fmt(x.latest?.at))+'</div></div>').join(""):'<div class="empty">No SMS conversations yet.</div>';document.querySelectorAll(".row").forEach(r=>r.onclick=()=>openThread(r.dataset.phone))}
   async function load(){try{error("");const j=await api("/inbox/api/threads");state.threads=j.threads||[];render()}catch(e){error(e.message)}}
-  async function openThread(phone){state.selected=phone;render();app.classList.add("open");q("threadPhone").textContent=phone;q("messages").innerHTML='<div class="empty">Loading…</div>';try{const j=await api("/inbox/api/thread?phone="+encodeURIComponent(phone));q("messages").innerHTML=(j.messages||[]).map(m=>'<div class="bubble '+(m.direction==="outbound"?"out":"in")+'">'+esc(m.text||"")+'<div class="meta">'+esc(fmt(m.at))+' · '+esc(m.status||"")+'</div></div>').join("")||'<div class="empty">No messages yet.</div>';q("messages").scrollTop=q("messages").scrollHeight;q("reply").disabled=false;q("send").disabled=false}catch(e){error(e.message)}}
+  async function openThread(phone){state.selected=phone;render();app.classList.add("open");const selected=state.threads.find(x=>x.phone===phone);q("threadPhone").textContent=selected?.profile?.business_name||phone;q("messages").innerHTML='<div class="empty">Loading…</div>';try{const j=await api("/inbox/api/thread?phone="+encodeURIComponent(phone));q("messages").innerHTML=(j.messages||[]).map(m=>'<div class="bubble '+(m.direction==="outbound"?"out":"in")+'">'+esc(m.text||"")+'<div class="meta">'+esc(fmt(m.at))+' · '+esc(m.status||"")+'</div></div>').join("")||'<div class="empty">No messages yet.</div>';q("messages").scrollTop=q("messages").scrollHeight;q("reply").disabled=false;q("send").disabled=false}catch(e){error(e.message)}}
   q("composer").onsubmit=async e=>{e.preventDefault();const text=q("reply").value.trim();if(!text||!state.selected)return;q("send").disabled=true;try{await api("/inbox/api/reply",{method:"POST",body:JSON.stringify({phone:state.selected,text})});q("reply").value="";await openThread(state.selected);await load()}catch(e){error(e.message)}finally{q("send").disabled=false}};
   q("search").oninput=render;q("refresh").onclick=load;q("back").onclick=()=>app.classList.remove("open");setInterval(load,15000);load();
   </script></body></html>`;
@@ -1827,6 +1853,9 @@ async function startSmsWorker() {
               ? compactBulkSms(recipient.messages[j], recipient.metadata || {})
               : gsm7Safe(recipient.messages[j]);
             const response = await telnyxSendMessage(recipient.phone, outboundText);
+            await saveInboxContactProfile(recipient.phone, recipient.metadata || {}).catch(error =>
+              console.error("Inbox contact profile persistence error", error?.message || error)
+            );
             const result = {
               batch_id:batchId,
               index:i,
@@ -1957,6 +1986,30 @@ const httpServer = createHttpServer((req, res) => {
   }
 
 
+
+  if (requestUrl.pathname === "/inbox/status" && req.method === "GET") {
+    void (async () => {
+      const redis = await getAcquisitionRedis();
+      const threadCount = await redis.zCard("recover:sms:inbox:threads");
+      const messageCount = await redis.hLen("recover:sms:inbox:messages");
+      const suppressedCount = await redis.sCard("recover:sms:suppressed");
+      res.writeHead(200, {"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({
+        ok:true,
+        service:"recover-scrape-mcp",
+        inbox_configured:Boolean(INBOX_ACCESS_PASSWORD && MCP_AUTH_TOKEN),
+        telnyx_configured:Boolean(TELNYX_API_KEY && TELNYX_FROM_NUMBER),
+        webhook_target_configured:Boolean(telnyxWebhookTarget()),
+        threads:threadCount,
+        messages:messageCount,
+        suppressed:suppressedCount
+      }));
+    })().catch(error => {
+      res.writeHead(500, {"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({ok:false,error:error?.message||"inbox_status_failed"}));
+    });
+    return;
+  }
 
   if (requestUrl.pathname === "/inbox" && req.method === "GET") {
     res.writeHead(200, {"content-type":"text/html; charset=utf-8","cache-control":"no-store","x-frame-options":"DENY"});
