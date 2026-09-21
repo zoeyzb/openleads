@@ -49,6 +49,9 @@ const GOOGLE_SHEETS_SYNC_ENABLED = String(process.env.GOOGLE_SHEETS_SYNC_ENABLED
 const GOOGLE_SHEETS_SYNC_INTERVAL_MS = Math.max(30000, Number(process.env.GOOGLE_SHEETS_SYNC_INTERVAL_MS || 60000));
 const GOOGLE_SHEETS_TAB_CAPACITY = Math.max(1, Number(process.env.GOOGLE_SHEETS_TAB_CAPACITY || 50000));
 const SMS_SHEET_BRIDGE = createSmsSheetBridge({ serviceAccountJson: GOOGLE_SERVICE_ACCOUNT_JSON, targetsJson: GOOGLE_SHEETS_TARGETS_JSON });
+if (SMS_SHEET_BRIDGE.writer_email) {
+  console.log("SMS sheet writer email", SMS_SHEET_BRIDGE.writer_email);
+}
 let acquisitionRedisPromise = null;
 
 const oauthEnabled = Boolean(OAUTH_ISSUER && OAUTH_CLIENT_ID && OAUTH_CLIENT_SECRET && OAUTH_SIGNING_SECRET && OAUTH_ACCESS_KEY);
