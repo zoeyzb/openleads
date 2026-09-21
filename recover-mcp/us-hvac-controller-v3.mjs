@@ -213,16 +213,22 @@ async function chooseLatePassServiceFamily(area={},pass=5){
 
     const usedKey=cityFamilyReservationKey(area,pass);
     const used=new Set((await redis.sMembers(usedKey)).map(x=>String(x||"").trim().toLowerCase()));
-    const minAreaAttempts=Math.min(...ranked.map(x=>x.areaAttempts));
-    let cityEligible=ranked.filter(x=>x.areaAttempts===minAreaAttempts&&!used.has(String(x.family||"").trim().toLowerCase()));
-    if(!cityEligible.length) cityEligible=ranked.filter(x=>!used.has(String(x.family||"").trim().toLowerCase()));
-    if(!cityEligible.length) cityEligible=ranked;
+    const pass9Suppressed=(x)=>pass>=9 && x.recentAttempts>=3 && (
+      x.recentAvg<0.15 ||
+      (x.recentDupRate>=0.95 && x.recentAvg<0.4)
+    );
+    const viable=ranked.filter(x=>!pass9Suppressed(x));
+    const rankedPool=viable.length>=6?viable:ranked;
+    const minAreaAttempts=Math.min(...rankedPool.map(x=>x.areaAttempts));
+    let cityEligible=rankedPool.filter(x=>x.areaAttempts===minAreaAttempts&&!used.has(String(x.family||"").trim().toLowerCase()));
+    if(!cityEligible.length) cityEligible=rankedPool.filter(x=>!used.has(String(x.family||"").trim().toLowerCase()));
+    if(!cityEligible.length) cityEligible=rankedPool;
     const exploit=[...cityEligible].sort((a,b)=>b.utility-a.utility||b.avgNew-a.avgNew||a.attempts-b.attempts);
     const explore=[...cityEligible].sort((a,b)=>a.attempts-b.attempts||a.dupRate-b.dupRate||b.avgNew-a.avgNew);
 
     let hash=0;
     for(const ch of `${state}|${city}|${String(area.partition_zip||area.zip||"")}|p${pass}`) hash=(hash*31+ch.charCodeAt(0))>>>0;
-    const exploration=(hash%100)<28;
+    const exploration=(hash%100)<(pass>=9?10:28);
     let pick;
     if(exploration){
       const pool=explore.slice(0,Math.min(8,explore.length));
@@ -244,7 +250,8 @@ async function chooseLatePassServiceFamily(area={},pass=5){
         areaAttempts:pick.areaAttempts,globalAttempts:pick.attempts,
         globalAvgNew:Number(pick.avgNew.toFixed(3)),globalDupRate:Number(pick.dupRate.toFixed(3)),
         recentAttempts:pick.recentAttempts,recentAvgNew:Number(pick.recentAvg.toFixed(3)),
-        recentDupRate:Number(pick.recentDupRate.toFixed(3))
+        recentDupRate:Number(pick.recentDupRate.toFixed(3)),
+        pass9SuppressedFamilies:pass>=9?ranked.filter(pass9Suppressed).map(x=>x.family):[]
       }));
       return pick.family;
     }
