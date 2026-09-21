@@ -2976,7 +2976,7 @@ setTimeout(() => {
 }, 9000);
 
 setTimeout(() => {
-  void logInboxDeliveryFailureDiagnostics({ limit: 100 })
+  void logInboxDeliveryFailureDiagnostics({ limit: 20 })
     .then(result => console.log("Recover inbox failure diagnostics complete", result))
     .catch(error => console.error("Recover inbox failure diagnostics error", error?.message || error));
 }, 12000);
