@@ -1581,6 +1581,28 @@ async function queueCarrierRegistrationRetry({ messageId = "", message = null, e
   return { queued:true, sheet_row:item.sheet_row || null };
 }
 
+async function syncCarrierRetryQueueToSheet() {
+  if (!SMS_BULK_SPREADSHEET_ID || !SMS_BULK_TAB_NAME) return { configured:false, queued:0, marked:0 };
+  const redis = await getAcquisitionRedis();
+  const values = await redis.hVals("recover:sms:retry:40010");
+  const rows = [];
+  for (const raw of values || []) {
+    try {
+      const item = JSON.parse(raw);
+      const row = Number(item?.sheet_row || 0);
+      if (row > 0) rows.push(row);
+    } catch {}
+  }
+  if (!rows.length) return { configured:true, queued:0, marked:0 };
+  const result = await SMS_SHEET_BRIDGE.writeBasicRetryStatuses({
+    spreadsheetId:SMS_BULK_SPREADSHEET_ID,
+    tabName:SMS_BULK_TAB_NAME,
+    rows,
+    status:"RETRY_40010"
+  });
+  return { configured:true, queued:values.length, marked:result?.updated || 0 };
+}
+
 async function backfillCarrierRegistrationRetries({ limit = 5000 } = {}) {
   const redis = await getAcquisitionRedis();
   const all = await redis.hGetAll("recover:sms:inbox:messages");
@@ -2914,6 +2936,12 @@ setTimeout(() => {
     .then(result => console.log("Recover ambiguous lookup suppression reconciliation complete", result))
     .catch(error => console.error("Recover ambiguous lookup suppression reconciliation error", error?.message || error));
 }, 11000);
+
+setTimeout(() => {
+  void syncCarrierRetryQueueToSheet()
+    .then(result => console.log("Recover retry sheet sync complete", result))
+    .catch(error => console.error("Recover retry sheet sync error", error?.message || error));
+}, 6500);
 
 setTimeout(() => {
   void backfillSmsSender10dlcBlock({ limit: 5000 })
