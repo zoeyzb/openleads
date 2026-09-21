@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import * as smsDeliveryGuard from "./sms-delivery-guard.mjs";
 import {
   bulkSmsBlockReason,
   isCarrierRegistrationError,
@@ -26,4 +27,15 @@ test("ambiguous lookup failures remain CHECK instead of being mislabeled SKIP", 
   assert.equal(reachabilityForLookupDecision("CHECK"), "CHECK");
   assert.equal(reachabilityForLookupDecision("SKIP"), "SKIP");
   assert.equal(reachabilityForLookupDecision("SEND"), "SEND");
+});
+
+test("direct Sheet campaigns do not post results to the Revenue callback", () => {
+  assert.equal(
+    smsDeliveryGuard.shouldPostSmsResultCallback?.({ campaign_id: "4k-sms-f" }),
+    false,
+  );
+});
+
+test("Revenue-created batches keep posting results to the Revenue callback", () => {
+  assert.equal(smsDeliveryGuard.shouldPostSmsResultCallback?.({}), true);
 });
