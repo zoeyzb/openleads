@@ -239,7 +239,27 @@ async function chooseLatePassServiceFamily(area={},pass=5){
   }catch(error){console.warn("adaptive family pick failed",error?.message||error);}
   return fallback;
 }
-const areas=await fetchZipAreas(); const scopeSet=campaignLeadSetKey(profileJob); await normalizeSocialOnlyLeadstore(redis); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
+const areas=await fetchZipAreas();
+const cityCellAreas=new Map();
+for(const area of areas){
+  const key=`${String(area.partition_state||area.state||"").toLowerCase()}|${String(area.partition_city||area.city||"").toLowerCase()}`;
+  if(!key||key==="|") continue;
+  if(!cityCellAreas.has(key)) cityCellAreas.set(key,[]);
+  cityCellAreas.get(key).push(area);
+}
+for(const [key,items] of cityCellAreas){
+  items.sort((a,b)=>Number(b.population||0)-Number(a.population||0)||String(a.zip||"").localeCompare(String(b.zip||"")));
+  cityCellAreas.set(key,items.slice(0,3));
+}
+function geoCellCandidatesForArea(area={},pass=1){
+  const population=Number(area.population||0);
+  if(pass<8||population<10000) return [area];
+  const key=`${String(area.partition_state||area.state||"").toLowerCase()}|${String(area.partition_city||area.city||"").toLowerCase()}`;
+  const items=cityCellAreas.get(key)||[area];
+  const cap=population>=25000?3:2;
+  return items.slice(0,cap);
+}
+const scopeSet=campaignLeadSetKey(profileJob); await normalizeSocialOnlyLeadstore(redis); await bootstrapScopedLeads(redis,scopeSet); await bootstrapNyScope(redis);
 let cursor=Number(await redis.hGet(CONTROLLER_KEY,"cursor")||0); let coveragePass=Math.max(1,Number(await redis.hGet(CONTROLLER_KEY,"coverage_pass")||1));
 const geoMultiCellResetDone=String(await redis.hGet(CONTROLLER_KEY,"geo_multi_cell_v1")||"")==="1";
 if(TARGET_TOTAL>=1000000&&coveragePass>=8&&!geoMultiCellResetDone){
@@ -482,7 +502,17 @@ while(true){
     if(cursor>=areas.length&&scoped<TARGET_TOTAL){coveragePass++;cursor=0;await redis.hSet(CONTROLLER_KEY,{cursor:"0",coverage_pass:String(coveragePass)});console.log(JSON.stringify({event:"coverage_pass_advanced",coveragePass,scoped,area_count:areas.length}));}
     if(queue>=QUEUE_LOW_WATER){console.log(JSON.stringify({event:"backpressure",scoped,queue,cursor,queueHighWater:QUEUE_HIGH_WATER,queueLowWater:QUEUE_LOW_WATER}));await new Promise(r=>setTimeout(r,LOOP_MS));continue;}
     const refillLimit=Math.min(SEED_BATCH_SIZE,Math.max(0,QUEUE_HIGH_WATER-queue));
-    let seeded=0,checked=0;while(seeded<refillLimit&&cursor<areas.length&&queue+seeded<QUEUE_HIGH_WATER){const area=areas[cursor++];checked++;if(await seedOne(area))seeded++;await redis.hSet(CONTROLLER_KEY,"cursor",String(cursor));}
+    let seeded=0,checked=0;
+    while(seeded<refillLimit&&cursor<areas.length&&queue+seeded<QUEUE_HIGH_WATER){
+      const area=areas[cursor++];
+      checked++;
+      const candidates=geoCellCandidatesForArea(area,coveragePass);
+      for(const candidate of candidates){
+        if(seeded>=refillLimit||queue+seeded>=QUEUE_HIGH_WATER) break;
+        if(await seedOne(candidate)) seeded++;
+      }
+      await redis.hSet(CONTROLLER_KEY,"cursor",String(cursor));
+    }
     console.log(JSON.stringify({event:"seed_cycle",scoped,queue_before:queue,checked,seeded,cursor,coveragePass,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,shardCount:SHARD_COUNT,partition_state:String(areas[Math.max(0,cursor-1)]?.partition_state||""),partition_city:String(areas[Math.max(0,cursor-1)]?.partition_city||""),area_count:areas.length}));
     if(cursor>=areas.length)console.log(JSON.stringify({event:"coverage_pass_complete",scoped,cursor,coveragePass,area_count:areas.length}));
   }catch(error){console.error("Controller loop error",error);}
