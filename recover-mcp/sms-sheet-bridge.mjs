@@ -244,9 +244,11 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     const cols = await resolveBasicStatusColumns(spreadsheetId, tabName);
     const status = result.status === "accepted"
       ? "Sent"
-      : result.status === "skipped_suppressed"
-        ? "Blocked - Suppressed"
-        : "Failed";
+      : result.status === "blocked_not_routable"
+        ? "Blocked - Not Routable"
+        : result.status === "skipped_suppressed"
+          ? "Blocked - Suppressed"
+          : "Failed";
     const headerRange = `${quoteTab(tabName)}!${cols.status}1:${cols.updated}1`;
     const rowRange = `${quoteTab(tabName)}!${cols.status}${row}:${cols.updated}${row}`;
     await request(spreadsheetId, "/values:batchUpdate", {
