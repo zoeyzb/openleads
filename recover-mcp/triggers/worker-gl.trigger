@@ -18,3 +18,4 @@ rollout 1m-yield-fix 2026-09-20T02:15Z
 rollout service-family-slices 2026-09-20T03:45Z
 geo-cell-canary 2026-09-21T01:18Z
 geo-cell-depth10 2026-09-21T01:23Z
+fast-geo-canary-h 2026-09-21T01:26Z
