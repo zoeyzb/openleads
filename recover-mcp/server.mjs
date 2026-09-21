@@ -13,6 +13,7 @@ import {
   bulkSmsBlockReason,
   isCarrierRegistrationError,
   reachabilityForLookupDecision,
+  shouldPostSmsResultCallback,
 } from "./sms-delivery-guard.mjs";
 // Lead-sheet template rows 1-6 are reserved for title, KPIs, and headers.
 
@@ -2301,7 +2302,9 @@ async function startSmsWorker() {
             at:new Date().toISOString()
           };
           await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
-          await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
+          if (shouldPostSmsResultCallback(recipient?.metadata)) {
+            await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
+          }
           if (recipient?.metadata?.campaign_id) {
             await SMS_SHEET_BRIDGE.writeBasicSendResult(result, recipient.metadata || {}).catch(error => console.error("SMS basic sheet suppression writeback error", error.message));
           } else {
@@ -2440,7 +2443,9 @@ async function startSmsWorker() {
               at: result.at
             }), { EX: 2592000 });
             await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
+            if (shouldPostSmsResultCallback(recipient?.metadata)) {
             await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
+          }
             if (recipient?.metadata?.campaign_id) {
               await SMS_SHEET_BRIDGE.writeBasicSendResult(result, recipient.metadata || {}).catch(error => console.error("SMS basic sheet send writeback error", error.message));
             } else {
@@ -2472,7 +2477,9 @@ async function startSmsWorker() {
               at: result.at
             }), { EX: 2592000 });
             await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
-            await postSmsResultCallback(result).catch(callbackError => console.error("SMS callback error", callbackError.message));
+            if (shouldPostSmsResultCallback(recipient?.metadata)) {
+              await postSmsResultCallback(result).catch(callbackError => console.error("SMS callback error", callbackError.message));
+            }
             if (recipient?.metadata?.campaign_id) {
               await SMS_SHEET_BRIDGE.writeBasicSendResult(result, recipient.metadata || {}).catch(sheetError => console.error("SMS basic sheet failure writeback error", sheetError.message));
             } else {
