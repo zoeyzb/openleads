@@ -245,7 +245,7 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     const status = result.status === "accepted"
       ? "Sent"
       : result.status === "blocked_not_routable"
-        ? "Blocked - Not Routable"
+        ? "Not Available"
         : result.status === "skipped_suppressed"
           ? "Blocked - Suppressed"
           : "Failed";
