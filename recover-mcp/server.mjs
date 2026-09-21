@@ -1403,6 +1403,41 @@ async function updateInboxMessageStatus(messageId, status, raw = null) {
   return next;
 }
 
+async function logInboxDeliveryFailureDiagnostics({ limit = 50 } = {}) {
+  const redis = await getAcquisitionRedis();
+  const all = await redis.hGetAll("recover:sms:inbox:messages");
+  let failures = 0;
+  for (const [id, raw] of Object.entries(all || {})) {
+    if (failures >= limit) break;
+    let msg;
+    try { msg = JSON.parse(raw); } catch { continue; }
+    const status = String(msg?.status || "").toLowerCase();
+    if (!/(fail|reject|undeliver|expired|blocked)/.test(status)) continue;
+    const payload = msg?.raw?.data?.payload || msg?.raw?.payload || msg?.raw || {};
+    const to = Array.isArray(payload?.to) ? payload.to[0] || {} : {};
+    const errors = Array.isArray(payload?.errors) ? payload.errors : [];
+    const profileRaw = await redis.get(`recover:sms:inbox:contact:${msg.phone}`).catch(() => null);
+    let profile = null;
+    try { profile = profileRaw ? JSON.parse(profileRaw) : null; } catch {}
+    console.log("SMS delivery failure diagnostic", {
+      messageId: id,
+      sheetRow: profile?.sheet_row || null,
+      businessName: profile?.business_name || null,
+      phoneHint: msg?.phone ? `••••${String(msg.phone).slice(-4)}` : null,
+      status: msg?.status || null,
+      toStatus: to?.status || null,
+      errors: errors.map(e => ({
+        code: e?.code || null,
+        title: e?.title || null,
+        detail: e?.detail || null
+      })),
+      textStartsWithHttps: /^https:\/\//i.test(String(msg?.text || "").trim())
+    });
+    failures++;
+  }
+  return { failures_logged: failures };
+}
+
 async function saveInboxContactProfile(phone, metadata = {}) {
   const redis = await getAcquisitionRedis();
   const normalized = normalizeInboxPhone(phone);
@@ -2033,6 +2068,12 @@ setTimeout(() => {
     .catch(error => console.error("Recover inbox history backfill error", error?.message || error));
 }, 5000);
 setTimeout(() => {
+  void logInboxDeliveryFailureDiagnostics({ limit: 100 })
+    .then(result => console.log("Recover inbox failure diagnostics complete", result))
+    .catch(error => console.error("Recover inbox failure diagnostics error", error?.message || error));
+}, 12000);
+
+setTimeout(() => {
   void repairBackfilledInboxBodiesFromTelnyx({ limit: 500 })
     .then(result => console.log("Recover inbox Telnyx body repair complete", result))
     .catch(error => console.error("Recover inbox Telnyx body repair error", error?.message || error));
@@ -2201,6 +2242,15 @@ const httpServer = createHttpServer((req, res) => {
       } else if(messageId && /^message\./.test(type)) {
         const status=String(payload?.to?.[0]?.status||payload?.status||type.replace(/^message\./,""));
         await updateInboxMessageStatus(messageId,status,event);
+        if (/(fail|reject|undeliver|expired|blocked)/i.test(status)) {
+          const errors = Array.isArray(payload?.errors) ? payload.errors : [];
+          console.log("SMS delivery failure webhook", {
+            messageId,
+            status,
+            toStatus: payload?.to?.[0]?.status || null,
+            errors: errors.map(e => ({ code:e?.code||null, title:e?.title||null, detail:e?.detail||null }))
+          });
+        }
       }
       res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({ok:true}));
     })().catch(error=>{console.error("Telnyx inbox webhook error",error);if(!res.headersSent){res.writeHead(422,{"content-type":"application/json"});res.end(JSON.stringify({error:error?.message||"webhook_failed"}));}});
