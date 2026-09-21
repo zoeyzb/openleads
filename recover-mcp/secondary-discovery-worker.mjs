@@ -104,6 +104,26 @@ async function fetchJson(url,init={},timeout=90000){
     return body;
   }finally{clearTimeout(timer);}
 }
+async function scrapeDirectoryProfiles(results=[]){
+  const chosen=(results||[]).slice(0,SEARCH_LIMIT);
+  if(!chosen.length) return [];
+  const create=await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/pages`,{
+    method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({pages:chosen.map(r=>({url:r.url,proxy_type:"none",raw_html:true,formats:["markdown"],timeout_ms:30000}))})
+  },30000);
+  const jobId=String(create?.job_id||"");
+  if(!jobId) return chosen;
+  const deadline=Date.now()+70000;
+  let snap=null;
+  while(Date.now()<deadline){
+    snap=await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/${encodeURIComponent(jobId)}/results`,{},30000);
+    if(Number(snap?.done||0)>=Number(snap?.total||chosen.length)||["completed","failed","cancelled","canceled"].includes(String(snap?.status||"").toLowerCase())) break;
+    await sleep(1200);
+  }
+  const scraped=Array.isArray(snap?.results)?snap.results:[];
+  return chosen.map((r,i)=>({...r,scrape:scraped[i]||null}));
+}
+
 function parseCsv(text){
   const rows=[];let row=[],field="",quoted=false;
   for(let i=0;i<text.length;i++){const ch=text[i];
@@ -175,10 +195,14 @@ while(true){
       query=candidateQuery;
       body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{
         method:"POST",headers:{"content-type":"application/json"},
-        body:JSON.stringify({query,engine:"bing",locale:"us",limit:SEARCH_LIMIT,scrape:true,scrape_options:{raw_html:true,formats:["markdown"],proxy_type:"none"},proxy_type:"none",max_retries:2})
+        body:JSON.stringify({query,engine:"bing",locale:"us",limit:SEARCH_LIMIT,scrape:false,proxy_type:"none",max_retries:2})
       },120000);
       const directoryResults=(body.results||[]).filter(result=>isDirectoryUrl(result?.url)&&hostOf(result.url).includes(domain.replace(/^www\./,"")));
-      if(directoryResults.length){body={...body,results:directoryResults,count:directoryResults.length};break;}
+      if(directoryResults.length){
+        const scrapedResults=await scrapeDirectoryProfiles(directoryResults);
+        body={...body,results:scrapedResults,count:scrapedResults.length};
+        break;
+      }
       body={...body,results:[],count:0};
     }
     let added=0,rejected={};
