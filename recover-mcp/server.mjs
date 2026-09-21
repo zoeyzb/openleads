@@ -41,6 +41,7 @@ const SMS_BULK_START_ROW = Math.max(1, Number(process.env.SMS_BULK_START_ROW || 
 const SMS_BULK_END_ROW = Math.max(1, Number(process.env.SMS_BULK_END_ROW || 0));
 const SMS_BULK_USER_CONFIRMED_CONSENT = String(process.env.SMS_BULK_USER_CONFIRMED_CONSENT || "").toLowerCase() === "true";
 const SMS_BULK_AUTOSTART = String(process.env.SMS_BULK_AUTOSTART || "").toLowerCase() === "true";
+const SMS_BULK_PAUSED = String(process.env.SMS_BULK_PAUSED || "").toLowerCase() === "true";
 const RECOVER_REVENUE_SMS_CALLBACK_URL = (process.env.RECOVER_REVENUE_SMS_CALLBACK_URL || "").replace(/\/$/, "");
 const RECOVER_REVENUE_SMS_CALLBACK_SECRET = process.env.RECOVER_REVENUE_SMS_CALLBACK_SECRET || "";
 const GOOGLE_SERVICE_ACCOUNT_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
@@ -1607,7 +1608,54 @@ async function startSmsWorker() {
           continue;
         }
 
+        if (recipient?.metadata?.campaign_id && SMS_BULK_PAUSED) {
+          batch.status = "paused";
+          batch.updated_at = new Date().toISOString();
+          await save();
+          console.log("Bulk SMS campaign paused", { batchId, processedCount: batch.processed_count || 0 });
+          break;
+        }
+
         for (let j = 0; j < recipient.messages.length; j++) {
+          const sendAttemptKey = `recover:sms:send-attempt:${batchId}:${i}:${j}`;
+          const priorRaw = await redis.get(sendAttemptKey);
+          if (priorRaw) {
+            let prior = {};
+            try { prior = JSON.parse(priorRaw); } catch {}
+            console.log("SMS duplicate prevented", {
+              batchId,
+              sheetRow: recipient?.metadata?.sheet_row || null,
+              phoneHint: `••••${recipient.phone.slice(-4)}`,
+              priorStatus: prior.status || "attempted",
+              providerMessageId: prior.provider_message_id || null
+            });
+            if (prior.status === "accepted") {
+              const replayResult = {
+                batch_id: batchId,
+                index: i,
+                message_index: j,
+                phone: recipient.phone,
+                contact_id: recipient.contact_id || "",
+                status: "accepted",
+                telnyx_message_id: prior.provider_message_id || null,
+                at: prior.at || new Date().toISOString()
+              };
+              if (recipient?.metadata?.campaign_id) {
+                await SMS_SHEET_BRIDGE.writeBasicSendResult(replayResult, recipient.metadata || {}).catch(error => console.error("SMS basic sheet replay writeback error", error.message));
+              }
+            }
+            continue;
+          }
+
+          const attempt = {
+            status: "attempting",
+            sheet_row: recipient?.metadata?.sheet_row || null,
+            phone_hint: `••••${recipient.phone.slice(-4)}`,
+            at: new Date().toISOString()
+          };
+          const claimed = await redis.set(sendAttemptKey, JSON.stringify(attempt), { NX: true, EX: 2592000 });
+          if (!claimed) continue;
+
           try {
             const outboundText = recipient?.metadata?.campaign_id
               ? compactBulkSms(recipient.messages[j], recipient.metadata || {})
@@ -1623,6 +1671,11 @@ async function startSmsWorker() {
               telnyx_message_id:response?.data?.id || null,
               at:new Date().toISOString()
             };
+            await redis.set(sendAttemptKey, JSON.stringify({
+              status: "accepted",
+              provider_message_id: result.telnyx_message_id,
+              at: result.at
+            }), { EX: 2592000 });
             await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
             await postSmsResultCallback(result).catch(error => console.error("SMS callback error", error.message));
             if (recipient?.metadata?.campaign_id) {
@@ -1650,6 +1703,11 @@ async function startSmsWorker() {
               error:error?.message || "send_failed",
               at:new Date().toISOString()
             };
+            await redis.set(sendAttemptKey, JSON.stringify({
+              status: "failed",
+              error: result.error,
+              at: result.at
+            }), { EX: 2592000 });
             await redis.rPush(`recover:sms:batch:${batchId}:results`, JSON.stringify(result));
             await postSmsResultCallback(result).catch(callbackError => console.error("SMS callback error", callbackError.message));
             if (recipient?.metadata?.campaign_id) {
@@ -1670,6 +1728,8 @@ async function startSmsWorker() {
         batch.updated_at = new Date().toISOString();
         await save();
       }
+
+      if (batch.status === "paused") continue;
 
       batch.status = batch.failed_count > 0 ? "completed_with_errors" : "completed";
       batch.completed_at = new Date().toISOString();
