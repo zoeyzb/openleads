@@ -45,7 +45,7 @@ function minPopulationForCoveragePass(pass){
   return 0;
 }
 
-const profileJob={industry:"HVAC",require_no_website:true,require_contact:true,require_phone:false,require_email:false,include_no_website:true,min_score:30};
+const profileJob={industry:"HVAC",require_no_website:true,require_contact:true,require_phone:true,require_email:false,include_no_website:true,min_score:30};
 
 function isNyLocation(value=""){return /\bny\b|new york/i.test(String(value||""));}
 
@@ -107,7 +107,9 @@ async function bootstrapScopedLeads(redis,scopeSet){
   for(const [identity,raw] of Object.entries(all)){
     let lead; try{lead=JSON.parse(raw)}catch{continue}
     if(String(lead.website||"").trim()) continue;
-    if(!String(lead.phone||"").trim()&&!emailList(lead.emails||lead.email||"").length) continue;
+    if(profileJob.require_phone&&!String(lead.phone||"").trim()) continue;
+    if(profileJob.require_email&&!emailList(lead.emails||lead.email||"").length) continue;
+    if(profileJob.require_contact&&!String(lead.phone||"").trim()&&!emailList(lead.emails||lead.email||"").length) continue;
     if(!isCoreHomeServiceLead(lead)) continue;
     ids.push(identity);
   }
