@@ -1592,7 +1592,7 @@ async function backfillCarrierRegistrationRetries({ limit = 5000 } = {}) {
     try { msg = JSON.parse(raw); } catch { continue; }
     if (msg?.direction !== "outbound") continue;
     scanned++;
-    const result = await queueCarrierRegistrationRetry({ messageId:id, message:msg });
+    const result = await queueCarrierRegistrationRetry({ messageId:id, message:msg, writeSheet:false });
     if (result?.queued) queued++;
   }
   return { scanned, queued };
@@ -1846,7 +1846,7 @@ async function backfillNonRoutableSmsSuppressions({ limit = 5000 } = {}) {
     try { msg = JSON.parse(raw); } catch { continue; }
     if (msg?.direction !== "outbound") continue;
     scanned++;
-    const result = await quarantineNonRoutableSms({ messageId:id, message:msg, quiet:true });
+    const result = await quarantineNonRoutableSms({ messageId:id, message:msg, quiet:true, writeSheet:false });
     if (result?.quarantined) quarantined++;
   }
   return { scanned, quarantined };
