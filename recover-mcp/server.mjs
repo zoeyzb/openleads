@@ -9,6 +9,11 @@ import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
 import { startQualifiedGoogleSheetSync } from "./google-sheet-direct-sync.mjs";
 import { createSmsSheetBridge } from "./sms-sheet-bridge.mjs";
+import {
+  bulkSmsBlockReason,
+  isCarrierRegistrationError,
+  reachabilityForLookupDecision,
+} from "./sms-delivery-guard.mjs";
 // Lead-sheet template rows 1-6 are reserved for title, KPIs, and headers.
 
 const PORT = Number(process.env.PORT || 3000);
@@ -45,6 +50,7 @@ const SMS_BULK_END_ROW = Math.max(1, Number(process.env.SMS_BULK_END_ROW || 0));
 const SMS_BULK_USER_CONFIRMED_CONSENT = String(process.env.SMS_BULK_USER_CONFIRMED_CONSENT || "").toLowerCase() === "true";
 const SMS_BULK_AUTOSTART = String(process.env.SMS_BULK_AUTOSTART || "").toLowerCase() === "true";
 const SMS_BULK_PAUSED = String(process.env.SMS_BULK_PAUSED || "").toLowerCase() === "true";
+const SMS_10DLC_APPROVED = String(process.env.SMS_10DLC_APPROVED || "").toLowerCase() === "true";
 const RECOVER_REVENUE_SMS_CALLBACK_URL = (process.env.RECOVER_REVENUE_SMS_CALLBACK_URL || "").replace(/\/$/, "");
 const RECOVER_REVENUE_SMS_CALLBACK_SECRET = process.env.RECOVER_REVENUE_SMS_CALLBACK_SECRET || "";
 const GOOGLE_SERVICE_ACCOUNT_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
@@ -1526,7 +1532,7 @@ async function blockSmsSenderFor10dlc({ messageId = "", event = null } = {}) {
   const payload = event?.data?.payload || event?.payload || {};
   const errors = Array.isArray(payload?.errors) ? payload.errors : [];
   const codes = errors.map(e => String(e?.code || ""));
-  if (!codes.includes("40010")) return { blocked:false, reason:"not_40010" };
+  if (!isCarrierRegistrationError(codes)) return { blocked:false, reason:"not_40010" };
 
   const value = {
     reason:"telnyx_10dlc_not_registered_40010",
@@ -1551,7 +1557,7 @@ async function backfillSmsSender10dlcBlock({ limit = 5000 } = {}) {
     const payload = msg?.raw?.data?.payload || msg?.raw?.payload || msg?.raw || {};
     const errors = Array.isArray(payload?.errors) ? payload.errors : [];
     const codes = errors.map(e => String(e?.code || ""));
-    if (codes.includes("40010")) {
+    if (isCarrierRegistrationError(codes)) {
       const value = {
         reason:"telnyx_10dlc_not_registered_40010",
         message_id:String(id || ""),
@@ -2117,6 +2123,8 @@ async function sendOneTimeSmsProbe() {
 
 async function startConfiguredBulkSmsCampaign() {
   if (!SMS_BULK_AUTOSTART || !SMS_BULK_CAMPAIGN_ID) return { configured: false };
+  if (SMS_BULK_PAUSED) return { configured:true, queued:false, paused:true, reason:"configured_pause" };
+  if (!SMS_10DLC_APPROVED) return { configured:true, queued:false, paused:true, reason:"10dlc_not_approved" };
   if (!SMS_BULK_USER_CONFIRMED_CONSENT) throw new Error("SMS_BULK_USER_CONFIRMED_CONSENT must be true");
   if (!SMS_BULK_SPREADSHEET_ID || !SMS_BULK_TAB_NAME) throw new Error("Bulk SMS spreadsheet configuration is incomplete");
   if (!SMS_BULK_START_ROW || !SMS_BULK_END_ROW || SMS_BULK_END_ROW < SMS_BULK_START_ROW)
@@ -2254,6 +2262,29 @@ async function startSmsWorker() {
       for (let i = batch.processed_count; i < recipients.length; i++) {
         const recipient = recipients[i];
 
+        if (recipient?.metadata?.campaign_id) {
+          const senderBlockRaw = await redis.get("recover:sms:sender-block:40010");
+          const blockReason = bulkSmsBlockReason({
+            configuredPause: SMS_BULK_PAUSED,
+            registrationApproved: SMS_10DLC_APPROVED,
+            carrierBlocked: Boolean(senderBlockRaw),
+          });
+          if (blockReason) {
+            batch.status = "paused";
+            batch.updated_at = new Date().toISOString();
+            batch.pause_reason = blockReason;
+            await save();
+            await SMS_SHEET_BRIDGE.writeBasicReachability("CHECK", recipient.metadata || {}, blockReason)
+              .catch(error => console.error("SMS sender-block sheet writeback error", error.message));
+            console.error("Bulk SMS halted by sender safety gate", {
+              batchId,
+              sheetRow:recipient?.metadata?.sheet_row || null,
+              reason:blockReason,
+            });
+            break;
+          }
+        }
+
         const suppressed = await redis.sIsMember("recover:sms:suppressed", recipient.phone);
         if (suppressed) {
           if (recipient?.metadata?.campaign_id) {
@@ -2280,21 +2311,13 @@ async function startSmsWorker() {
           continue;
         }
 
-        if (recipient?.metadata?.campaign_id && SMS_BULK_PAUSED) {
-          batch.status = "paused";
-          batch.updated_at = new Date().toISOString();
-          await save();
-          console.log("Bulk SMS campaign paused", { batchId, processedCount: batch.processed_count || 0 });
-          break;
-        }
-
         if (recipient?.metadata?.campaign_id) {
           await SMS_SHEET_BRIDGE.writeBasicReachability("CHECK", recipient.metadata || {}, "lookup_pending")
             .catch(error => console.error("SMS reachability CHECK writeback error", error.message));
 
           const lookup = await telnyxLookupSmsSuitability(recipient.phone, redis);
           if (lookup.decision !== "SEND") {
-            const reachability = "SKIP";
+            const reachability = reachabilityForLookupDecision(lookup.decision);
             await SMS_SHEET_BRIDGE.writeBasicReachability(reachability, recipient.metadata || {}, lookup.reason || lookup.line_type || "")
               .catch(error => console.error("SMS reachability decision writeback error", error.message));
 
@@ -2505,6 +2528,12 @@ setTimeout(() => {
     .then(result => console.log("Recover ambiguous lookup suppression reconciliation complete", result))
     .catch(error => console.error("Recover ambiguous lookup suppression reconciliation error", error?.message || error));
 }, 11000);
+
+setTimeout(() => {
+  void backfillSmsSender10dlcBlock({ limit: 5000 })
+    .then(result => console.log("Recover sender 10DLC block backfill complete", result))
+    .catch(error => console.error("Recover sender 10DLC block backfill error", error?.message || error));
+}, 7000);
 
 
 
@@ -2750,6 +2779,9 @@ const httpServer = createHttpServer((req, res) => {
       const text=String(input.text||"").trim();
       if(!phone||!text||text.length>1600) throw new Error("invalid_reply");
       const redis=await getAcquisitionRedis();
+      const senderBlockRaw=await redis.get("recover:sms:sender-block:40010");
+      const blockReason=bulkSmsBlockReason({configuredPause:SMS_BULK_PAUSED,registrationApproved:SMS_10DLC_APPROVED,carrierBlocked:Boolean(senderBlockRaw)});
+      if(blockReason) throw new Error(`sms_sender_blocked:${blockReason}`);
       if(await redis.sIsMember("recover:sms:suppressed",phone)) throw new Error("recipient_is_suppressed");
       const sent=await telnyxSendMessage(phone,text);
       res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({ok:true,id:sent?.data?.id||null}));
@@ -2785,6 +2817,9 @@ const httpServer = createHttpServer((req, res) => {
         const errorCodes = (Array.isArray(payload?.errors) ? payload.errors : []).map(e => String(e?.code || ""));
         if (errorCodes.includes("40001")) {
           await quarantineNonRoutableSms({ messageId, message:updatedMessage, event });
+        }
+        if (isCarrierRegistrationError(errorCodes)) {
+          await blockSmsSenderFor10dlc({ messageId, event });
         }
         if (/(fail|reject|undeliver|expired|blocked)/i.test(status)) {
           const errors = Array.isArray(payload?.errors) ? payload.errors : [];
