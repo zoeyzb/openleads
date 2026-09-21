@@ -166,7 +166,7 @@ while(true){
       query=candidateQuery;
       body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{
         method:"POST",headers:{"content-type":"application/json"},
-        body:JSON.stringify({query,engine:"bing",locale:"us",limit:SEARCH_LIMIT,scrape:true,scrape_options:{raw_html:true,formats:["markdown"]},max_retries:2})
+        body:JSON.stringify({query,engine:"bing",locale:"us",limit:SEARCH_LIMIT,scrape:true,scrape_options:{raw_html:true,formats:["markdown"],proxy_type:"none"},proxy_type:"none",max_retries:2})
       },120000);
       const directoryResults=(body.results||[]).filter(result=>isDirectoryUrl(result?.url)&&hostOf(result.url).includes(domain.replace(/^www\./,"")));
       if(directoryResults.length){body={...body,results:directoryResults,count:directoryResults.length};break;}
