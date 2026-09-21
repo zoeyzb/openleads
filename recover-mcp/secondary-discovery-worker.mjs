@@ -156,11 +156,21 @@ while(true){
     const scoped=await redis.sCard(campaignLeadSetKey(PROFILE_JOB));
     if(scoped>=TARGET_TOTAL){await sleep(30000);continue;}
     const city=cities[cursor%cities.length],family=FAMILIES[familyCursor%FAMILIES.length],domain=DIRECTORY_DOMAINS[domainCursor%DIRECTORY_DOMAINS.length];
-    const query=`site:${domain} "${family}" "${city.city} ${city.state}"`;
-    const body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{
-      method:"POST",headers:{"content-type":"application/json"},
-      body:JSON.stringify({query,engine:"bing",locale:"us",limit:SEARCH_LIMIT,scrape:true,scrape_options:{raw_html:true,formats:["markdown"]},max_retries:2})
-    },120000);
+    const queries=[
+      `site:${domain} ${family} ${city.city} ${city.state}`,
+      `${family} ${city.city} ${city.state} ${domain}`,
+      `${family} ${city.city} ${city.state}`
+    ];
+    let body={results:[],count:0,warnings:[]},query="";
+    for(const candidateQuery of queries){
+      query=candidateQuery;
+      body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{
+        method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({query,engine:"bing",locale:"us",limit:SEARCH_LIMIT,scrape:true,scrape_options:{raw_html:true,formats:["markdown"]},max_retries:2})
+      },120000);
+      const directoryResults=(body.results||[]).filter(result=>isDirectoryUrl(result?.url)&&hostOf(result.url).includes(domain.replace(/^www\./,"")));
+      if(directoryResults.length){body={...body,results:directoryResults,count:directoryResults.length};break;}
+    }
     let added=0,rejected={};
     for(const result of body.results||[]){
       const r=await saveCandidate({result,city:city.city,state:city.state,family,domain});
@@ -169,7 +179,7 @@ while(true){
     await redis.hIncrBy("recover:secondary:stats","searches",1);
     await redis.hIncrBy("recover:secondary:stats","results",Number(body.count||0));
     await redis.hSet("recover:secondary:stats",{last_city:`${city.city}, ${city.state}`,last_family:family,last_domain:domain,last_added:String(added),last_at:new Date().toISOString()});
-    console.log(JSON.stringify({event:"secondary_discovery_cycle",city:`${city.city}, ${city.state}`,family,domain,results:Number(body.count||0),added,rejected}));
+    console.log(JSON.stringify({event:"secondary_discovery_cycle",city:`${city.city}, ${city.state}`,family,domain,query,results:Number(body.count||0),added,rejected,warnings:body.warnings||[]}));
     domainCursor++; if(domainCursor%DIRECTORY_DOMAINS.length===0)familyCursor++; if(familyCursor%FAMILIES.length===0&&domainCursor%DIRECTORY_DOMAINS.length===0)cursor++;
     await redis.mSet(["recover:secondary:cursor",String(cursor),"recover:secondary:family_cursor",String(familyCursor),"recover:secondary:domain_cursor",String(domainCursor)]);
   }catch(error){
