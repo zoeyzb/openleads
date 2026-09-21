@@ -185,6 +185,28 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     return rows;
   }
 
+  async function readBasicRows({ spreadsheetId, tabName, startRow, endRow }) {
+    const start = Math.max(1, Number(startRow || 1));
+    const end = Math.max(start, Number(endRow || start));
+    if (end - start + 1 > 5000) throw new Error("SMS basic range may contain at most 5000 rows");
+    const range = `${quoteTab(tabName)}!A${start}:E${end}`;
+    const json = await request(spreadsheetId, `/values/${encodeURIComponent(range)}?majorDimension=ROWS`);
+    const values = json.values || [];
+    const rows = [];
+    for (let offset = 0; offset < end - start + 1; offset++) {
+      const value = values[offset] || [];
+      rows.push({
+        row: start + offset,
+        phone: clean(value[0]),
+        message: clean(value[1]),
+        business_name: clean(value[2]),
+        helper: clean(value[3]),
+        link: clean(value[4]),
+      });
+    }
+    return rows;
+  }
+
   async function writeRows({ spreadsheetId, tabName, updates }) {
     assertAllowed(spreadsheetId, tabName);
     if (!Array.isArray(updates) || !updates.length) return { updated: 0 };
@@ -269,6 +291,7 @@ export function createSmsSheetBridge({ serviceAccountJson = "", targetsJson = ""
     }),
     schema: smsSheetSchema(),
     readRows,
+    readBasicRows,
     writeRows,
     markBatchQueued,
     writeSendResult,
