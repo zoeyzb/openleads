@@ -1682,13 +1682,12 @@ const handler = createMcpHandler(buildServer);
 const nodeHandler = toNodeHandler(handler);
 
 void sendOneTimeSmsProbe().catch(error => console.error("One-time SMS probe error", error?.message || error));
-void startConfiguredBulkSmsCampaign()
-  .then(() => startSmsWorker())
-  .catch(error => {
-    console.error("Bulk SMS campaign startup error", error?.message || error);
-    return startSmsWorker();
-  })
-  .catch(error => console.error("SMS worker startup error", error));
+void startSmsWorker().catch(error => console.error("SMS worker startup error", error));
+setTimeout(() => {
+  void startConfiguredBulkSmsCampaign().catch(error =>
+    console.error("Bulk SMS campaign startup error", error?.message || error)
+  );
+}, 10000);
 
 startQualifiedGoogleSheetSync({
   getRedis: getAcquisitionRedis,
