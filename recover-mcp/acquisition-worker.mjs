@@ -535,6 +535,25 @@ function queryFamily(query=""){
   const marker=value.lastIndexOf(" in ");
   return normalizeText(marker>0?value.slice(0,marker):value);
 }
+
+function geoBiasForJob(job={},coveragePass=1){
+  const pass=Math.max(1,Number(coveragePass)||1);
+  const lat=Number(job.source_latitude),lon=Number(job.source_longitude);
+  const population=Number(job.source_population||0);
+  if(pass<8||population<10000||!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180) return null;
+  let hash=0;
+  for(const ch of String((job.partition_state||"")+"|"+(job.partition_city||""))) hash=(hash*31+ch.charCodeAt(0))>>>0;
+  const cell=(hash+Math.max(0,pass-8))%8;
+  const angle=(Math.PI*2*cell)/8;
+  const distanceKm=population>=50000?7.5:population>=25000?5.5:3.5;
+  const latOffset=(distanceKm/111)*Math.cos(angle);
+  const lonScale=Math.max(0.2,Math.cos(lat*Math.PI/180));
+  const lonOffset=(distanceKm/(111*lonScale))*Math.sin(angle);
+  const centerLat=Math.max(-89.9,Math.min(89.9,lat+latOffset));
+  const centerLon=Math.max(-179.9,Math.min(179.9,lon+lonOffset));
+  const zoom=population>=50000?13:14;
+  return {lat:centerLat,lon:centerLon,zoom,radius:Math.round((distanceKm+4)*1000),cell,distanceKm};
+}
 async function orderVariantsByNetNewYield(redis,variants=[]){
   if(variants.length<2) return variants;
   const families=variants.map(queryFamily);
@@ -802,7 +821,13 @@ async function processAcquisition(id) {
       const fastNyMaxTime=isFastHomeService
         ? (currentCoveragePass>=5 ? (denseArea?150:90) : (currentCoveragePass>=3?90:60))
         : MAPS_ROUND_MAX_TIME_SECONDS;
-      const mapsKeywords=(isFastHomeService && configuredMaxRounds===1) ? variants : [variants[round]];
+      let mapsKeywords=(isFastHomeService && configuredMaxRounds===1) ? variants : [variants[round]];
+      const geoBias=isFastHomeService?geoBiasForJob(job,currentCoveragePass):null;
+      if(geoBias && String(job.query_family||"").trim()){
+        // With a coordinate-biased search, omit "in City, ST" so Maps ranks
+        // around the selected cell instead of reverting to the city-wide list.
+        mapsKeywords=[String(job.query_family).trim()];
+      }
       job.current_query_families=mapsKeywords.map(queryFamily);
       const mapsPayload={
         name:`Recover acquisition ${id} round ${round+1}`,
@@ -810,8 +835,20 @@ async function processAcquisition(id) {
         depth:Math.min(Number(job.depth||10), fastNyDepthCap),
         max_time:fastNyMaxTime,
         extra_reviews:false,
-        lang:"en"
+        lang:"en",
+        ...(geoBias?{
+          lat:String(geoBias.lat.toFixed(6)),
+          lon:String(geoBias.lon.toFixed(6)),
+          zoom:geoBias.zoom,
+          radius:geoBias.radius
+        }:{})
       };
+      if(geoBias) console.log(JSON.stringify({
+        event:"maps_geo_cell",acquisition_id:id,coverage_pass:job.coverage_pass,
+        location:job.location,query_family:job.query_family,cell:geoBias.cell,
+        lat:Number(geoBias.lat.toFixed(5)),lon:Number(geoBias.lon.toFixed(5)),
+        zoom:geoBias.zoom,radius:geoBias.radius
+      }));
       const {mapsBase,create}=await createMapsJobWithFailover(id,mapsPayload);
       job.current_maps_base_url=mapsBase;
       console.log("Acquisition maps start", id, "round", round+1, variants[round], "via", mapsBase);
