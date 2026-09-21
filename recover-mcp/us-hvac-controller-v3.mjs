@@ -334,6 +334,12 @@ async function upgradeQueuedNationalJobs(){
     const industry=String(job.industry||"").toLowerCase();
     if(!/hvac|home.comfort|home.service|heating|cooling|plumb/.test(industry)){skipped++;continue;}
     job.search_profile="core-home-service";
+    job.require_no_website=profileJob.require_no_website;
+    job.require_contact=profileJob.require_contact;
+    job.require_phone=profileJob.require_phone;
+    job.require_email=profileJob.require_email;
+    job.include_no_website=profileJob.include_no_website;
+    job.min_score=profileJob.min_score;
     job.max_rounds=Math.min(Number(job.max_rounds||MAX_ROUNDS),MAX_ROUNDS);
     job.depth=Math.min(Number(job.depth||DEPTH),DEPTH);
     job.target=Math.min(Number(job.target||TARGET_PER_AREA),TARGET_PER_AREA);
@@ -494,7 +500,7 @@ async function seedOne(area){
     await redis.sAdd(familyReservationKey,String(queryFamily).trim().toLowerCase());
     await redis.expire(familyReservationKey,TTL);
   }
-  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,coverage_cell:coverageCell,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),query_family:queryFamily,target:TARGET_PER_AREA,min_score:30,require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_city_population:sourceCityPopulation,source_latitude:area.latitude,source_longitude:area.longitude,yield_exploration:Boolean(yieldDecision.exploration),prior_area_attempts:yieldDecision.attempts,prior_area_net_new:yieldDecision.netNew,prior_area_duplicate_rate:yieldDecision.dupRate,created_at:now,updated_at:now};
+  const job={id,batch_id:BATCH_ID,industry:"HVAC",search_profile:"core-home-service",coverage_pass:`us-core-v2-p${coveragePass}`,coverage_cell:coverageCell,partition_state:partitionState,partition_city:partitionCity,partition_zip:area.partition_zip||area.zip,shard_id,location:locationForCoveragePass(area,coveragePass),query_family:queryFamily,target:TARGET_PER_AREA,min_score:profileJob.min_score,require_phone:profileJob.require_phone,require_email:profileJob.require_email,require_contact:profileJob.require_contact,require_no_website:profileJob.require_no_website,include_no_website:profileJob.include_no_website,max_rounds:MAX_ROUNDS,depth:DEPTH,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_city_population:sourceCityPopulation,source_latitude:area.latitude,source_longitude:area.longitude,yield_exploration:Boolean(yieldDecision.exploration),prior_area_attempts:yieldDecision.attempts,prior_area_net_new:yieldDecision.netNew,prior_area_duplicate_rate:yieldDecision.dupRate,created_at:now,updated_at:now};
   const claim=await claimCoverage(redis,job,{source:"us_core_partition_controller_v3",source_zip:area.zip,source_population:area.population,source_city_population:sourceCityPopulation,partition_state:job.partition_state,partition_city:job.partition_city,coverage_pass:job.coverage_pass,coverage_cell:job.coverage_cell,shard_id});
   if(!claim.claimed){
     if(familyReservationKey) await redis.sRem(familyReservationKey,String(queryFamily).trim().toLowerCase());
