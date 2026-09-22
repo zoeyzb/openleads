@@ -3096,6 +3096,41 @@ const httpServer = createHttpServer((req, res) => {
     return;
   }
 
+  if (requestUrl.pathname === "/inbox/telnyx-metrics" && req.method === "GET") {
+    void (async () => {
+      if (!inboxAuthorized(req)) { res.writeHead(401,{"content-type":"application/json"});res.end(JSON.stringify({error:"unauthorized"}));return; }
+      const inventory = await telnyxAccountInventory();
+      const configuredFrom = normalizeInboxPhone(TELNYX_FROM_NUMBER);
+      const numberRow = (inventory.numbers || []).find(row => normalizeInboxPhone(row?.phone_number) === configuredFrom);
+      const profileId = String(numberRow?.messaging_profile_id || "");
+      if (!profileId) throw new Error("sending_number_has_no_messaging_profile");
+      const frames = ["24h","3d","7d","30d"];
+      const metrics = {};
+      for (const frame of frames) {
+        try {
+          const body = await telnyxApiRequest(`/messaging_profiles/${encodeURIComponent(profileId)}/metrics?time_frame=${encodeURIComponent(frame)}`);
+          const overview = body?.data?.overview || {};
+          metrics[frame] = {
+            inbound_received:Number(overview?.inbound?.received || 0),
+            outbound_sent:Number(overview?.outbound?.sent || 0),
+            outbound_delivered:Number(overview?.outbound?.delivered || 0),
+            outbound_error_ratio:overview?.outbound?.error_ratio ?? overview?.outbound?.errors ?? null
+          };
+        } catch (error) {
+          metrics[frame] = { error:String(error?.message || error) };
+        }
+      }
+      res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({
+        ok:true,
+        sending_number_hint: configuredFrom ? `••••${configuredFrom.slice(-4)}` : null,
+        messaging_profile_id: profileId,
+        metrics
+      }));
+    })().catch(error=>{res.writeHead(500,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify({ok:false,error:error?.message||"telnyx_metrics_failed"}));});
+    return;
+  }
+
   if (requestUrl.pathname === "/inbox/status" && req.method === "GET") {
     void (async () => {
       const redis = await getAcquisitionRedis();
