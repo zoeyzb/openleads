@@ -3096,6 +3096,85 @@ const httpServer = createHttpServer((req, res) => {
     return;
   }
 
+  if (requestUrl.pathname === "/inbox/forensic-audit" && req.method === "GET") {
+    void (async () => {
+      const redis = await getAcquisitionRedis();
+      const all = await redis.hVals("recover:sms:inbox:messages");
+      const messages = [];
+      for (const raw of all || []) {
+        try { const m = JSON.parse(raw); if (m?.direction === "outbound") messages.push(m); } catch {}
+      }
+      const replyPhones = new Set(await redis.zRange("recover:sms:inbox:reply-threads",0,-1));
+      const statusCounts = {};
+      const errorCounts = {};
+      const carrierCounts = {};
+      const lineTypeCounts = {};
+      const dayCounts = {};
+      const hourCounts = {};
+      const textMap = new Map();
+      let withProfile=0, withLink=0, duplicatePhones=0;
+      const seenPhones = new Set();
+      const samples = [];
+      let earliest=null, latest=null;
+      for (const m of messages) {
+        const status = String(m?.status || "unknown").toLowerCase();
+        statusCounts[status]=(statusCounts[status]||0)+1;
+        const ts=Date.parse(m?.at||"");
+        if(Number.isFinite(ts)){if(earliest===null||ts<earliest)earliest=ts;if(latest===null||ts>latest)latest=ts;const d=new Date(ts);const day=d.toISOString().slice(0,10);dayCounts[day]=(dayCounts[day]||0)+1;const h=String(d.getUTCHours()).padStart(2,"0");hourCounts[h]=(hourCounts[h]||0)+1;}
+        if(seenPhones.has(m.phone)) duplicatePhones++; else seenPhones.add(m.phone);
+        let profile=null; try{const pr=await redis.get(`recover:sms:inbox:contact:${m.phone}`);profile=pr?JSON.parse(pr):null;}catch{}
+        if(profile) withProfile++;
+        if(profile?.link) withLink++;
+        const payload=m?.raw?.data?.payload||m?.raw?.payload||m?.raw||{};
+        const errors=Array.isArray(payload?.errors)?payload.errors:[];
+        for(const er of errors){const code=String(er?.code||"unknown");errorCounts[code]=(errorCounts[code]||0)+1;}
+        const to=Array.isArray(payload?.to)?(payload.to[0]||{}):{};
+        const carrier=String(to?.carrier||to?.carrier_name||"").trim();
+        if(carrier) carrierCounts[carrier]=(carrierCounts[carrier]||0)+1;
+        const lt=String(to?.line_type||"").trim().toLowerCase();
+        if(lt) lineTypeCounts[lt]=(lineTypeCounts[lt]||0)+1;
+        const text=String(m?.text||"");
+        const key=text;
+        const row=textMap.get(key)||{text,count:0,delivered:0,failed:0,sent_or_other:0,replies:0,chars:text.length,has_link:/https?:\/\//i.test(text)};
+        row.count++;
+        if(status==="delivered") row.delivered++; else if(/fail|undeliver|reject|expire|blocked/.test(status)) row.failed++; else row.sent_or_other++;
+        if(replyPhones.has(m.phone)) row.replies++;
+        textMap.set(key,row);
+        if(samples.length<60 && ["delivered","sent","delivery_failed"].includes(status)){
+          samples.push({business_name:profile?.business_name||null,status,at:m?.at||null,text,has_link:Boolean(profile?.link||/https?:\/\//i.test(text)),sheet_row:profile?.sheet_row||null});
+        }
+      }
+      const variants=[...textMap.values()].sort((a,b)=>b.count-a.count).slice(0,25);
+      let telnyxMetrics=null;
+      try{
+        const inv=await telnyxAccountInventory();
+        const configuredFrom=normalizeInboxPhone(TELNYX_FROM_NUMBER);
+        const nr=(inv.numbers||[]).find(row=>normalizeInboxPhone(row?.phone_number)===configuredFrom);
+        const profileId=String(nr?.messaging_profile_id||"");
+        if(profileId){
+          const body=await telnyxApiRequest(`/messaging_profiles/${encodeURIComponent(profileId)}/metrics?time_frame=7d`);
+          telnyxMetrics=body?.data?.overview||null;
+        }
+      }catch(error){telnyxMetrics={error:String(error?.message||error)}}
+      res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({
+        ok:true,
+        generated_at:new Date().toISOString(),
+        redis:{outbound_messages:messages.length,unique_phones:seenPhones.size,duplicate_phone_messages:duplicatePhones,reply_threads:replyPhones.size,profiles_found:withProfile,profiles_missing:messages.length-withProfile,with_link:withLink,earliest_at:earliest?new Date(earliest).toISOString():null,latest_at:latest?new Date(latest).toISOString():null},
+        status_counts:statusCounts,
+        error_counts:errorCounts,
+        line_type_counts:lineTypeCounts,
+        carrier_counts:Object.fromEntries(Object.entries(carrierCounts).sort((a,b)=>b[1]-a[1]).slice(0,30)),
+        by_day:dayCounts,
+        by_utc_hour:hourCounts,
+        message_variants:variants,
+        samples,
+        telnyx_7d_overview:telnyxMetrics
+      }));
+    })().catch(error=>{res.writeHead(500,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify({ok:false,error:error?.message||"forensic_audit_failed"}));});
+    return;
+  }
+
   if (requestUrl.pathname === "/inbox/telnyx-metrics" && req.method === "GET") {
     void (async () => {
       const inventory = await telnyxAccountInventory();
