@@ -3111,6 +3111,10 @@ const httpServer = createHttpServer((req, res) => {
       const lineTypeCounts = {};
       const dayCounts = {};
       const hourCounts = {};
+      const hourStatus = {};
+      const lineTypeStatus = {};
+      const templateCounts = {};
+      const lengthBuckets = {"<=120":0,"121-160":0,"161-320":0,">320":0};
       const textMap = new Map();
       let withProfile=0, withLink=0, duplicatePhones=0;
       const seenPhones = new Set();
@@ -3120,7 +3124,7 @@ const httpServer = createHttpServer((req, res) => {
         const status = String(m?.status || "unknown").toLowerCase();
         statusCounts[status]=(statusCounts[status]||0)+1;
         const ts=Date.parse(m?.at||"");
-        if(Number.isFinite(ts)){if(earliest===null||ts<earliest)earliest=ts;if(latest===null||ts>latest)latest=ts;const d=new Date(ts);const day=d.toISOString().slice(0,10);dayCounts[day]=(dayCounts[day]||0)+1;const h=String(d.getUTCHours()).padStart(2,"0");hourCounts[h]=(hourCounts[h]||0)+1;}
+        if(Number.isFinite(ts)){if(earliest===null||ts<earliest)earliest=ts;if(latest===null||ts>latest)latest=ts;const d=new Date(ts);const day=d.toISOString().slice(0,10);dayCounts[day]=(dayCounts[day]||0)+1;const h=String(d.getUTCHours()).padStart(2,"0");hourCounts[h]=(hourCounts[h]||0)+1;hourStatus[h] ||= {};hourStatus[h][status]=(hourStatus[h][status]||0)+1;}
         if(seenPhones.has(m.phone)) duplicatePhones++; else seenPhones.add(m.phone);
         let profile=null; try{const pr=await redis.get(`recover:sms:inbox:contact:${m.phone}`);profile=pr?JSON.parse(pr):null;}catch{}
         if(profile) withProfile++;
@@ -3132,8 +3136,22 @@ const httpServer = createHttpServer((req, res) => {
         const carrier=String(to?.carrier||to?.carrier_name||"").trim();
         if(carrier) carrierCounts[carrier]=(carrierCounts[carrier]||0)+1;
         const lt=String(to?.line_type||"").trim().toLowerCase();
-        if(lt) lineTypeCounts[lt]=(lineTypeCounts[lt]||0)+1;
+        if(lt){lineTypeCounts[lt]=(lineTypeCounts[lt]||0)+1;lineTypeStatus[lt] ||= {};lineTypeStatus[lt][status]=(lineTypeStatus[lt][status]||0)+1;}
         const text=String(m?.text||"");
+        const chars=text.length;
+        if(chars<=120)lengthBuckets["<=120"]++; else if(chars<=160)lengthBuckets["121-160"]++; else if(chars<=320)lengthBuckets["161-320"]++; else lengthBuckets[">320"]++;
+        let template="other";
+        if(/^https?:\/\/[^\s]+\s*\n\nHey, I came across /i.test(text)) template="long_link_first_came_across";
+        else if(/^https?:\/\/[^\s]+\s*\nHey, I made this for /i.test(text)) template="short_link_first_made_this";
+        else if(/^https?:\/\/[^\s]+\s*\nMade this for /i.test(text)) template="short_link_first_made_this_business";
+        else if(/^Hey, made this for /i.test(text) && /https?:\/\//i.test(text)) template="short_hey_made_this_inline_link";
+        else if(/^Hey, I found /i.test(text) && /so I made one for you:/i.test(text)) template="medium_found_no_website";
+        else if(/^Made this:\s*https?:\/\//i.test(text)) template="ultra_short_made_this";
+        else if(/^https?:\/\/[^\s]+\s*\nMade this for .*Thoughts\?/i.test(text)) template="short_thoughts";
+        templateCounts[template] ||= {count:0,delivered:0,failed:0,sent_or_other:0,replies:0};
+        templateCounts[template].count++;
+        if(status==="delivered")templateCounts[template].delivered++;else if(/fail|undeliver|reject|expire|blocked/.test(status))templateCounts[template].failed++;else templateCounts[template].sent_or_other++;
+        if(replyPhones.has(m.phone))templateCounts[template].replies++;
         const key=text;
         const row=textMap.get(key)||{text,count:0,delivered:0,failed:0,sent_or_other:0,replies:0,chars:text.length,has_link:/https?:\/\//i.test(text)};
         row.count++;
@@ -3167,6 +3185,10 @@ const httpServer = createHttpServer((req, res) => {
         carrier_counts:Object.fromEntries(Object.entries(carrierCounts).sort((a,b)=>b[1]-a[1]).slice(0,30)),
         by_day:dayCounts,
         by_utc_hour:hourCounts,
+        by_utc_hour_status:hourStatus,
+        line_type_status:lineTypeStatus,
+        template_counts:templateCounts,
+        message_length_buckets:lengthBuckets,
         message_variants:variants,
         samples,
         telnyx_7d_overview:telnyxMetrics
