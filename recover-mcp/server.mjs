@@ -1952,24 +1952,27 @@ async function listInboxThreads(limit = 100) {
   const replyPhones = new Set(await redis.zRange("recover:sms:inbox:reply-threads", 0, -1));
   const messagesHash = "recover:sms:inbox:messages";
   const out = [];
-  for (const phone of phones) {
-    const ids = await redis.zRange(`recover:sms:inbox:thread:${phone}`, 0, 0, { REV: true });
-    const latestRaw = ids[0] ? await redis.hGet(messagesHash, ids[0]) : null;
-    const latest = latestRaw ? JSON.parse(latestRaw) : null;
-    let profile = null;
-    try {
-      const rawProfile = await redis.get(`recover:sms:inbox:contact:${phone}`);
-      profile = rawProfile ? JSON.parse(rawProfile) : null;
-    } catch {}
-    let latestInboundScore = 0;
-    let readScore = 0;
-    try {
-      latestInboundScore = Number(await redis.zScore("recover:sms:inbox:reply-threads", phone) || 0);
-      readScore = Number(await redis.hGet("recover:sms:inbox:read", phone) || 0);
-    } catch {}
-    const replied = replyPhones.has(phone);
-    const unread_reply = replied && latestInboundScore > readScore;
-    out.push({ phone, latest, profile, replied, unread_reply, latest_inbound_at: latestInboundScore || null });
+  const chunkSize = 100;
+  for (let start = 0; start < phones.length; start += chunkSize) {
+    const chunk = phones.slice(start, start + chunkSize);
+    const rows = await Promise.all(chunk.map(async (phone) => {
+      const [ids, rawProfile, latestInboundScoreRaw, readScoreRaw] = await Promise.all([
+        redis.zRange(`recover:sms:inbox:thread:${phone}`, 0, 0, { REV: true }),
+        redis.get(`recover:sms:inbox:contact:${phone}`).catch(() => null),
+        redis.zScore("recover:sms:inbox:reply-threads", phone).catch(() => null),
+        redis.hGet("recover:sms:inbox:read", phone).catch(() => null)
+      ]);
+      const latestRaw = ids?.[0] ? await redis.hGet(messagesHash, ids[0]).catch(() => null) : null;
+      let latest = null;
+      let profile = null;
+      try { latest = latestRaw ? JSON.parse(latestRaw) : null; } catch {}
+      try { profile = rawProfile ? JSON.parse(rawProfile) : null; } catch {}
+      const latestInboundScore = Number(latestInboundScoreRaw || 0);
+      const readScore = Number(readScoreRaw || 0);
+      const replied = replyPhones.has(phone);
+      return { phone, latest, profile, replied, unread_reply: replied && latestInboundScore > readScore, latest_inbound_at: latestInboundScore || null };
+    }));
+    out.push(...rows);
   }
   return out;
 }
@@ -2138,7 +2141,7 @@ function inboxAppHtml() {
   function filtered(){const term=q("search").value.toLowerCase().trim();let rows=state.threads;if(state.filter==="replies")rows=state.threads.filter(x=>x.replied);if(state.filter==="unread")rows=state.threads.filter(x=>x.unread_reply);if(state.filter==="drafts")rows=state.threads.filter(x=>draftFor(x.phone));return term?rows.filter(x=>JSON.stringify(x).toLowerCase().includes(term)):rows}
   function render(){const rows=filtered();q("list").innerHTML=rows.length?rows.map(x=>'<div class="row '+(x.unread_reply?"reply ":"")+(x.phone===state.selected?"active":"")+'" data-phone="'+esc(x.phone)+'">'+(x.unread_reply?'<span class="replyDot" title="Unread customer reply"></span>':'')+'<div class="phone">'+esc(x.profile?.business_name||x.phone)+(draftFor(x.phone)?'<span class="draftLabel">DRAFT</span>':'')+'</div><div style="color:#68717d;font-size:11px">'+esc(x.profile?.business_name?x.phone:"")+'</div><div class="preview">'+esc(draftFor(x.phone)||x.latest?.text||"No preview")+'</div>'+(x.unread_reply?'<div class="replyLabel">● NEW REPLY</div>':x.replied?'<div class="replyLabel" style="opacity:.55">REPLIED</div>':'')+'<div class="time">'+esc(fmt(x.latest?.at))+'</div></div>').join(""):'<div class="empty">'+(state.filter==="replies"?"No replied conversations yet.":state.filter==="unread"?"No unread replies.":state.filter==="drafts"?"No saved drafts.":"No SMS conversations yet.")+'</div>';document.querySelectorAll(".row").forEach(r=>r.onclick=()=>openThread(r.dataset.phone,{markRead:true}))}
   function toast(message){const t=q("toast");t.textContent=message;t.classList.add("show");clearTimeout(window.__toastTimer);window.__toastTimer=setTimeout(()=>t.classList.remove("show"),2200)}
-  async function load({sync=false}={}){try{error("");if(sync){const synced=await api("/inbox/api/sync",{method:"POST",body:"{}"});toast("Synced "+(synced.restored_messages||0)+" outbound messages · "+(synced.reply_threads||0)+" reply threads")}const [j,stats]=await Promise.all([api("/inbox/api/threads"),api("/inbox/status")]);state.threads=j.threads||[];const replied=Number(stats.reply_threads??state.threads.filter(x=>x.replied).length);const unread=Number(stats.unread_replies??state.threads.filter(x=>x.unread_reply).length);q("replyCount").textContent=replied;q("unreadCount").textContent=unread;q("failedCount").textContent=(stats.failed_messages??0);state.bulkPaused=Boolean(stats.bulk_paused);q("inboxCount").textContent=(stats.outbound_messages??0)+" attempted · "+(stats.delivered_messages??0)+" delivered · "+Math.max(0,(stats.sent_messages??0)-(stats.delivered_messages??0))+" sent/in transit · "+(stats.submitted_messages??0)+" submitted · "+(stats.failed_messages??0)+" failed · "+(stats.reply_threads??0)+" replies";if(state.bulkPaused){q("liveState").classList.remove("live");q("liveState").classList.add("offline");q("liveLabel").textContent="OFFLINE";q("liveState").title="Bulk SMS is paused"}render();if(!state.selected&&state.threads.length&&window.innerWidth>720){await openThread(state.threads[0].phone,{markRead:false})}}catch(e){error(e.message)}}
+  async function load({sync=false}={}){try{error("");if(sync){const synced=await api("/inbox/api/sync",{method:"POST",body:"{}"});toast("Synced "+(synced.restored_messages||0)+" outbound messages · "+(synced.reply_threads||0)+" reply threads")}const stats=await api("/inbox/status");const replied=Number(stats.reply_threads||0);const unread=Number(stats.unread_replies||0);q("replyCount").textContent=replied;q("unreadCount").textContent=unread;q("failedCount").textContent=(stats.failed_messages??0);state.bulkPaused=Boolean(stats.bulk_paused);q("inboxCount").textContent=(stats.outbound_messages??0)+" attempted · "+(stats.delivered_messages??0)+" delivered · "+Math.max(0,(stats.sent_messages??0)-(stats.delivered_messages??0))+" sent/in transit · "+(stats.failed_messages??0)+" failed · "+replied+" replies";if(state.bulkPaused){q("liveState").classList.remove("live");q("liveState").classList.add("offline");q("liveLabel").textContent="OFFLINE";q("liveState").title="Bulk SMS is paused"}const j=await api("/inbox/api/threads");state.threads=j.threads||[];render();if(!state.selected&&state.threads.length&&window.innerWidth>720){await openThread(state.threads[0].phone,{markRead:false})}}catch(e){error(e.message)}}
   async function openThread(phone,{markRead=true}={}){state.selected=phone;app.classList.add("open");let selected=state.threads.find(x=>x.phone===phone);q("threadPhone").innerHTML=esc(selected?.profile?.business_name||phone)+(selected?.unread_reply?' <span class="replyMeta">● New reply</span>':selected?.replied?' <span class="replyMeta" style="opacity:.65">● Replied</span>':'');q("threadSub").textContent=(selected?.profile?.business_name?phone+" · ":"")+"SMS conversation";q("messages").innerHTML='<div class="empty">Loading…</div>';try{const j=await api("/inbox/api/thread?phone="+encodeURIComponent(phone));q("messages").innerHTML=(j.messages||[]).map(m=>'<div class="bubble '+(m.direction==="outbound"?"out":"in")+'">'+linkify(m.text||"")+'<div class="meta">'+esc(fmt(m.at))+statusHtml(m)+'</div></div>').join("")||'<div class="empty">No messages yet.</div>';document.querySelectorAll("[data-resend-id]").forEach(btn=>btn.onclick=async e=>{e.stopPropagation();if(btn.disabled)return;btn.disabled=true;const original=btn.textContent;btn.textContent="Sending…";try{await api("/inbox/api/resend",{method:"POST",body:JSON.stringify({message_id:btn.dataset.resendId})});toast("Resent");await openThread(phone,{markRead:false});await load({sync:false})}catch(err){toast(err.message||"Resend failed")}finally{btn.disabled=false;btn.textContent=original}});q("messages").scrollTop=q("messages").scrollHeight;q("reply").disabled=false;q("send").disabled=false;const savedDraft=draftFor(phone);if(savedDraft&&!q("reply").value.trim())q("reply").value=savedDraft;if(markRead&&selected?.unread_reply){await api("/inbox/api/read",{method:"POST",body:JSON.stringify({phone})});selected.unread_reply=false;const replied=state.threads.filter(x=>x.replied).length;const unread=state.threads.filter(x=>x.unread_reply).length;q("replyCount").textContent=replied;q("unreadCount").textContent=unread;const stats=await api("/inbox/status");q("inboxCount").textContent=(stats.outbound_messages??0)+" attempted · "+(stats.delivered_messages??0)+" delivered · "+Math.max(0,(stats.sent_messages??0)-(stats.delivered_messages??0))+" sent/in transit · "+(stats.submitted_messages??0)+" submitted · "+(stats.failed_messages??0)+" failed · "+(stats.reply_threads??0)+" replies";render();q("threadPhone").innerHTML=esc(selected?.profile?.business_name||phone)+(selected?.replied?' <span class="replyMeta" style="opacity:.65">● Replied</span>':'')}}catch(e){error(e.message)}}
   function clearPendingBubble(){document.querySelectorAll("[data-pending-send]").forEach(el=>el.remove())}
   function hideUndo(){q("undoBar").classList.remove("show")}
