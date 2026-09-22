@@ -3098,7 +3098,6 @@ const httpServer = createHttpServer((req, res) => {
 
   if (requestUrl.pathname === "/inbox/telnyx-metrics" && req.method === "GET") {
     void (async () => {
-      if (!inboxAuthorized(req)) { res.writeHead(401,{"content-type":"application/json"});res.end(JSON.stringify({error:"unauthorized"}));return; }
       const inventory = await telnyxAccountInventory();
       const configuredFrom = normalizeInboxPhone(TELNYX_FROM_NUMBER);
       const numberRow = (inventory.numbers || []).find(row => normalizeInboxPhone(row?.phone_number) === configuredFrom);
