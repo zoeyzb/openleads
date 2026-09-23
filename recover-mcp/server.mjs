@@ -3096,6 +3096,27 @@ const httpServer = createHttpServer((req, res) => {
     return;
   }
 
+  if (requestUrl.pathname === "/inbox/contacted-sheet-rows" && req.method === "GET") {
+    void (async () => {
+      const redis = await getAcquisitionRedis();
+      const all = await redis.hVals("recover:sms:inbox:messages");
+      const rows = [];
+      for (const raw of all || []) {
+        let m; try { m = JSON.parse(raw); } catch { continue; }
+        if (m?.direction !== "outbound") continue;
+        const status = String(m?.status || "").toLowerCase();
+        if (status !== "delivered" && status !== "sent") continue;
+        let profile=null; try { const pr=await redis.get(`recover:sms:inbox:contact:${m.phone}`); profile=pr?JSON.parse(pr):null; } catch {}
+        const sheetRow = Number(profile?.sheet_row || 0);
+        if (sheetRow) rows.push(sheetRow);
+      }
+      rows.sort((a,b)=>a-b);
+      res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({ok:true,count:rows.length,rows}));
+    })().catch(error=>{res.writeHead(500,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify({ok:false,error:error?.message||"contacted_rows_failed"}));});
+    return;
+  }
+
   if (requestUrl.pathname === "/inbox/forensic-row-status" && req.method === "GET") {
     void (async () => {
       const redis = await getAcquisitionRedis();
