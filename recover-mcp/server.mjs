@@ -3096,6 +3096,32 @@ const httpServer = createHttpServer((req, res) => {
     return;
   }
 
+  if (requestUrl.pathname === "/inbox/forensic-row-status" && req.method === "GET") {
+    void (async () => {
+      const redis = await getAcquisitionRedis();
+      const all = await redis.hVals("recover:sms:inbox:messages");
+      const rows = [];
+      for (const raw of all || []) {
+        let m; try { m = JSON.parse(raw); } catch { continue; }
+        if (m?.direction !== "outbound") continue;
+        let profile=null; try { const pr=await redis.get(`recover:sms:inbox:contact:${m.phone}`); profile=pr?JSON.parse(pr):null; } catch {}
+        const sheetRow = Number(profile?.sheet_row || 0);
+        if (!sheetRow) continue;
+        const payload=m?.raw?.data?.payload||m?.raw?.payload||m?.raw||{};
+        const errors=Array.isArray(payload?.errors)?payload.errors:[];
+        rows.push({
+          sheet_row:sheetRow,
+          status:String(m?.status||""),
+          error_codes:errors.map(e=>String(e?.code||"")).filter(Boolean)
+        });
+      }
+      rows.sort((a,b)=>a.sheet_row-b.sheet_row);
+      res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({ok:true,count:rows.length,rows}));
+    })().catch(error=>{res.writeHead(500,{"content-type":"application/json","cache-control":"no-store"});res.end(JSON.stringify({ok:false,error:error?.message||"forensic_row_status_failed"}));});
+    return;
+  }
+
   if (requestUrl.pathname === "/inbox/forensic-audit" && req.method === "GET") {
     void (async () => {
       const redis = await getAcquisitionRedis();
