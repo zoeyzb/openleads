@@ -69,6 +69,16 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function normalizeText(v=""){return String(v||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
 function normalizePhone(v=""){return String(v||"").replace(/\D/g,"").slice(-10);}
 function emailsFrom(text=""){return [...new Set((String(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)||[]).map(x=>x.toLowerCase()))];}
+function businessEmailsFrom(text="",sourceDomain=""){
+  const source=String(sourceDomain||"").toLowerCase().replace(/^www\./,"");
+  return emailsFrom(text).filter(email=>{
+    const domain=String(email.split("@")[1]||"").toLowerCase().replace(/^www\./,"");
+    if(!domain) return false;
+    if(source&&(domain===source||domain.endsWith("."+source))) return false;
+    if(DIRECTORY_DOMAINS.some(d=>domain===d||domain.endsWith("."+d))) return false;
+    return true;
+  });
+}
 function phonesFrom(text=""){
   const out=[];
   for(const m of String(text).matchAll(/(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}/g)){
@@ -168,9 +178,9 @@ async function saveCandidate({result,city,state,family,domain}){
   const locationOk=locationMatches(page,city,state,result.url);
   const owned=explicitWebsiteFromHtml(scrape.raw_html||scrape.html||"");
   if(owned) return {accepted:false,reason:"owned_website"};
-  const phones=phonesFrom(page),emails=emailsFrom(page);
+  const phones=phonesFrom(page),emails=businessEmailsFrom(page,domain);
   if(!phones.length) return {accepted:false,reason:"phone"};
-  if(!locationOk&&!phones.length) return {accepted:false,reason:"location"};
+  if(!locationOk) return {accepted:false,reason:"location"};
   const lead={
     name:cleanName(result.title||""),
     category:"",
