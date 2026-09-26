@@ -126,6 +126,7 @@ async function refreshYieldStats(){
 }
 
 async function enqueueUnit(area,family,mode){
+  if(!(await areaBudgetAllows(area))) return false;
   const searchLocation=searchLocationForMode(area,mode);
   const coveragePass=queryPassForIndex(searchLocation,family.queryIndex,`us-core-family-v5-${mode}-${family.key}`);
   const id=randomUUID(); const now=new Date().toISOString();
@@ -142,6 +143,7 @@ async function enqueueUnit(area,family,mode){
   };
   const claim=await claimCoverage(redis,job,{source:job.source,service_family:family.key,query_index:family.queryIndex});
   if(!claim.claimed) return false;
+  await claimAreaBudget(area);
   await redis.set(`recover:acq:${id}`,JSON.stringify(job),{EX:TTL});
   await redis.sAdd('recover:acq:index',id);
   await redis.sAdd(BATCH_JOB_SET,id);
@@ -152,6 +154,34 @@ async function enqueueUnit(area,family,mode){
 
 function normalizeAreaPart(value=''){
   return String(value).toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+}
+function areaBudgetField(area={}){
+  return [
+    normalizeAreaPart(area?.state),
+    normalizeAreaPart(area?.city),
+    normalizeAreaPart(area?.zip)
+  ].join('|');
+}
+
+function areaFamilyBudget(area={}){
+  const population=Math.max(0,Number(area?.population||0));
+  if(population>=500000) return 10;
+  if(population>=100000) return 8;
+  if(population>=25000) return 6;
+  return 4;
+}
+
+async function areaBudgetAllows(area){
+  const field=areaBudgetField(area);
+  if(!field || field==='||') return true;
+  const used=Number(await redis.hGet('recover:coverage:area:issued:v1',field)||0);
+  return used<areaFamilyBudget(area);
+}
+
+async function claimAreaBudget(area){
+  const field=areaBudgetField(area);
+  if(!field || field==='||') return;
+  await redis.hIncrBy('recover:coverage:area:issued:v1',field,1);
 }
 
 async function areaIsSaturated(area){
