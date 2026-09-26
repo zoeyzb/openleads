@@ -979,13 +979,36 @@ async function processAcquisition(id) {
 
       let leads;
       if (job.require_no_website) {
-        // For no-website campaigns, domain crawling/enrichment is wasted work:
-        // any lead with a website will be rejected, and no-domain leads cannot
-        // benefit from domain enrichment. Go straight to qualification.
-        job.phase="qualification";
+        // Owned-domain crawling is wasted for no-website prospects, but Maps
+        // sometimes returns a public social/directory profile. Those pages can
+        // contain a real business email, so enrich a bounded set without
+        // relaxing the phone/no-owned-website qualification contract.
+        job.phase="contact_enrichment";
         await saveJob(job);
-        console.log("Acquisition enrichment skipped for no-website campaign", id);
         leads=allRaw;
+        const publicProfileUrls=[...new Set(
+          allRaw.map(x=>String(x.website||"").trim())
+            .filter(url=>url && !isOwnedBusinessWebsite(url))
+        )].slice(0,25);
+        if (publicProfileUrls.length && DATAFORGE_BASE_URL) {
+          try {
+            const enriched=await dataforgeScrape(publicProfileUrls);
+            const byUrl=new Map(enriched.map(item=>[String(item.url||"").replace(/\/$/,""),item]));
+            let emailHits=0;
+            leads=allRaw.map(lead=>{
+              const url=String(lead.website||"").trim().replace(/\/$/,"");
+              const e=byUrl.get(url);
+              const publicEmails=Array.isArray(e?.emails)?normalizeEmails(e.emails):[];
+              if(!publicEmails.length) return lead;
+              emailHits++;
+              return {...lead,emails:publicEmails};
+            });
+            console.log(JSON.stringify({event:"no_website_public_email_enrichment",acquisition_id:id,profiles:publicProfileUrls.length,email_hits:emailHits}));
+          } catch (e) {
+            console.warn("No-website public email enrichment failed",id,e.message);
+          }
+        }
+        job.phase="qualification";
       } else {
         job.phase="enrichment";
         await saveJob(job);
