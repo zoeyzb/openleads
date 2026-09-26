@@ -1244,7 +1244,9 @@ async function acquisitionWorkerLoop(slot){
       queuePollCursor++;
       // The family controller maintains a dedicated city-priority queue.
       // Give it bounded capacity without starving general nationwide work.
-      const queueOrder=(queuePollCursor%3===0)
+      // Fresh nationwide yield work should dominate once a city has been
+      // covered. Only sample the legacy city-priority queue occasionally.
+      const queueOrder=(queuePollCursor%10===0)
         ? [NY_PRIORITY_QUEUE,US_CITY_PRIORITY_QUEUE,ACTIVE_QUEUE]
         : [NY_PRIORITY_QUEUE,ACTIVE_QUEUE,US_CITY_PRIORITY_QUEUE];
       const item=await redis.brPop(queueOrder,5);
