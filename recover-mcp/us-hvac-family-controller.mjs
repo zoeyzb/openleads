@@ -190,26 +190,34 @@ async function claimAreaBudget(area){
   await redis.hIncrBy('recover:coverage:area:issued:v1',field,1);
 }
 
-async function areaIsSaturated(area){
-  const field=[
-    normalizeAreaPart(area?.state),
-    normalizeAreaPart(area?.city),
-    normalizeAreaPart(area?.zip)
-  ].join('|')+'|';
-  if(!field || field==='|||') return false;
-  const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
-    redis.hGet('recover:yield:area:attempts',field),
-    redis.hGet('recover:yield:area:new',field),
-    redis.hGet('recover:yield:area:duplicates',field),
-  ]);
-  const attempts=Number(attemptsRaw||0);
-  const netNew=Number(newRaw||0);
-  const duplicates=Number(dupRaw||0);
-  // Retire an area quickly when repeated searches only rediscover businesses
-  // already in the permanent lead store / historical sheets.
-  return (attempts>=1 && netNew===0 && duplicates>=5) ||
-    (attempts>=2 && netNew===0 && duplicates>=2) ||
-    (attempts>=4 && netNew/attempts<0.5 && duplicates>netNew*3);
+async function areaIsSaturated(area,family={}){
+  const state=normalizeAreaPart(area?.state);
+  const city=normalizeAreaPart(area?.city);
+  const zip=normalizeAreaPart(area?.zip);
+  const familyLabel=normalizeAreaPart(family?.label||'');
+  const fields=[...new Set([
+    [state,city,zip,''].join('|'),
+    [state,city,'*',''].join('|'),
+    familyLabel?[state,city,'*',familyLabel].join('|'):''
+  ].filter(Boolean))];
+  for(const field of fields){
+    if(!field || field==='|||') continue;
+    const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
+      redis.hGet('recover:yield:area:attempts',field),
+      redis.hGet('recover:yield:area:new',field),
+      redis.hGet('recover:yield:area:duplicates',field),
+    ]);
+    const attempts=Number(attemptsRaw||0);
+    const netNew=Number(newRaw||0);
+    const duplicates=Number(dupRaw||0);
+    // Read both the canonical ZIP aggregate and older wildcard/query-family
+    // keys so already-proven duplicate areas are retired immediately.
+    const saturated=(attempts>=1 && netNew===0 && duplicates>=5) ||
+      (attempts>=2 && netNew===0 && duplicates>=2) ||
+      (attempts>=4 && netNew/attempts<0.5 && duplicates>netNew*3);
+    if(saturated) return true;
+  }
+  return false;
 }
 
 async function enqueueNext(mode,familyKey){
@@ -221,7 +229,7 @@ async function enqueueNext(mode,familyKey){
   while(cursors[familyKey]<areas.length){
     const area=areas[cursors[familyKey]++];
     checked++;
-    if(await areaIsSaturated(area)){
+    if(await areaIsSaturated(area,family)){
       saturatedSkipped++;
       continue;
     }
