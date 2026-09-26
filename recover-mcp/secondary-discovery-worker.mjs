@@ -201,6 +201,33 @@ async function saveCandidate({result,city,state,family,domain}){
   const stored={...lead,industry:"HVAC",campaign_scope:campaignLeadSetKey(PROFILE_JOB),persisted_at:new Date().toISOString(),qualification:{source:"secondary_directory_search",strict_core_home_service:true,no_owned_website:true,contactable:true}};
   if(existing){
     let prior={}; try{prior=JSON.parse(existing)||{};}catch{}
+    if(indexedKey){
+      const priorName=normalizeText(prior.name||"");
+      const incomingName=normalizeText(lead.name||"");
+      const priorRegion=normalizeText(prior.region||"");
+      const incomingRegion=normalizeText(lead.region||"");
+      const nameCompatible=Boolean(
+        priorName&&incomingName&&(
+          priorName===incomingName ||
+          priorName.includes(incomingName) ||
+          incomingName.includes(priorName)
+        )
+      );
+      const regionCompatible=!priorRegion||!incomingRegion||priorRegion===incomingRegion;
+      if(!nameCompatible||!regionCompatible){
+        await redis.hIncrBy("recover:secondary:stats","phone_index_collision",1);
+        console.log(JSON.stringify({
+          event:"secondary_phone_index_collision",
+          phone:normalizedPhone,
+          indexed_key:indexedKey,
+          indexed_name:prior.name||"",
+          discovered_name:lead.name||"",
+          indexed_region:prior.region||"",
+          discovered_region:lead.region||""
+        }));
+        return {accepted:false,reason:"phone_index_collision",key:indexedKey};
+      }
+    }
     const beforeEmails=Array.isArray(prior.emails)?prior.emails.length:0;
     const merged=mergeLeadRecords(prior,stored);
     const afterEmails=Array.isArray(merged.emails)?merged.emails.length:0;
