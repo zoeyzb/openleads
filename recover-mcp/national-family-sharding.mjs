@@ -78,7 +78,7 @@ function workerHash(value){
 
 export function queryPassForIndex(location,queryIndex,prefix='us-core-family-v4'){
   const desired=Number(queryIndex);
-  for(let nonce=0;nonce<500;nonce++){
+  for(let nonce=0;nonce<2000;nonce++){
     const pass=`${prefix}-q${desired}-n${nonce}`;
     if(workerHash(`${location}|${pass}`)%FAMILY_SHARDS.length===desired) return pass;
   }
