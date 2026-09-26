@@ -27,7 +27,7 @@ export function buildYieldStats(jobs=[]){
 
 export function familyYieldScore(key,stats={}){
   const s=stats[key]||{attempts:0,new:0,duplicates:0,positive:0};
-  const prior=PRIOR[key]||0;
+  const prior=PRIOR[key]||8;
   if(s.attempts<8) return prior;
   const avgNew=s.new/s.attempts;
   const positive=s.positive/s.attempts;
