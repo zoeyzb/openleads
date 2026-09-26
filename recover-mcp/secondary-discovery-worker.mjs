@@ -51,18 +51,15 @@ setInterval(()=>renewLeader().catch(()=>{}),15000).unref();
 async function ensurePhoneIndex(){
   const marker="recover:leadstore:phone-index:backfill:v1";
   if(await redis.exists(marker)) return;
-  let cursor="0",indexed=0;
-  do{
-    const page=await redis.hScan("recover:leadstore:qualified",cursor,{COUNT:500});
-    cursor=String(page?.cursor??"0");
-    const pairs=[];
-    for(const tuple of page?.tuples||[]){
-      let lead; try{lead=JSON.parse(tuple.value);}catch{continue;}
-      const phone=String(lead?.phone||"").replace(/\D/g,"").slice(-10);
-      if(phone){ pairs.push(phone,tuple.field); indexed++; }
-    }
-    if(pairs.length) await redis.hSet("recover:leadstore:phone-index",pairs);
-  }while(cursor!=="0");
+  let indexed=0,batch=[];
+  for await (const {field,value} of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
+    let lead; try{lead=JSON.parse(value);}catch{continue;}
+    const phone=String(lead?.phone||"").replace(/\D/g,"").slice(-10);
+    if(!phone) continue;
+    batch.push(phone,field); indexed++;
+    if(batch.length>=1000){ await redis.hSet("recover:leadstore:phone-index",batch); batch=[]; }
+  }
+  if(batch.length) await redis.hSet("recover:leadstore:phone-index",batch);
   await redis.set(marker,JSON.stringify({indexed,at:new Date().toISOString()}));
   console.log(JSON.stringify({event:"secondary_phone_index_backfill",indexed}));
 }
