@@ -1212,26 +1212,30 @@ if(String(process.env.ACQUISITION_WORKER_STANDBY||"").toLowerCase()==="true"){
 
 await recoverInterrupted();
 
-let queuePollCursor=0;
-while (!shuttingDown) {
-  try {
-    queuePollCursor++;
-    // The family controller maintains a dedicated city-priority queue. Older
-    // workers never consumed it, so city coverage accumulated indefinitely.
-    // Give it a bounded 1-in-3 preference without starving the general queue.
-    const queueOrder=(queuePollCursor%3===0)
-      ? [NY_PRIORITY_QUEUE,US_CITY_PRIORITY_QUEUE,ACTIVE_QUEUE]
-      : [NY_PRIORITY_QUEUE,ACTIVE_QUEUE,US_CITY_PRIORITY_QUEUE];
-    const item=await redis.brPop(queueOrder,5);
-    if (shuttingDown) break;
-    const id=item?.element||item;
-    if (!id) continue;
-    await processAcquisition(String(id));
-  } catch (error) {
-    console.error("Worker loop error",error);
-    await sleep(5000);
+const workerConcurrency=Math.max(1,Math.min(4,Number(process.env.ACQUISITION_WORKER_CONCURRENCY||2)));
+console.log("Acquisition worker concurrency",workerConcurrency);
+async function acquisitionWorkerLoop(slot){
+  let queuePollCursor=slot;
+  while (!shuttingDown) {
+    try {
+      queuePollCursor++;
+      // The family controller maintains a dedicated city-priority queue.
+      // Give it bounded capacity without starving general nationwide work.
+      const queueOrder=(queuePollCursor%3===0)
+        ? [NY_PRIORITY_QUEUE,US_CITY_PRIORITY_QUEUE,ACTIVE_QUEUE]
+        : [NY_PRIORITY_QUEUE,ACTIVE_QUEUE,US_CITY_PRIORITY_QUEUE];
+      const item=await redis.brPop(queueOrder,5);
+      if (shuttingDown) break;
+      const id=item?.element||item;
+      if (!id) continue;
+      await processAcquisition(String(id));
+    } catch (error) {
+      console.error("Worker loop error","worker slot",slot,error);
+      await sleep(5000);
+    }
   }
 }
+await Promise.all(Array.from({length:workerConcurrency},(_,slot)=>acquisitionWorkerLoop(slot+1)));
 
 
 try { await redis.quit(); } catch {}
