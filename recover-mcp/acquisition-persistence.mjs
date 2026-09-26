@@ -20,8 +20,10 @@ function normalizeEmails(value) {
 export function mergeLeadRecords(existing={}, incoming={}) {
   const merged={...existing,...incoming};
   merged.emails=[...new Set([
-    ...normalizeEmails(existing.emails||existing.email||""),
-    ...normalizeEmails(incoming.emails||incoming.email||"")
+    ...normalizeEmails(existing.emails||[]),
+    ...normalizeEmails(existing.email||""),
+    ...normalizeEmails(incoming.emails||[]),
+    ...normalizeEmails(incoming.email||"")
   ])];
   for (const field of ["phone","website","social_profile_url","owner_name","google_maps_url","place_id","cid","data_id","category","address","city","region"]) {
     if ((incoming[field]===undefined || incoming[field]===null || String(incoming[field]).trim()==="") && existing[field]) {
