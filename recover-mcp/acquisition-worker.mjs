@@ -1,6 +1,6 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
-import { matchesRequestedLocation, upsertQualifiedLeads } from "./acquisition-persistence.mjs";
+import { matchesRequestedLocation, mergeLeadRecords, upsertQualifiedLeads } from "./acquisition-persistence.mjs";
 import { markCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead, isCoreHomeServiceIndustry, isOwnedBusinessWebsite } from "./home-service-targeting.mjs";
 
@@ -355,6 +355,14 @@ function areaYieldField(job={}) {
     cityScopedPass ? normalizeText(job.query_family||"") : ""
   ].join("|");
 }
+function baseAreaYieldField(job={}) {
+  return [
+    normalizeText(job.partition_state||""),
+    normalizeText(job.partition_city||""),
+    normalizeText(job.partition_zip||job.source_zip||""),
+    ""
+  ].join("|");
+}
 function areaConsumeField(job={}) {
   return [
     normalizeText(job.partition_state||""),
@@ -372,24 +380,23 @@ function areaConsumeBudget(job={}) {
 async function preflightAreaSkip(redis,job) {
   if(String(job.search_profile||"")!=="core-home-service") return {skip:false};
   const consumeField=areaConsumeField(job);
-  const yieldField=[
-    normalizeText(job.partition_state||""),
-    normalizeText(job.partition_city||""),
-    normalizeText(job.partition_zip||job.source_zip||""),
-    ""
-  ].join("|");
-  const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
-    redis.hGet("recover:yield:area:attempts",yieldField),
-    redis.hGet("recover:yield:area:new",yieldField),
-    redis.hGet("recover:yield:area:duplicates",yieldField)
-  ]);
-  const attempts=Number(attemptsRaw||0);
-  const netNew=Number(newRaw||0);
-  const duplicates=Number(dupRaw||0);
-  const saturated=(attempts>=1&&netNew===0&&duplicates>=5) ||
-    (attempts>=2&&netNew===0&&duplicates>=2) ||
-    (attempts>=4&&netNew/Math.max(1,attempts)<0.5&&duplicates>netNew*3);
-  if(saturated) return {skip:true,reason:"area_saturated",attempts,netNew,duplicates};
+  const yieldFields=[...new Set([baseAreaYieldField(job),areaYieldField(job)])].filter(Boolean);
+  let saturation={attempts:0,netNew:0,duplicates:0,field:""};
+  for (const yieldField of yieldFields) {
+    const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
+      redis.hGet("recover:yield:area:attempts",yieldField),
+      redis.hGet("recover:yield:area:new",yieldField),
+      redis.hGet("recover:yield:area:duplicates",yieldField)
+    ]);
+    const attempts=Number(attemptsRaw||0);
+    const netNew=Number(newRaw||0);
+    const duplicates=Number(dupRaw||0);
+    const saturated=(attempts>=1&&netNew===0&&duplicates>=5) ||
+      (attempts>=2&&netNew===0&&duplicates>=2) ||
+      (attempts>=4&&netNew/Math.max(1,attempts)<0.5&&duplicates>netNew*3);
+    if (saturated) { saturation={attempts,netNew,duplicates,field:yieldField}; break; }
+  }
+  if(saturation.field) return {skip:true,reason:"area_saturated",...saturation};
 
   if(!job.area_budget_claimed){
     const slot=await redis.hIncrBy("recover:coverage:area:consumed:v1",consumeField,1);
@@ -405,17 +412,17 @@ async function preflightAreaSkip(redis,job) {
 }
 async function recordAreaYield(redis,job) {
   if (job.area_yield_recorded) return;
-  const field=areaYieldField(job);
-  if (!field || field==="||") return;
+  const fields=[...new Set([areaYieldField(job),baseAreaYieldField(job)])].filter(field=>field&&field!=="||"&&field!=="|||");
+  if (!fields.length) return;
   const netNew=Math.max(0,Number(job.permanent_new_count||0));
   const duplicates=Math.max(0,Number(job.permanent_duplicate_count||0));
-  await Promise.all([
+  await Promise.all(fields.flatMap(field=>[
     redis.hIncrBy("recover:yield:area:attempts",field,1),
     redis.hIncrBy("recover:yield:area:new",field,netNew),
     redis.hIncrBy("recover:yield:area:duplicates",field,duplicates),
-  ]);
+  ]));
   job.area_yield_recorded=true;
-  console.log("Acquisition area yield",job.id,"area",field,"global_new",netNew,"global_dup",duplicates);
+  console.log("Acquisition area yield",job.id,"areas",fields.join(","),"global_new",netNew,"global_dup",duplicates);
 }
 async function persistPermanentQualified(redis, job, leads) {
   if (!Array.isArray(leads) || !leads.length) return {unique:0,newAdded:0,duplicates:0};
@@ -455,7 +462,10 @@ async function persistPermanentQualified(redis, job, leads) {
   for(const row of rows){
     const {compact,preferred,phoneKey,sheetKey}=row;
     let key=preferred;
-    const existedInLeadstore=Boolean(existingByKey.get(preferred));
+    let existingLead=null;
+    const preferredRaw=existingByKey.get(preferred);
+    const existedInLeadstore=Boolean(preferredRaw);
+    if(preferredRaw){ try{ existingLead=JSON.parse(preferredRaw); }catch{} }
     const existedInSheet=Boolean(sheetKey && assignedSheetKeys.has(sheetKey));
     let existed=existedInLeadstore || existedInSheet;
     if(existedInSheet && !existedInLeadstore) historicalSheetDuplicates++;
@@ -478,6 +488,7 @@ async function persistPermanentQualified(redis, job, leads) {
           if(sameAddress||sameName){
             key=phoneKey;
             existed=true;
+            existingLead=legacy;
           }
         }catch{}
       }
@@ -488,8 +499,9 @@ async function persistPermanentQualified(redis, job, leads) {
     identities.push(key);
     if(existed) existingCount++; else newAdded++;
 
+    const mergedCompact=mergeLeadRecords(existingLead||{},compact);
     entries.push(key,JSON.stringify({
-      ...compact,
+      ...mergedCompact,
       acquisition_id:job.id,
       acquisition_location:job.location||"",
       industry:job.industry||"",
