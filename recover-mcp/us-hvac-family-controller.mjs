@@ -12,8 +12,8 @@ const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||'https://raw.githubuserconte
 const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||100000);
 const QUEUE_HIGH_WATER=Math.max(288,Number(process.env.US_FAMILY_QUEUE_HIGH_WATER||768));
 const SEED_BATCH_SIZE=Math.max(24,Number(process.env.US_FAMILY_SEED_BATCH_SIZE||128));
-const CITY_PRIORITY_TARGET=Math.max(16,Math.min(256,Number(process.env.US_FAMILY_CITY_PRIORITY_TARGET||96)));
-const COVERAGE_SHARE=Math.min(0.90,Math.max(0.20,Number(process.env.US_FAMILY_COVERAGE_SHARE||0.35)));
+const CITY_PRIORITY_TARGET=Math.max(8,Math.min(128,Number(process.env.US_FAMILY_CITY_PRIORITY_TARGET||32)));
+const COVERAGE_SHARE=Math.min(0.80,Math.max(0.05,Number(process.env.US_FAMILY_COVERAGE_SHARE||0.10)));
 const TARGET_PER_JOB=Math.max(8,Math.min(25,Number(process.env.US_FAMILY_TARGET_PER_JOB||18)));
 const DEPTH=Math.max(6,Math.min(12,Number(process.env.US_FAMILY_DEPTH||6)));
 const LOOP_MS=Math.max(3000,Number(process.env.US_FAMILY_CONTROLLER_LOOP_MS||5000));
@@ -96,7 +96,10 @@ console.log('US city-first adaptive family controller started',JSON.stringify({z
 
 async function pendingQueueDepth(){
   const [general,city]=await Promise.all([redis.lLen(ACTIVE_QUEUE),redis.lLen(CITY_PRIORITY_QUEUE)]);
-  return {general,city,total:general+city};
+  // Legacy city-priority backlog must not block fresh high-yield discovery.
+  // Only the configured city floor participates in backpressure.
+  const effectiveCity=Math.min(city,CITY_PRIORITY_TARGET);
+  return {general,city,total:general+city,effectiveTotal:general+effectiveCity};
 }
 
 async function refreshYieldStats(){
@@ -237,7 +240,7 @@ while(true){
     if(queue.city<CITY_PRIORITY_TARGET){
       await maintainCityPriorityFloor(queue,ranked);
     }
-    if(queue.total>=QUEUE_HIGH_WATER){
+    if(queue.effectiveTotal>=QUEUE_HIGH_WATER){
       console.log(JSON.stringify({event:'family_backpressure',scoped,queue,ranked,yieldStats,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
       await new Promise(r=>setTimeout(r,LOOP_MS));
       continue;
@@ -245,7 +248,7 @@ while(true){
 
     const schedule=buildCoverageYieldSchedule(familyKeys,ranked,Math.max(SEED_BATCH_SIZE*2,familyKeys.length),COVERAGE_SHARE);
     let seeded=0,checked=0,saturatedSkipped=0,coverageSeeded=0,yieldSeeded=0;
-    while(seeded<SEED_BATCH_SIZE && (await pendingQueueDepth()).total<QUEUE_HIGH_WATER && !allWorkExhausted()){
+    while(seeded<SEED_BATCH_SIZE && (await pendingQueueDepth()).effectiveTotal<QUEUE_HIGH_WATER && !allWorkExhausted()){
       const slot=schedule[scheduleCursor%schedule.length];
       scheduleCursor++;
       const result=await enqueueNext(slot.mode,slot.family);
