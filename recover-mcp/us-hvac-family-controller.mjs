@@ -94,6 +94,9 @@ let scheduleCursor=Math.max(0,Number(await redis.hGet(CONTROLLER_KEY,'schedule_c
 let coverageFloorCursor=Math.max(0,Number(await redis.hGet(CONTROLLER_KEY,'coverage_floor_cursor')||0));
 let yieldStats={};
 let lastYieldRefresh=0;
+let lastQueueCompaction=0;
+const QUEUE_COMPACT_INTERVAL_MS=Math.max(15000,Number(process.env.US_FAMILY_QUEUE_COMPACT_INTERVAL_MS||30000));
+const QUEUE_COMPACT_SCAN_LIMIT=Math.max(50,Math.min(500,Number(process.env.US_FAMILY_QUEUE_COMPACT_SCAN_LIMIT||300)));
 
 console.log('US city-first adaptive family controller started',JSON.stringify({zipAreas:sourceAreas.length,uniqueCities,families:FAMILY_SHARDS.length,totalWorkUnits,coverageCursors,yieldCursors,coverageShare:COVERAGE_SHARE,cityPriorityTarget:CITY_PRIORITY_TARGET,queueHighWater:QUEUE_HIGH_WATER,seedBatchSize:SEED_BATCH_SIZE,target:TARGET_TOTAL,coverageQueryMode:'city-state'}));
 
@@ -222,6 +225,48 @@ async function areaIsSaturated(area,family={}){
   return false;
 }
 
+async function compactSaturatedQueuedJobs(){
+  if(Date.now()-lastQueueCompaction<QUEUE_COMPACT_INTERVAL_MS) return {scanned:0,removed:0};
+  lastQueueCompaction=Date.now();
+  let scanned=0,removed=0;
+  for(const queueKey of [CITY_PRIORITY_QUEUE,ACTIVE_QUEUE]){
+    const ids=await redis.lRange(queueKey,0,QUEUE_COMPACT_SCAN_LIMIT-1);
+    if(!ids.length) continue;
+    const payloads=await redis.mGet(ids.map(id=>`recover:acq:${id}`));
+    for(let i=0;i<ids.length;i++){
+      const id=ids[i],payload=payloads[i];
+      if(!payload) continue;
+      let job; try{job=JSON.parse(payload);}catch{continue;}
+      if(job?.status!=='queued' || job?.source!=='us_core_family_partition_controller_v5') continue;
+      scanned++;
+      const family=familyByKey.get(String(job.service_family||''))||{};
+      const area={
+        state:job.partition_state||'',
+        city:job.partition_city||'',
+        zip:job.partition_zip||job.source_zip||'',
+        population:Number(job.source_population||0)
+      };
+      if(!(await areaIsSaturated(area,family))) continue;
+
+      // Remove first. If a worker already popped the ID, lRem returns 0 and
+      // we leave job state untouched to avoid racing an in-flight worker.
+      const removedFromQueue=Number(await redis.lRem(queueKey,1,id)||0);
+      if(removedFromQueue<1) continue;
+      job.status='partial_complete';
+      job.phase='complete';
+      job.reason='area_saturated_queue_prune';
+      job.completed_at=new Date().toISOString();
+      job.updated_at=job.completed_at;
+      await redis.set(`recover:acq:${id}`,JSON.stringify(job),{EX:TTL});
+      removed++;
+    }
+  }
+  if(scanned||removed){
+    console.log(JSON.stringify({event:'family_queue_compaction',scanned,removed,queueHighWater:QUEUE_HIGH_WATER}));
+  }
+  return {scanned,removed};
+}
+
 async function enqueueNext(mode,familyKey){
   const family=familyByKey.get(familyKey);
   if(!family) return {seeded:false,checked:0,exhausted:true};
@@ -281,13 +326,14 @@ while(true){
       continue;
     }
     await refreshYieldStats();
+    const compacted=await compactSaturatedQueuedJobs();
     const ranked=rankFamilies(familyKeys,yieldStats);
     const queue=await pendingQueueDepth();
     if(queue.city<CITY_PRIORITY_TARGET){
       await maintainCityPriorityFloor(queue,ranked);
     }
     if(queue.effectiveTotal>=QUEUE_HIGH_WATER){
-      console.log(JSON.stringify({event:'family_backpressure',scoped,queue,ranked,yieldStats,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
+      console.log(JSON.stringify({event:'family_backpressure',scoped,queue,compacted,ranked,yieldStats,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
       await new Promise(r=>setTimeout(r,LOOP_MS));
       continue;
     }
