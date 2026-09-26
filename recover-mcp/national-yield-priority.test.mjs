@@ -63,7 +63,7 @@ test('coverage lane round-robins every family rather than starving low-yield fam
   assert.ok(coverage.includes('duct'));
 });
 
-test('city-first coverage visits every city before secondary ZIPs in a city',()=>{
+test('city-first coverage schedules exactly one representative ZIP per city',()=>{
   const areas=[
     {zip:'90001',city:'Los Angeles',state:'CA',population:50000},
     {zip:'90002',city:'Los Angeles',state:'CA',population:40000},
@@ -75,7 +75,8 @@ test('city-first coverage visits every city before secondary ZIPs in a city',()=
   const out=buildCityFirstCoverageAreas(areas);
   const firstFour=new Set(out.slice(0,4).map(x=>`${x.state}:${x.city}`));
   assert.equal(firstFour.size,4);
-  assert.equal(out.length,6);
+  assert.equal(out.length,4);
+  assert.equal(new Set(out.map(x=>`${x.state}:${x.city}`)).size,out.length);
 });
 
 test('coverage mode searches broad city/state while yield mode keeps ZIP precision',()=>{
