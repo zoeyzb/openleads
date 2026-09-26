@@ -10,7 +10,7 @@ const MAPS_BASE_URLS = String(process.env.MAPS_BASE_URLS || MAPS_BASE_URL)
   .split(",").map(x=>x.trim().replace(/\/$/,"")).filter(Boolean);
 const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
-const JOB_TTL = Number(process.env.ACQUISITION_TTL_SECONDS || 604800);
+const JOB_TTL = Number(process.env.ACQUISITION_TTL_SECONDS || 604800);\nconst RAW_TTL_SECONDS = Math.max(300, Number(process.env.ACQUISITION_RAW_TTL_SECONDS || 7200));\nconst RESULT_TTL_SECONDS = Math.max(3600, Number(process.env.ACQUISITION_RESULT_TTL_SECONDS || 86400));
 const POLL_MS = Number(process.env.ACQUISITION_POLL_MS || 10000);
 const LEASE_SECONDS = Number(process.env.ACQUISITION_LEASE_SECONDS || 180);
 const RETRY_ATTEMPTS = Number(process.env.ACQUISITION_RETRY_ATTEMPTS || 3);
@@ -638,13 +638,20 @@ async function loadList(key) {
   const rows=await redis.lRange(key,0,-1);
   return rows.map(x=>{try{return JSON.parse(x)}catch{return null}}).filter(Boolean);
 }
-async function replaceList(key,values) {
+async function replaceList(key,values,ttlSeconds) {
   await redis.del(key);
   for (let i=0;i<values.length;i+=200) {
     const chunk=values.slice(i,i+200).map(x=>JSON.stringify(x));
     if (chunk.length) await redis.rPush(key,chunk);
   }
-  await redis.expire(key,JOB_TTL);
+  if (values.length) await redis.expire(key,ttlSeconds);
+}
+async function deleteRawForJob(id) {
+  try {
+    await redis.del(rawKey(id));
+  } catch (error) {
+    console.warn("Acquisition raw cleanup failed", id, error.message);
+  }
 }
 const NY_PRIORITY_QUEUE="recover:acquisition:queue:ny-priority";
 const ACTIVE_QUEUE="recover:acquisition:queue";
@@ -931,7 +938,7 @@ async function processAcquisition(id) {
       console.log("Acquisition CSV parsed", id, "rows", roundRows.length);
       allRaw.push(...roundRows);
       allRaw=dedupeRecords(allRaw);
-      await replaceList(rawKey(id),allRaw);
+      await replaceList(rawKey(id),allRaw,RAW_TTL_SECONDS);
 
       job.raw_count=roundRows.length+(job.raw_count||0);
       job.unique_count=allRaw.length;
@@ -1002,7 +1009,7 @@ async function processAcquisition(id) {
       const compactQualified=leads.map(compactLead);
       const existingPersisted=await loadList(resultsKey(id));
       const persisted=upsertQualifiedLeads(existingPersisted,compactQualified);
-      await replaceList(resultsKey(id),persisted);
+      await replaceList(resultsKey(id),persisted,RESULT_TTL_SECONDS);
       const permanentStats=await persistPermanentQualified(redis, job, leads);
       await recordQueryYield(redis,job.current_query_families||[job.current_query],permanentStats,job.id,job.coverage_pass);
       job.stored_count=persisted.length;
@@ -1017,7 +1024,7 @@ async function processAcquisition(id) {
 
       if (leads.length>=Number(job.target)) {
         const finalLeads=leads.slice(0,Number(job.target)).map(compactLead);
-        await replaceList(resultsKey(id),finalLeads);
+        await replaceList(resultsKey(id),finalLeads,RESULT_TTL_SECONDS);
         job.status="complete";
         job.phase="complete";
         job.stored_count=finalLeads.length;
@@ -1025,6 +1032,7 @@ async function processAcquisition(id) {
         await recordAreaYield(redis,job);
         await saveJob(job);
         await markCoverage(redis, job, "target_reached", {reason:"target_reached",permanent_new_count:job.permanent_new_count||0,permanent_duplicate_count:job.permanent_duplicate_count||0});
+        await deleteRawForJob(id);
         console.log("Acquisition complete", id, "stored", finalLeads.length);
         return;
       }
@@ -1039,6 +1047,7 @@ async function processAcquisition(id) {
         await recordAreaYield(redis,job);
         await saveJob(job);
         await markCoverage(redis, job, "exhausted", {reason:"stagnant_round_exit",permanent_new_count:job.permanent_new_count||0,permanent_duplicate_count:job.permanent_duplicate_count||0});
+        await deleteRawForJob(id);
         console.log("Acquisition early exit stagnant", id, "stored", job.stored_count, "after_round", round+1);
         return;
       }
@@ -1058,7 +1067,7 @@ async function processAcquisition(id) {
 
     const existingPersisted=await loadList(resultsKey(id));
     const persisted=upsertQualifiedLeads(existingPersisted,leads);
-    await replaceList(resultsKey(id),persisted);
+    await replaceList(resultsKey(id),persisted,RESULT_TTL_SECONDS);
     job.status="partial_complete";
     job.phase="complete";
     job.qualified_count=leads.length;
@@ -1068,6 +1077,7 @@ async function processAcquisition(id) {
     await recordAreaYield(redis,job);
     await saveJob(job);
     await markCoverage(redis, job, "exhausted", {reason:"max_rounds_reached",permanent_new_count:job.permanent_new_count||0,permanent_duplicate_count:job.permanent_duplicate_count||0});
+    await deleteRawForJob(id);
     console.log("Acquisition partial_complete", id, "stored", leads.length);
   } catch (error) {
     if (shuttingDown || String(error?.message||error).includes("worker shutting down")) {
