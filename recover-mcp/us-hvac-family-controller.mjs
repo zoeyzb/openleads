@@ -114,7 +114,9 @@ async function refreshYieldStats(){
       if(!payload) continue;
       try{
         const job=JSON.parse(payload);
-        if(String(job?.search_profile||'')==='core-home-service' && String(job?.service_family||'')) jobs.push(job);
+        if(String(job?.search_profile||'')==='core-home-service' &&
+           String(job?.service_family||'') &&
+           Number(job?.yield_schema_version||0)>=2) jobs.push(job);
       }catch{}
     }
     yieldStats=buildYieldStats(jobs);
