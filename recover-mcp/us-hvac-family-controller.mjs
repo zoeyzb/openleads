@@ -129,7 +129,7 @@ async function enqueueUnit(area,family,mode){
   const job={
     id,batch_id:BATCH_ID,industry:'HVAC',search_profile:'core-home-service',coverage_pass:coveragePass,
     partition_state:area.state,partition_city:area.city,partition_zip:area.zip,
-    service_family:family.key,service_query_index:family.queryIndex,service_query_label:family.label,
+    service_family:family.key,service_query_index:family.queryIndex,service_query_label:family.label,query_family:family.label,
     location:searchLocation,target:TARGET_PER_JOB,min_score:30,
     require_phone:true,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,
     max_rounds:1,depth:DEPTH,status:'queued',phase:'queued',round:0,rounds_completed:0,
