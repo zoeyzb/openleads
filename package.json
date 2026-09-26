@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node recover-mcp/server.mjs",
     "worker": "node recover-mcp/acquisition-worker-runtime.mjs",
-    "cleanup:acquisition-redis": "node recover-mcp/cleanup-acquisition-redis.mjs"
+    "cleanup:acquisition-redis": "node recover-mcp/cleanup-acquisition-redis.mjs",
+    "test:source-adapters": "node --test recover-mcp/external-source-adapters.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "latest",
