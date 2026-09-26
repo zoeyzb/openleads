@@ -176,13 +176,17 @@ export function patchAcquisitionWorkerSource(source) {
   const timeoutCooldownMatches = source.split(LEGACY_TIMEOUT_COOLDOWN).length - 1;
   const locationMatches = source.split(LEGACY_LOCATION_MATCH).length - 1;
   const loopMatches = source.split(LEGACY_WORKER_LOOP).length - 1;
+  const hasNativeConcurrentPriorityLoop = source.includes("async function acquisitionWorkerLoop(slot)") &&
+    source.includes("US_CITY_PRIORITY_QUEUE");
   if (waitMatches !== 1) throw new Error(`expected exactly one legacy fast Maps wait expression, found ${waitMatches}`);
   if (cooldownMatches !== 1) throw new Error(`expected exactly one legacy Maps cooldown block, found ${cooldownMatches}`);
   if (doneMatches !== 1) throw new Error(`expected exactly one Maps completion marker, found ${doneMatches}`);
   if (statusFailureMatches !== 1) throw new Error(`expected exactly one Maps status failure block, found ${statusFailureMatches}`);
   if (timeoutCooldownMatches !== 1) throw new Error(`expected exactly one timeout cooldown marker, found ${timeoutCooldownMatches}`);
   if (locationMatches !== 1) throw new Error(`expected exactly one acquisition location matcher, found ${locationMatches}`);
-  if (loopMatches !== 1) throw new Error(`expected exactly one legacy worker loop, found ${loopMatches}`);
+  if (loopMatches !== 1 && !(loopMatches===0 && hasNativeConcurrentPriorityLoop)) {
+    throw new Error(`expected legacy worker loop or native concurrent priority loop, found ${loopMatches}`);
+  }
   const resilient = source
     .replace(LEGACY_FAST_WAIT, RESILIENT_FAST_WAIT)
     .replace(LEGACY_LANE_COOLDOWN, ADAPTIVE_LANE_COOLDOWN)
