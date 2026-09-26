@@ -12,14 +12,14 @@ test('coverage pass deterministically selects the requested worker query index',
   const location='10001 New York, NY';
   for(const family of FAMILY_SHARDS){
     const pass=queryPassForIndex(location,family.queryIndex,'v4');
-    assert.equal(workerHash(`${location}|${pass}`)%20,family.queryIndex);
+    assert.equal(workerHash(`${location}|${pass}`)%FAMILY_SHARDS.length,family.queryIndex);
   }
 });
 
 test('uses every worker home-service query variant exactly once',()=>{
-  assert.equal(FAMILY_SHARDS.length,20);
-  assert.deepEqual([...FAMILY_SHARDS.map(x=>x.queryIndex)].sort((a,b)=>a-b),Array.from({length:20},(_,i)=>i));
-  assert.equal(new Set(FAMILY_SHARDS.map(x=>x.key)).size,20);
+  assert.equal(FAMILY_SHARDS.length,69);
+  assert.deepEqual([...FAMILY_SHARDS.map(x=>x.queryIndex)].sort((a,b)=>a-b),Array.from({length:69},(_,i)=>i));
+  assert.equal(new Set(FAMILY_SHARDS.map(x=>x.key)).size,69);
 });
 
 test('cursor expands each ZIP into every service-family shard before advancing ZIP',()=>{
