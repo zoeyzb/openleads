@@ -5,6 +5,7 @@ const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
 const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const ASSIGN_HASH = "recover:sheet:assigned:v1";
 const COUNT_HASH = "recover:sheet:counts:v1";
+const EMAIL_SYNC_HASH = "recover:sheet:email-synced:v1";
 
 const clean = (v) => String(v ?? "").trim();
 const digits = (v) => clean(v).replace(/\D+/g, "");
@@ -135,7 +136,24 @@ function createSheetsClient(serviceAccount) {
     };
   }
 
-  return { appendRows, readIdentityColumns };
+  async function updateEmailCells(spreadsheetId, tabName, updates) {
+    for (let i = 0; i < updates.length; i += 500) {
+      const chunk = updates.slice(i, i + 500);
+      await request(spreadsheetId, "/values:batchUpdate", {
+        method: "POST",
+        body: {
+          valueInputOption: "RAW",
+          data: chunk.map(({ row, email }) => ({
+            range: `${quoteTab(tabName)}!J${row}`,
+            majorDimension: "ROWS",
+            values: [[email]],
+          })),
+        },
+      });
+    }
+  }
+
+  return { appendRows, readIdentityColumns, updateEmailCells };
 }
 
 function leadEmails(lead) {
@@ -286,8 +304,36 @@ export function startQualifiedGoogleSheetSync({
       const redis = await getRedis();
       await bootstrapAssignments({ redis, client, slots });
       const assigned = await redis.hGetAll(ASSIGN_HASH);
+      const emailSynced = await redis.hGetAll(EMAIL_SYNC_HASH);
       const counts = await loadCounts(redis, slots);
       const leads = await getQualifiedLeads(redis);
+      const slotByKey = new Map(slots.map(slot => [slot.key, slot]));
+
+      const emailUpdatesBySlot = new Map();
+      const emailSyncWrites = {};
+      for (const lead of leads) {
+        const identity = leadIdentity(lead);
+        const email = leadEmails(lead)[0] || "";
+        if (!email || emailSynced?.[identity] === email || !assigned?.[identity]) continue;
+        let assignment;
+        try { assignment = JSON.parse(assigned[identity]); } catch { continue; }
+        const slot = slotByKey.get(assignment?.key);
+        const row = Number(assignment?.row || 0);
+        if (!slot || row < 7) continue;
+        const list = emailUpdatesBySlot.get(slot.key) || [];
+        list.push({ row, email });
+        emailUpdatesBySlot.set(slot.key, list);
+        emailSyncWrites[identity] = email;
+      }
+
+      let emailUpdated = 0;
+      for (const [key, updates] of emailUpdatesBySlot) {
+        const slot = slotByKey.get(key);
+        if (!slot || !updates.length) continue;
+        await client.updateEmailCells(slot.spreadsheetId, slot.tabName, updates);
+        emailUpdated += updates.length;
+      }
+      if (Object.keys(emailSyncWrites).length) await redis.hSet(EMAIL_SYNC_HASH, emailSyncWrites);
 
       const unassigned = [];
       for (const lead of leads) {
@@ -324,6 +370,7 @@ export function startQualifiedGoogleSheetSync({
       console.log(JSON.stringify({
         event: "google_sheet_direct_sync",
         qualified_rows: leads.length,
+        email_updated: emailUpdated,
         unassigned: unassigned.length,
         appended: cursor,
         overflow: Math.max(0, unassigned.length - cursor),
