@@ -1,6 +1,7 @@
 import { createClient } from "redis";
 import { isCoreHomeServiceLead, isOwnedBusinessWebsite } from "./home-service-targeting.mjs";
 import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
+import { mergeLeadRecords } from "./acquisition-persistence.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||"";
 const YOZH_BASE_URL=(process.env.YOZH_BASE_URL||"").replace(/\/$/,"");
@@ -46,6 +47,26 @@ if(!await acquireLeader()){
   }
 }
 setInterval(()=>renewLeader().catch(()=>{}),15000).unref();
+
+async function ensurePhoneIndex(){
+  const marker="recover:leadstore:phone-index:backfill:v1";
+  if(await redis.exists(marker)) return;
+  let cursor="0",indexed=0;
+  do{
+    const page=await redis.hScan("recover:leadstore:qualified",cursor,{COUNT:500});
+    cursor=String(page?.cursor??"0");
+    const pairs=[];
+    for(const tuple of page?.tuples||[]){
+      let lead; try{lead=JSON.parse(tuple.value);}catch{continue;}
+      const phone=String(lead?.phone||"").replace(/\D/g,"").slice(-10);
+      if(phone){ pairs.push(phone,tuple.field); indexed++; }
+    }
+    if(pairs.length) await redis.hSet("recover:leadstore:phone-index",pairs);
+  }while(cursor!=="0");
+  await redis.set(marker,JSON.stringify({indexed,at:new Date().toISOString()}));
+  console.log(JSON.stringify({event:"secondary_phone_index_backfill",indexed}));
+}
+await ensurePhoneIndex();
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function normalizeText(v=""){return String(v||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
@@ -165,12 +186,29 @@ async function saveCandidate({result,city,state,family,domain}){
   };
   if(!lead.name||!isCoreHomeServiceLead(lead)) return {accepted:false,reason:"industry"};
   const key=permanentKey(lead);
-  const existing=await redis.hGet("recover:leadstore:qualified",key);
-  if(existing) return {accepted:false,reason:"duplicate"};
+  const normalizedPhone=normalizePhone(lead.phone||"");
+  const indexedKey=normalizedPhone?String(await redis.hGet("recover:leadstore:phone-index",normalizedPhone)||""):"";
+  let canonicalKey=indexedKey||key;
+  let existing=await redis.hGet("recover:leadstore:qualified",canonicalKey);
+  if(!existing&&canonicalKey!==key){ canonicalKey=key; existing=await redis.hGet("recover:leadstore:qualified",key); }
   const stored={...lead,industry:"HVAC",campaign_scope:campaignLeadSetKey(PROFILE_JOB),persisted_at:new Date().toISOString(),qualification:{source:"secondary_directory_search",strict_core_home_service:true,no_owned_website:true,contactable:true}};
+  if(existing){
+    let prior={}; try{prior=JSON.parse(existing)||{};}catch{}
+    const beforeEmails=Array.isArray(prior.emails)?prior.emails.length:0;
+    const merged=mergeLeadRecords(prior,stored);
+    const afterEmails=Array.isArray(merged.emails)?merged.emails.length:0;
+    await redis.hSet("recover:leadstore:qualified",canonicalKey,JSON.stringify(merged));
+    if(normalizedPhone) await redis.hSet("recover:leadstore:phone-index",normalizedPhone,canonicalKey);
+    await redis.sAdd(campaignLeadSetKey(PROFILE_JOB),canonicalKey);
+    await redis.hIncrBy("recover:secondary:stats","duplicates_enriched",1);
+    if(afterEmails>beforeEmails) await redis.hIncrBy("recover:secondary:stats","email_enriched",afterEmails-beforeEmails);
+    return {accepted:false,reason:afterEmails>beforeEmails?"duplicate_enriched_email":"duplicate_enriched",key:canonicalKey};
+  }
   await redis.hSet("recover:leadstore:qualified",key,JSON.stringify(stored));
+  if(normalizedPhone) await redis.hSet("recover:leadstore:phone-index",normalizedPhone,key);
   await redis.sAdd(campaignLeadSetKey(PROFILE_JOB),key);
   await redis.hIncrBy("recover:secondary:stats","new_qualified",1);
+  if(emails.length) await redis.hIncrBy("recover:secondary:stats","email_enriched",emails.length);
   return {accepted:true,key};
 }
 
