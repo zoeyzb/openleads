@@ -1,4 +1,6 @@
 import { createSign } from "node:crypto";
+import { mergeLeadRecords } from "./acquisition-persistence.mjs";
+import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
 
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
@@ -6,6 +8,17 @@ const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const ASSIGN_HASH = "recover:sheet:assigned:v1";
 const COUNT_HASH = "recover:sheet:counts:v1";
 const EMAIL_SYNC_HASH = "recover:sheet:email-synced:v2";
+const SHEET_RESTORE_CURSOR_HASH = "recover:sheet:leadstore-restore:v1";
+const SHEET_RESTORE_BATCH_ROWS = Math.max(500, Math.min(10000, Number(process.env.SHEET_RESTORE_BATCH_ROWS || 5000)));
+const RESTORE_PROFILE = {
+  industry: "HVAC",
+  require_no_website: true,
+  require_contact: true,
+  require_phone: true,
+  require_email: false,
+  include_no_website: true,
+  min_score: 30,
+};
 
 const clean = (v) => String(v ?? "").trim();
 const digits = (v) => clean(v).replace(/\D+/g, "");
@@ -136,6 +149,16 @@ function createSheetsClient(serviceAccount) {
     };
   }
 
+  async function readLeadRows(spreadsheetId, tabName, startRow, endRow) {
+    if (endRow < startRow) return [];
+    const range = `${quoteTab(tabName)}!A${startRow}:Y${endRow}`;
+    const json = await request(
+      spreadsheetId,
+      `/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`
+    );
+    return Array.isArray(json?.values) ? json.values : [];
+  }
+
   async function updateEmailCells(spreadsheetId, tabName, updates) {
     for (let i = 0; i < updates.length; i += 500) {
       const chunk = updates.slice(i, i + 500);
@@ -159,7 +182,7 @@ function createSheetsClient(serviceAccount) {
     }
   }
 
-  return { appendRows, readIdentityColumns, updateEmailCells };
+  return { appendRows, readIdentityColumns, readLeadRows, updateEmailCells };
 }
 
 function leadEmails(lead) {
@@ -213,6 +236,142 @@ function sheetRow(lead) {
     placeId,
     clean(lead?.website),
   ];
+}
+
+function normalizeLeadText(value = "") {
+  return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function validEmails(value = "") {
+  const parts = Array.isArray(value) ? value : clean(value).split(/[;,\s]+/);
+  return [...new Set(parts
+    .map((x) => clean(x).toLowerCase())
+    .filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)))];
+}
+
+function restoredLeadFromSheetRow(row = []) {
+  const phone = digits(row[8]);
+  const emails = validEmails(row[9]);
+  const placeId = clean(row[23]);
+  const website = clean(row[24]);
+  return {
+    name: clean(row[1]),
+    owner_name: clean(row[2]),
+    category: clean(row[3]),
+    address: clean(row[4]),
+    city: clean(row[5]),
+    region: clean(row[6]),
+    postal_code: clean(row[7]),
+    phone,
+    emails,
+    google_maps_url: clean(row[10]),
+    review_rating: clean(row[11]),
+    review_count: clean(row[12]),
+    acquisition_id: clean(row[22]),
+    place_id: placeId,
+    website,
+    industry: "HVAC",
+    campaign_scope: campaignLeadSetKey(RESTORE_PROFILE),
+    source: "google_sheet_historical_restore",
+    persisted_at: new Date().toISOString(),
+    qualification: {
+      source: "google_sheet_historical_restore",
+      strict_core_home_service: true,
+      no_owned_website: !website,
+      contactable: Boolean(phone || emails.length),
+      historical_restore: true,
+    },
+  };
+}
+
+function restoredLeadKey(lead = {}) {
+  const placeId = clean(lead.place_id);
+  if (placeId) return `place:${placeId}`;
+  const address = normalizeLeadText(lead.address);
+  const name = normalizeLeadText(lead.name);
+  if (address && name) return `nameaddr:${normalizeLeadText(`${lead.name}|${lead.address}`)}`;
+  const phone = digits(lead.phone);
+  if (phone) return `phone:${phone.slice(-10)}`;
+  return "";
+}
+
+async function restoreHistoricalSheetLeads({ redis, client, slots, counts }) {
+  const scopeSet = campaignLeadSetKey(RESTORE_PROFILE);
+  const cursors = await redis.hGetAll(SHEET_RESTORE_CURSOR_HASH);
+  let scanned = 0, restored = 0, merged = 0, emailsRecovered = 0, invalid = 0;
+  const progress = [];
+
+  for (const slot of slots) {
+    const total = Math.max(0, Number(counts.get(slot.key) || 0));
+    if (!total) continue;
+
+    const offset = Math.max(0, Number(cursors?.[slot.key] || 0));
+    if (offset >= total) continue;
+
+    const take = Math.min(SHEET_RESTORE_BATCH_ROWS, total - offset);
+    const startRow = 7 + offset;
+    const endRow = startRow + take - 1;
+    const rows = await client.readLeadRows(slot.spreadsheetId, slot.tabName, startRow, endRow);
+    if (!rows.length) {
+      await redis.hSet(SHEET_RESTORE_CURSOR_HASH, slot.key, String(total));
+      progress.push({ tab: slot.tabName, offset, total, read: 0, done: true });
+      continue;
+    }
+
+    const parsed = [];
+    for (const row of rows) {
+      scanned++;
+      const lead = restoredLeadFromSheetRow(row);
+      const key = restoredLeadKey(lead);
+      // Active Recover qualified sheets are phone-first/no-website inventory.
+      // Do not resurrect rows that no longer satisfy the campaign's minimum
+      // contactability or that have become owned-website leads.
+      if (!key || !lead.name || !lead.phone || lead.website) {
+        invalid++;
+        continue;
+      }
+      parsed.push({ key, lead });
+    }
+
+    if (parsed.length) {
+      const keys = parsed.map((x) => x.key);
+      const existing = await redis.hmGet("recover:leadstore:qualified", keys);
+      const hsetEntries = [];
+      const phoneIndexEntries = [];
+      const identities = [];
+      for (let i = 0; i < parsed.length; i++) {
+        const { key, lead } = parsed[i];
+        let prior = {};
+        if (existing?.[i]) {
+          try { prior = JSON.parse(existing[i]) || {}; } catch {}
+        }
+        const beforeEmails = validEmails(prior?.emails || prior?.email || "");
+        const combined = mergeLeadRecords(prior, lead);
+        const afterEmails = validEmails(combined?.emails || combined?.email || "");
+        if (afterEmails.length > beforeEmails.length) emailsRecovered += afterEmails.length - beforeEmails.length;
+        if (existing?.[i]) merged++; else restored++;
+        hsetEntries.push(key, JSON.stringify(combined));
+        identities.push(key);
+        const phone = digits(combined.phone).slice(-10);
+        if (phone) phoneIndexEntries.push(phone, key);
+      }
+      if (hsetEntries.length) await redis.hSet("recover:leadstore:qualified", hsetEntries);
+      if (phoneIndexEntries.length) await redis.hSet("recover:leadstore:phone-index", phoneIndexEntries);
+      if (identities.length) await redis.sAdd(scopeSet, identities);
+    }
+
+    const nextOffset = Math.min(total, offset + rows.length);
+    await redis.hSet(SHEET_RESTORE_CURSOR_HASH, slot.key, String(nextOffset));
+    progress.push({ tab: slot.tabName, offset: nextOffset, total, read: rows.length, done: nextOffset >= total });
+  }
+
+  if (scanned || restored || merged || emailsRecovered) {
+    console.log(JSON.stringify({
+      event: "google_sheet_historical_restore",
+      scanned, restored, merged, emailsRecovered, invalid, progress,
+    }));
+  }
+  return { scanned, restored, merged, emailsRecovered, invalid, progress };
 }
 
 function targetSlots(targets) {
@@ -312,6 +471,7 @@ export function startQualifiedGoogleSheetSync({
       const assigned = await redis.hGetAll(ASSIGN_HASH);
       const emailSynced = await redis.hGetAll(EMAIL_SYNC_HASH);
       const counts = await loadCounts(redis, slots);
+      const restore = await restoreHistoricalSheetLeads({ redis, client, slots, counts });
       const leads = await getQualifiedLeads(redis);
       const slotByKey = new Map(slots.map(slot => [slot.key, slot]));
 
@@ -377,6 +537,9 @@ export function startQualifiedGoogleSheetSync({
       console.log(JSON.stringify({
         event: "google_sheet_direct_sync",
         qualified_rows: leads.length,
+        restored_from_sheet: restore.restored,
+        merged_from_sheet: restore.merged,
+        emails_recovered_from_sheet: restore.emailsRecovered,
         email_updated: emailUpdated,
         unassigned: unassigned.length,
         appended: cursor,
