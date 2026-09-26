@@ -3519,7 +3519,7 @@ const httpServer = createHttpServer((req, res) => {
       try {
         const redis = await getAcquisitionRedis();
         const values = await redis.hVals("recover:leadstore:qualified");
-        let parsed=0, noWebsite=0, contactable=0, noWebsiteContactable=0, coreNoWebsiteContactable=0, withWebsite=0;
+        let parsed=0, noWebsite=0, contactable=0, noWebsiteContactable=0, coreNoWebsiteContactable=0, withWebsite=0, withEmail=0, noWebsiteWithEmail=0;
         const placeIds=new Set(), phones=new Set();
         let duplicatePlaceIds=0, duplicatePhones=0;
         for (const value of values) {
@@ -3532,6 +3532,7 @@ const httpServer = createHttpServer((req, res) => {
           const hasContact=Boolean(phone)||emails.length>0;
           const nw=!website;
           if(nw) noWebsite++; else withWebsite++;
+          if(emails.length>0){ withEmail++; if(nw) noWebsiteWithEmail++; }
           if(hasContact) contactable++;
           if(nw&&hasContact) noWebsiteContactable++;
           if(nw&&hasContact&&isCoreHomeServiceLead(lead)) coreNoWebsiteContactable++;
@@ -3546,6 +3547,8 @@ const httpServer = createHttpServer((req, res) => {
           parsed,
           no_website:noWebsite,
           with_website:withWebsite,
+          with_email:withEmail,
+          no_website_with_email:noWebsiteWithEmail,
           contactable,
           no_website_contactable:noWebsiteContactable,
           core_home_service_no_website_contactable:coreNoWebsiteContactable,
