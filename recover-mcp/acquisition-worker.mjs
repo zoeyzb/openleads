@@ -355,6 +355,54 @@ function areaYieldField(job={}) {
     cityScopedPass ? normalizeText(job.query_family||"") : ""
   ].join("|");
 }
+function areaConsumeField(job={}) {
+  return [
+    normalizeText(job.partition_state||""),
+    normalizeText(job.partition_city||""),
+    normalizeText(job.partition_zip||job.source_zip||"")
+  ].join("|");
+}
+function areaConsumeBudget(job={}) {
+  const population=Math.max(0,Number(job.source_city_population||job.source_population||0));
+  if(population>=500000) return 10;
+  if(population>=100000) return 8;
+  if(population>=25000) return 6;
+  return 4;
+}
+async function preflightAreaSkip(redis,job) {
+  if(String(job.search_profile||"")!=="core-home-service") return {skip:false};
+  const consumeField=areaConsumeField(job);
+  const yieldField=[
+    normalizeText(job.partition_state||""),
+    normalizeText(job.partition_city||""),
+    normalizeText(job.partition_zip||job.source_zip||""),
+    ""
+  ].join("|");
+  const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
+    redis.hGet("recover:yield:area:attempts",yieldField),
+    redis.hGet("recover:yield:area:new",yieldField),
+    redis.hGet("recover:yield:area:duplicates",yieldField)
+  ]);
+  const attempts=Number(attemptsRaw||0);
+  const netNew=Number(newRaw||0);
+  const duplicates=Number(dupRaw||0);
+  const saturated=(attempts>=1&&netNew===0&&duplicates>=5) ||
+    (attempts>=2&&netNew===0&&duplicates>=2) ||
+    (attempts>=4&&netNew/Math.max(1,attempts)<0.5&&duplicates>netNew*3);
+  if(saturated) return {skip:true,reason:"area_saturated",attempts,netNew,duplicates};
+
+  if(!job.area_budget_claimed){
+    const slot=await redis.hIncrBy("recover:coverage:area:consumed:v1",consumeField,1);
+    job.area_budget_claimed=true;
+    job.area_budget_slot=slot;
+    await saveJob(job);
+  }
+  const budget=areaConsumeBudget(job);
+  if(Number(job.area_budget_slot||0)>budget){
+    return {skip:true,reason:"area_budget_exhausted",slot:Number(job.area_budget_slot||0),budget};
+  }
+  return {skip:false,slot:Number(job.area_budget_slot||0),budget};
+}
 async function recordAreaYield(redis,job) {
   if (job.area_yield_recorded) return;
   const field=areaYieldField(job);
@@ -806,6 +854,22 @@ async function processAcquisition(id) {
     clearInterval(heartbeat);
     await redis.del(leaseKey(id));
     currentJobId = null;
+    return;
+  }
+
+  const areaPreflight=await preflightAreaSkip(redis,job);
+  if(areaPreflight.skip){
+    job.status="partial_complete";
+    job.phase="complete";
+    job.reason=areaPreflight.reason;
+    job.completed_at=new Date().toISOString();
+    job.area_preflight=areaPreflight;
+    await saveJob(job);
+    await markCoverage(redis,job,"exhausted",{reason:areaPreflight.reason,...areaPreflight});
+    console.log(JSON.stringify({event:"area_job_skipped",acquisition_id:id,location:job.location,service_family:job.service_family||"",...areaPreflight}));
+    clearInterval(heartbeat);
+    await redis.del(leaseKey(id));
+    currentJobId=null;
     return;
   }
 
