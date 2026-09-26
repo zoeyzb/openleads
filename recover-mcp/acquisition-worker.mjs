@@ -1132,6 +1132,9 @@ async function processAcquisition(id) {
       const persisted=upsertQualifiedLeads(existingPersisted,compactQualified);
       await replaceList(resultsKey(id),persisted,RESULT_TTL_SECONDS);
       const permanentStats=await persistPermanentQualified(redis, job, leads);
+      // v2 means net-new was checked against both the permanent leadstore and
+      // historical Google Sheet assignments, so the yield is safe to optimize.
+      job.yield_schema_version=2;
       await recordQueryYield(redis,job.current_query_families||[job.current_query],permanentStats,job.id,job.coverage_pass);
       job.stored_count=persisted.length;
       job.permanent_new_count=Number(job.permanent_new_count||0)+permanentStats.newAdded;
