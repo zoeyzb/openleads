@@ -12,21 +12,30 @@ export function buildYieldStats(jobs=[]){
     if(!key) continue;
     const terminal=['partial_complete','complete','completed','failed'].includes(String(job?.status||job?.phase||'')) || Number(job?.rounds_completed||0)>0;
     if(!terminal) continue;
-    const s=stats[key]||(stats[key]={attempts:0,stored:0,positive:0,zero:0});
+    const s=stats[key]||(stats[key]={attempts:0,new:0,duplicates:0,stored:0,positive:0,zero:0});
     const stored=Math.max(0,Number(job?.stored_count||0));
-    s.attempts++; s.stored+=stored;
-    if(stored>0) s.positive++; else s.zero++;
+    const netNew=Math.max(0,Number(job?.permanent_new_count||0));
+    const duplicates=Math.max(0,Number(job?.permanent_duplicate_count||0));
+    s.attempts++;
+    s.stored+=stored;
+    s.new+=netNew;
+    s.duplicates+=duplicates;
+    if(netNew>0) s.positive++; else s.zero++;
   }
   return stats;
 }
 
 export function familyYieldScore(key,stats={}){
-  const s=stats[key]||{attempts:0,stored:0,positive:0};
+  const s=stats[key]||{attempts:0,new:0,duplicates:0,positive:0};
   const prior=PRIOR[key]||0;
   if(s.attempts<8) return prior;
-  const avg=s.stored/s.attempts;
+  const avgNew=s.new/s.attempts;
   const positive=s.positive/s.attempts;
-  return avg*10+positive*4+prior*0.05;
+  const totalSeen=s.new+s.duplicates;
+  const duplicateRate=totalSeen>0?s.duplicates/totalSeen:0;
+  // Rank on actual net-new discoveries, not local stored rows. Heavy historical
+  // rediscovery is explicitly penalized so exhausted families lose capacity.
+  return avgNew*14+positive*6-duplicateRate*10+prior*0.03;
 }
 
 export function rankFamilies(families,stats={}){
