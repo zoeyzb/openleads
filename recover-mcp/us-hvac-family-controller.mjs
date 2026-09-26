@@ -19,6 +19,7 @@ const DEPTH=Math.max(6,Math.min(12,Number(process.env.US_FAMILY_DEPTH||6)));
 const LOOP_MS=Math.max(3000,Number(process.env.US_FAMILY_CONTROLLER_LOOP_MS||5000));
 const YIELD_SAMPLE_SIZE=Math.max(100,Math.min(2000,Number(process.env.US_FAMILY_YIELD_SAMPLE_SIZE||800)));
 const YIELD_REFRESH_MS=Math.max(15000,Number(process.env.US_FAMILY_YIELD_REFRESH_MS||60000));
+const TRUSTED_YIELD_AFTER_MS=Date.parse(process.env.US_FAMILY_TRUSTED_YIELD_AFTER||'2026-09-26T04:45:00Z')||0;
 const TTL=Number(process.env.ACQUISITION_TTL_SECONDS||604800);
 const ACTIVE_QUEUE='recover:acquisition:queue';
 const CITY_PRIORITY_QUEUE='recover:acquisition:queue:us-city-priority';
@@ -114,9 +115,12 @@ async function refreshYieldStats(){
       if(!payload) continue;
       try{
         const job=JSON.parse(payload);
+        const completedMs=Date.parse(job?.completed_at||job?.updated_at||0)||0;
+        const trustedYield=Number(job?.yield_schema_version||0)>=2 ||
+          (TRUSTED_YIELD_AFTER_MS>0 && completedMs>=TRUSTED_YIELD_AFTER_MS);
         if(String(job?.search_profile||'')==='core-home-service' &&
            String(job?.service_family||'') &&
-           Number(job?.yield_schema_version||0)>=2) jobs.push(job);
+           trustedYield) jobs.push(job);
       }catch{}
     }
     yieldStats=buildYieldStats(jobs);
