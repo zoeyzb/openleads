@@ -453,6 +453,7 @@ async function persistPermanentQualified(redis, job, leads) {
   }
 
   const entries=[];
+  const phoneIndexEntries=[];
   const identities=[];
   const seen=new Set();
   let existingCount=0;
@@ -508,9 +509,12 @@ async function persistPermanentQualified(redis, job, leads) {
       campaign_scope:campaignLeadSetKey(job),
       persisted_at:new Date().toISOString()
     }));
+    const indexedPhone=normalizePhone(mergedCompact.phone||"");
+    if(indexedPhone) phoneIndexEntries.push(indexedPhone,key);
   }
 
   if(entries.length) await redis.hSet("recover:leadstore:qualified",entries);
+  if(phoneIndexEntries.length) await redis.hSet("recover:leadstore:phone-index",phoneIndexEntries);
   if(identities.length){
     await redis.sAdd(campaignLeadSetKey(job),identities);
     if(/\\bny\\b|new york/i.test(String(job.location||"")) && isHomeComfortTarget(job.industry||"")){
