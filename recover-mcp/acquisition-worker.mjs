@@ -10,7 +10,9 @@ const MAPS_BASE_URLS = String(process.env.MAPS_BASE_URLS || MAPS_BASE_URL)
   .split(",").map(x=>x.trim().replace(/\/$/,"")).filter(Boolean);
 const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
-const JOB_TTL = Number(process.env.ACQUISITION_TTL_SECONDS || 604800);\nconst RAW_TTL_SECONDS = Math.max(300, Number(process.env.ACQUISITION_RAW_TTL_SECONDS || 7200));\nconst RESULT_TTL_SECONDS = Math.max(3600, Number(process.env.ACQUISITION_RESULT_TTL_SECONDS || 86400));
+const JOB_TTL = Number(process.env.ACQUISITION_TTL_SECONDS || 604800);
+const RAW_TTL_SECONDS = Math.max(300, Number(process.env.ACQUISITION_RAW_TTL_SECONDS || 7200));
+const RESULT_TTL_SECONDS = Math.max(3600, Number(process.env.ACQUISITION_RESULT_TTL_SECONDS || 86400));
 const POLL_MS = Number(process.env.ACQUISITION_POLL_MS || 10000);
 const LEASE_SECONDS = Number(process.env.ACQUISITION_LEASE_SECONDS || 180);
 const RETRY_ATTEMPTS = Number(process.env.ACQUISITION_RETRY_ATTEMPTS || 3);
