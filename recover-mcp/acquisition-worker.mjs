@@ -678,6 +678,7 @@ async function deleteRawForJob(id) {
   }
 }
 const NY_PRIORITY_QUEUE="recover:acquisition:queue:ny-priority";
+const US_CITY_PRIORITY_QUEUE="recover:acquisition:queue:us-city-priority";
 const ACTIVE_QUEUE="recover:acquisition:queue";
 const PAUSED_NATIONAL_QUEUE="recover:acquisition:queue:paused-national";
 const PAUSED_NY_SURPLUS_QUEUE="recover:acquisition:queue:paused-ny-surplus";
@@ -723,7 +724,7 @@ async function enqueueUnique(id, jobOverride=null) {
     }
 
     const queueKey=await queueForJob(job);
-    const allQueues=[NY_PRIORITY_QUEUE,ACTIVE_QUEUE,PAUSED_NATIONAL_QUEUE];
+    const allQueues=[NY_PRIORITY_QUEUE,US_CITY_PRIORITY_QUEUE,ACTIVE_QUEUE,PAUSED_NATIONAL_QUEUE];
 
     // A queued acquisition must exist in exactly one queue.
     for (const key of allQueues) {
@@ -1211,9 +1212,17 @@ if(String(process.env.ACQUISITION_WORKER_STANDBY||"").toLowerCase()==="true"){
 
 await recoverInterrupted();
 
+let queuePollCursor=0;
 while (!shuttingDown) {
   try {
-    const item=await redis.brPop(["recover:acquisition:queue:ny-priority","recover:acquisition:queue"],5);
+    queuePollCursor++;
+    // The family controller maintains a dedicated city-priority queue. Older
+    // workers never consumed it, so city coverage accumulated indefinitely.
+    // Give it a bounded 1-in-3 preference without starving the general queue.
+    const queueOrder=(queuePollCursor%3===0)
+      ? [NY_PRIORITY_QUEUE,US_CITY_PRIORITY_QUEUE,ACTIVE_QUEUE]
+      : [NY_PRIORITY_QUEUE,ACTIVE_QUEUE,US_CITY_PRIORITY_QUEUE];
+    const item=await redis.brPop(queueOrder,5);
     if (shuttingDown) break;
     const id=item?.element||item;
     if (!id) continue;
