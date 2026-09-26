@@ -792,6 +792,15 @@ async function processAcquisition(id) {
     return;
   }
   const job=JSON.parse(raw);
+  if (String(job.search_profile||"")==="core-home-service") {
+    // Normalize legacy queued nationwide jobs at consume time so old backlog
+    // uses the same phone-only, family-specific contract as newly seeded jobs.
+    job.require_phone=true;
+    job.require_contact=true;
+    if (!String(job.query_family||"").trim() && String(job.service_query_label||"").trim()) {
+      job.query_family=String(job.service_query_label).trim();
+    }
+  }
   if (["complete","partial_complete"].includes(job.status)) {
     clearInterval(heartbeat);
     await redis.del(leaseKey(id));
