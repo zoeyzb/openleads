@@ -152,9 +152,11 @@ export function buildCityFirstCoverageAreas(rows=[]){
     }
     if(!added) break;
   }
-  const primaryKeys=new Set(primary.map(x=>`${x.state}|${String(x.city).toLowerCase()}|${x.zip}`));
-  const remaining=prioritizeAreas(rows.filter(x=>!primaryKeys.has(`${x.state}|${String(x.city).toLowerCase()}|${x.zip}`)));
-  return [...primary,...remaining];
+  // Coverage mode searches by city/state, so only one representative ZIP per
+  // city may be scheduled here. Appending the remaining ZIPs would repeat the
+  // exact same city-wide Maps query for every ZIP in multi-ZIP cities and burn
+  // worker capacity on global duplicates. ZIP-level depth belongs in yieldAreas.
+  return primary;
 }
 
 export function searchLocationForMode(area,mode){
