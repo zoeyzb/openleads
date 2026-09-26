@@ -8,6 +8,11 @@ const YOZH_BASE_URL=(process.env.YOZH_BASE_URL||"").replace(/\/$/,"");
 const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||"https://raw.githubusercontent.com/ReadyAPIs-com/curated-us-zips/main/data/us-zips.csv";
 const LOOP_MS=Math.max(1000,Number(process.env.SECONDARY_DISCOVERY_LOOP_MS||2500));
 const SEARCH_LIMIT=Math.min(25,Math.max(5,Number(process.env.SECONDARY_DISCOVERY_SEARCH_LIMIT||12)));
+const TARGETED_SEARCH_LIMIT=Math.min(10,Math.max(3,Number(process.env.SECONDARY_ENRICH_SEARCH_LIMIT||6)));
+const EMAIL_PENDING_SET="recover:secondary:email-enrichment:pending:v1";
+const EMAIL_ATTEMPT_HASH="recover:secondary:email-enrichment:attempted:v1";
+const EMAIL_PENDING_REFRESH_MS=Math.max(60000,Number(process.env.SECONDARY_ENRICH_REFRESH_MS||600000));
+const EMAIL_RETRY_MS=Math.max(86400000,Number(process.env.SECONDARY_ENRICH_RETRY_MS||2592000000));
 const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||1000000);
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
 if(!YOZH_BASE_URL) throw new Error("YOZH_BASE_URL required");
@@ -64,6 +69,32 @@ async function ensurePhoneIndex(){
   console.log(JSON.stringify({event:"secondary_phone_index_backfill",indexed}));
 }
 await ensurePhoneIndex();
+
+let lastEmailPendingRefresh=0;
+async function refreshEmailPendingQueue({force=false}={}){
+  if(!force && Date.now()-lastEmailPendingRefresh<EMAIL_PENDING_REFRESH_MS) return {scanned:0,queued:0};
+  lastEmailPendingRefresh=Date.now();
+  const now=Date.now();
+  let scanned=0,queued=0,batch=[];
+  for await (const {field,value} of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
+    scanned++;
+    let lead; try{lead=JSON.parse(value);}catch{continue;}
+    const emails=Array.isArray(lead?.emails)?lead.emails.filter(Boolean):String(lead?.email||"").split(/[;,\s]+/).filter(Boolean);
+    const phone=String(lead?.phone||"").replace(/\D/g,"").slice(-10);
+    if(emails.length||!phone||String(lead?.website||"").trim()) continue;
+    const lastAttempt=Number(await redis.hGet(EMAIL_ATTEMPT_HASH,field)||0);
+    if(lastAttempt && now-lastAttempt<EMAIL_RETRY_MS) continue;
+    batch.push(field);
+    if(batch.length>=500){
+      queued+=Number(await redis.sAdd(EMAIL_PENDING_SET,batch)||0);
+      batch=[];
+    }
+  }
+  if(batch.length) queued+=Number(await redis.sAdd(EMAIL_PENDING_SET,batch)||0);
+  console.log(JSON.stringify({event:"secondary_email_pending_refresh",scanned,queued,pending:await redis.sCard(EMAIL_PENDING_SET)}));
+  return {scanned,queued};
+}
+await refreshEmailPendingQueue({force:true});
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function normalizeText(v=""){return String(v||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
@@ -161,6 +192,79 @@ function parseCsv(text){
   const headers=rows.shift().map(x=>x.trim().toLowerCase());
   return rows.map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]??""])));
 }
+function phoneVariants(phone=""){
+  const p=normalizePhone(phone);
+  if(p.length!==10) return [];
+  return [p,`${p.slice(0,3)}-${p.slice(3,6)}-${p.slice(6)}`,`(${p.slice(0,3)}) ${p.slice(3,6)}-${p.slice(6)}`];
+}
+function leadLocationHint(lead={}){
+  const direct=[lead.city,lead.region].filter(Boolean).join(" ").trim();
+  if(direct) return direct;
+  return String(lead.address||"").trim();
+}
+async function targetedEmailEnrichmentCycle(){
+  await refreshEmailPendingQueue();
+  const picked=await redis.sRandMember(EMAIL_PENDING_SET);
+  const key=String(picked||"");
+  if(!key) return {ran:false,reason:"empty"};
+  const raw=await redis.hGet("recover:leadstore:qualified",key);
+  if(!raw){await redis.sRem(EMAIL_PENDING_SET,key);return {ran:false,reason:"missing"};}
+  let lead; try{lead=JSON.parse(raw)||{};}catch{await redis.sRem(EMAIL_PENDING_SET,key);return {ran:false,reason:"invalid"};}
+  const currentEmails=Array.isArray(lead.emails)?lead.emails.filter(Boolean):emailsFrom(lead.email||"");
+  if(currentEmails.length||String(lead.website||"").trim()){
+    await redis.sRem(EMAIL_PENDING_SET,key);
+    return {ran:false,reason:"already_resolved"};
+  }
+  const phone=normalizePhone(lead.phone||"");
+  if(phone.length!==10){await redis.sRem(EMAIL_PENDING_SET,key);return {ran:false,reason:"no_phone"};}
+
+  const variants=phoneVariants(phone);
+  const location=leadLocationHint(lead);
+  const business=String(lead.name||lead.title||"").trim();
+  const query=`"${business}" ("${variants[1]}" OR "${variants[2]}" OR "${variants[0]}") ${location}`.trim();
+  let body={results:[],count:0,warnings:[]};
+  try{
+    body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{
+      method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({query,engine:"bing",locale:"us",limit:TARGETED_SEARCH_LIMIT,scrape:false,proxy_type:"none",max_retries:2})
+    },120000);
+  }catch(error){
+    await redis.hIncrBy("recover:secondary:stats","targeted_errors",1);
+    throw error;
+  }
+
+  const directoryResults=(body.results||[]).filter(result=>isDirectoryUrl(result?.url)).slice(0,TARGETED_SEARCH_LIMIT);
+  const scraped=await scrapeDirectoryProfiles(directoryResults);
+  let foundEmails=[],sourceUrl="";
+  for(const result of scraped){
+    const page=[result.title,result.snippet,result?.scrape?.markdown,result?.scrape?.fit_markdown].filter(Boolean).join("\n");
+    const pagePhones=phonesFrom(page);
+    if(!pagePhones.includes(phone)) continue;
+    const domain=hostOf(result.url);
+    const emails=businessEmailsFrom(page,domain);
+    if(!emails.length) continue;
+    foundEmails.push(...emails);
+    sourceUrl=result.url;
+  }
+  foundEmails=[...new Set(foundEmails)];
+  await redis.hSet(EMAIL_ATTEMPT_HASH,key,String(Date.now()));
+  await redis.sRem(EMAIL_PENDING_SET,key);
+  await redis.hIncrBy("recover:secondary:stats","targeted_attempts",1);
+
+  if(!foundEmails.length){
+    await redis.hIncrBy("recover:secondary:stats","targeted_no_email",1);
+    console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query,results:directoryResults.length,emails:0}));
+    return {ran:true,enriched:false,key};
+  }
+
+  const merged=mergeLeadRecords(lead,{emails:foundEmails,social_profile_url:sourceUrl,source_email_enrichment:"targeted_directory_phone_match"});
+  await redis.hSet("recover:leadstore:qualified",key,JSON.stringify(merged));
+  await redis.hIncrBy("recover:secondary:stats","targeted_email_enriched",foundEmails.length);
+  await redis.hIncrBy("recover:secondary:stats","email_enriched",foundEmails.length);
+  console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query,results:directoryResults.length,emails:foundEmails.length,source:sourceUrl}));
+  return {ran:true,enriched:true,key,emails:foundEmails.length};
+}
+
 async function loadCities(){
   const csv=await (await fetch(ZIP_SOURCE_URL)).text(); const rows=parseCsv(csv); const by=new Map();
   for(const r of rows){
@@ -250,11 +354,19 @@ const cities=await loadCities();
 let cursor=Number(await redis.get("recover:secondary:cursor")||0);
 let familyCursor=Number(await redis.get("recover:secondary:family_cursor")||0);
 let domainCursor=Number(await redis.get("recover:secondary:domain_cursor")||0);
-console.log(JSON.stringify({event:"secondary_discovery_started",cities:cities.length,families:FAMILIES.length,domains:DIRECTORY_DOMAINS.length,cursor}));
+let helperCycle=Number(await redis.get("recover:secondary:helper_cycle")||0);
+console.log(JSON.stringify({event:"secondary_discovery_started",cities:cities.length,families:FAMILIES.length,domains:DIRECTORY_DOMAINS.length,cursor,emailPending:await redis.sCard(EMAIL_PENDING_SET)}));
 
 while(true){
   try{
     const scoped=await redis.sCard(campaignLeadSetKey(PROFILE_JOB));
+    if(helperCycle%2===0){
+      await targetedEmailEnrichmentCycle();
+      helperCycle++;
+      await redis.set("recover:secondary:helper_cycle",String(helperCycle));
+      await sleep(LOOP_MS);
+      continue;
+    }
     if(scoped>=TARGET_TOTAL){await sleep(30000);continue;}
     const city=cities[cursor%cities.length],family=FAMILIES[familyCursor%FAMILIES.length],domain=DIRECTORY_DOMAINS[domainCursor%DIRECTORY_DOMAINS.length];
     const queries=[
@@ -288,6 +400,8 @@ while(true){
     console.log(JSON.stringify({event:"secondary_discovery_cycle",city:`${city.city}, ${city.state}`,family,domain,query,results:Number(body.count||0),added,rejected,warnings:body.warnings||[]}));
     domainCursor++; if(domainCursor%DIRECTORY_DOMAINS.length===0)familyCursor++; if(familyCursor%FAMILIES.length===0&&domainCursor%DIRECTORY_DOMAINS.length===0)cursor++;
     await redis.mSet(["recover:secondary:cursor",String(cursor),"recover:secondary:family_cursor",String(familyCursor),"recover:secondary:domain_cursor",String(domainCursor)]);
+    helperCycle++;
+    await redis.set("recover:secondary:helper_cycle",String(helperCycle));
   }catch(error){
     await redis.hIncrBy("recover:secondary:stats","errors",1);
     console.error("secondary discovery error",error?.message||error);
