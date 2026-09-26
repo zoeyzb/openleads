@@ -376,27 +376,41 @@ async function persistPermanentQualified(redis, job, leads) {
     const compact=compactLead(lead);
     const preferred=permanentLeadIdentity(compact);
     const phone=normalizePhone(compact.phone||"");
-    return {compact,preferred,phoneKey:phone ? "phone:"+phone : ""};
+    const phoneKey=phone ? "phone:"+phone : "";
+    const placeId=String(compact.place_id||"").trim();
+    const sheetKey=placeId ? "place:"+placeId : phoneKey;
+    return {compact,preferred,phoneKey,sheetKey};
   });
 
   const lookupKeys=[...new Set(rows.flatMap(row=>[row.preferred,row.phoneKey]).filter(Boolean))];
+  const sheetLookupKeys=[...new Set(rows.map(row=>row.sheetKey).filter(Boolean))];
   const existingByKey=new Map();
   for(let i=0;i<lookupKeys.length;i+=500){
     const keys=lookupKeys.slice(i,i+500);
     const values=await redis.hmGet("recover:leadstore:qualified",keys);
     keys.forEach((key,j)=>existingByKey.set(key,values?.[j]||null));
   }
+  const assignedSheetKeys=new Set();
+  for(let i=0;i<sheetLookupKeys.length;i+=500){
+    const keys=sheetLookupKeys.slice(i,i+500);
+    const values=await redis.hmGet("recover:sheet:assigned:v1",keys);
+    keys.forEach((key,j)=>{ if(values?.[j]) assignedSheetKeys.add(key); });
+  }
 
   const entries=[];
   const identities=[];
   const seen=new Set();
   let existingCount=0;
+  let historicalSheetDuplicates=0;
   let newAdded=0;
 
   for(const row of rows){
-    const {compact,preferred,phoneKey}=row;
+    const {compact,preferred,phoneKey,sheetKey}=row;
     let key=preferred;
-    let existed=Boolean(existingByKey.get(preferred));
+    const existedInLeadstore=Boolean(existingByKey.get(preferred));
+    const existedInSheet=Boolean(sheetKey && assignedSheetKeys.has(sheetKey));
+    let existed=existedInLeadstore || existedInSheet;
+    if(existedInSheet && !existedInLeadstore) historicalSheetDuplicates++;
 
     // Before the CID/data-id upgrade, no-website leads were commonly keyed by
     // phone. Reuse that legacy key only when it is clearly the same business.
@@ -443,7 +457,15 @@ async function persistPermanentQualified(redis, job, leads) {
       await redis.sAdd("recover:leadstore:ny-home-comfort",identities);
     }
   }
-  return {unique:identities.length,newAdded,duplicates:existingCount};
+  if(historicalSheetDuplicates>0){
+    console.log(JSON.stringify({
+      event:"historical_sheet_dedupe",
+      acquisition_id:job.id,
+      historical_duplicates:historicalSheetDuplicates,
+      candidates:identities.length
+    }));
+  }
+  return {unique:identities.length,newAdded,duplicates:existingCount,historicalSheetDuplicates};
 }
 function mapsStatus(job) {
   return String(job?.status||job?.Status||job?.state||job?.State||job?.job?.status||job?.job?.Status||"").toLowerCase();
