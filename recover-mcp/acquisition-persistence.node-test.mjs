@@ -81,3 +81,19 @@ test("specific city plus region must match both", () => {
 test("missing location evidence is rejected instead of leaking into results", () => {
   assert.equal(matchesRequestedLocation(lead(1,{address:"",city:"",region:""}),"New York"),false);
 });
+
+
+test("duplicate upsert preserves existing emails when incoming copy has none", () => {
+  const original=lead(1,{emails:["owner@example.com"],social_profile_url:"https://facebook.com/example"});
+  const poorer=lead(1,{emails:[],social_profile_url:""});
+  const persisted=upsertQualifiedLeads([original],[poorer]);
+  assert.deepEqual(persisted[0].emails,["owner@example.com"]);
+  assert.equal(persisted[0].social_profile_url,"https://facebook.com/example");
+});
+
+test("duplicate upsert unions newly discovered emails", () => {
+  const original=lead(1,{emails:["office@example.com"]});
+  const richer=lead(1,{emails:["owner@example.com"]});
+  const persisted=upsertQualifiedLeads([original],[richer]);
+  assert.deepEqual(new Set(persisted[0].emails),new Set(["office@example.com","owner@example.com"]));
+});
