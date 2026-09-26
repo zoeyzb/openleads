@@ -75,6 +75,7 @@ async function refreshEmailPendingQueue({force=false}={}){
   if(!force && Date.now()-lastEmailPendingRefresh<EMAIL_PENDING_REFRESH_MS) return {scanned:0,queued:0};
   lastEmailPendingRefresh=Date.now();
   const now=Date.now();
+  const attempted=await redis.hGetAll(EMAIL_ATTEMPT_HASH);
   let scanned=0,queued=0,batch=[];
   for await (const {field,value} of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
     scanned++;
@@ -82,7 +83,7 @@ async function refreshEmailPendingQueue({force=false}={}){
     const emails=Array.isArray(lead?.emails)?lead.emails.filter(Boolean):String(lead?.email||"").split(/[;,\s]+/).filter(Boolean);
     const phone=String(lead?.phone||"").replace(/\D/g,"").slice(-10);
     if(emails.length||!phone||String(lead?.website||"").trim()) continue;
-    const lastAttempt=Number(await redis.hGet(EMAIL_ATTEMPT_HASH,field)||0);
+    const lastAttempt=Number(attempted?.[field]||0);
     if(lastAttempt && now-lastAttempt<EMAIL_RETRY_MS) continue;
     batch.push(field);
     if(batch.length>=500){
