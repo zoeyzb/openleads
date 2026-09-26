@@ -12,6 +12,32 @@ function normalizeDomain(value="") {
 function normalizePhone(value="") {
   return String(value).replace(/\D/g, "").slice(-10);
 }
+function normalizeEmails(value) {
+  const values=Array.isArray(value)?value:String(value||"").split(/[;,\s]+/);
+  return [...new Set(values.map(x=>String(x).trim().toLowerCase()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)))];
+}
+
+export function mergeLeadRecords(existing={}, incoming={}) {
+  const merged={...existing,...incoming};
+  merged.emails=[...new Set([
+    ...normalizeEmails(existing.emails||existing.email||""),
+    ...normalizeEmails(incoming.emails||incoming.email||"")
+  ])];
+  for (const field of ["phone","website","social_profile_url","owner_name","google_maps_url","place_id","cid","data_id","category","address","city","region"]) {
+    if ((incoming[field]===undefined || incoming[field]===null || String(incoming[field]).trim()==="") && existing[field]) {
+      merged[field]=existing[field];
+    }
+  }
+  if ((!Array.isArray(incoming.tech_stack) || incoming.tech_stack.length===0) && Array.isArray(existing.tech_stack) && existing.tech_stack.length) {
+    merged.tech_stack=existing.tech_stack;
+  }
+  for (const field of ["cms_detected","ssl_valid","site_speed_ms","website_status"]) {
+    if ((incoming[field]===undefined || incoming[field]===null || incoming[field]==="") && existing[field]!==undefined && existing[field]!==null && existing[field]!=="") {
+      merged[field]=existing[field];
+    }
+  }
+  return merged;
+}
 
 const US_STATES = {
   alabama:"al", alaska:"ak", arizona:"az", arkansas:"ar", california:"ca", colorado:"co",
@@ -98,7 +124,7 @@ export function upsertQualifiedLeads(existing, incoming) {
       index = rows.length;
       rows.push(lead);
     } else {
-      rows[index] = { ...rows[index], ...lead };
+      rows[index] = mergeLeadRecords(rows[index], lead);
     }
     for (const key of identityKeys(rows[index])) keyToIndex.set(key, index);
   };
