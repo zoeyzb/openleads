@@ -57,12 +57,17 @@ async function ensurePhoneIndex(){
   const marker="recover:leadstore:phone-index:backfill:v1";
   if(await redis.exists(marker)) return;
   let indexed=0,batch=[];
-  for await (const {field,value} of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
-    let lead; try{lead=JSON.parse(value);}catch{continue;}
-    const phone=String(lead?.phone||"").replace(/\D/g,"").slice(-10);
-    if(!phone) continue;
-    batch.push(phone,field); indexed++;
-    if(batch.length>=1000){ await redis.hSet("recover:leadstore:phone-index",batch); batch=[]; }
+  for await (const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
+    const entries=Array.isArray(page)?page:[page];
+    for(const entry of entries){
+      const field=entry?.field, value=entry?.value;
+      if(!field||value===undefined) continue;
+      let lead; try{lead=JSON.parse(value);}catch{continue;}
+      const phone=String(lead?.phone||"").replace(/\D/g,"").slice(-10);
+      if(!phone) continue;
+      batch.push(phone,field); indexed++;
+      if(batch.length>=1000){ await redis.hSet("recover:leadstore:phone-index",batch); batch=[]; }
+    }
   }
   if(batch.length) await redis.hSet("recover:leadstore:phone-index",batch);
   await redis.set(marker,JSON.stringify({indexed,at:new Date().toISOString()}));
@@ -77,18 +82,26 @@ async function refreshEmailPendingQueue({force=false}={}){
   const now=Date.now();
   const attempted=await redis.hGetAll(EMAIL_ATTEMPT_HASH);
   let scanned=0,queued=0,batch=[];
-  for await (const {field,value} of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
-    scanned++;
-    let lead; try{lead=JSON.parse(value);}catch{continue;}
-    const emails=Array.isArray(lead?.emails)?lead.emails.filter(Boolean):String(lead?.email||"").split(/[;,\s]+/).filter(Boolean);
-    const phone=String(lead?.phone||"").replace(/\D/g,"").slice(-10);
-    if(emails.length||!phone||String(lead?.website||"").trim()) continue;
-    const lastAttempt=Number(attempted?.[field]||0);
-    if(lastAttempt && now-lastAttempt<EMAIL_RETRY_MS) continue;
-    batch.push(field);
-    if(batch.length>=500){
-      queued+=Number(await redis.sAdd(EMAIL_PENDING_SET,batch)||0);
-      batch=[];
+  for await (const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
+    const entries=Array.isArray(page)?page:[page];
+    for(const entry of entries){
+      const field=entry?.field, value=entry?.value;
+      if(!field||value===undefined) continue;
+      scanned++;
+      let lead; try{lead=JSON.parse(value);}catch{continue;}
+      const emails=[
+        ...(Array.isArray(lead?.emails)?lead.emails:[]),
+        ...String(lead?.email||"").split(/[;,\s]+/)
+      ].map(x=>String(x||"").trim()).filter(Boolean);
+      const phone=String(lead?.phone||"").replace(/\D/g,"").slice(-10);
+      if(emails.length||!phone||String(lead?.website||"").trim()) continue;
+      const lastAttempt=Number(attempted?.[field]||0);
+      if(lastAttempt && now-lastAttempt<EMAIL_RETRY_MS) continue;
+      batch.push(field);
+      if(batch.length>=500){
+        queued+=Number(await redis.sAdd(EMAIL_PENDING_SET,batch)||0);
+        batch=[];
+      }
     }
   }
   if(batch.length) queued+=Number(await redis.sAdd(EMAIL_PENDING_SET,batch)||0);
