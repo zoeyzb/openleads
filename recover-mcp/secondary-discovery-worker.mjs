@@ -9,6 +9,7 @@ const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||"https://raw.githubuserconte
 const LOOP_MS=Math.max(1000,Number(process.env.SECONDARY_DISCOVERY_LOOP_MS||2500));
 const SEARCH_LIMIT=Math.min(25,Math.max(5,Number(process.env.SECONDARY_DISCOVERY_SEARCH_LIMIT||12)));
 const TARGETED_SEARCH_LIMIT=Math.min(10,Math.max(3,Number(process.env.SECONDARY_ENRICH_SEARCH_LIMIT||6)));
+const TARGETED_CONCURRENCY=Math.min(6,Math.max(1,Number(process.env.SECONDARY_ENRICH_CONCURRENCY||4)));
 const EMAIL_PENDING_SET="recover:secondary:email-enrichment:pending:v1";
 const EMAIL_ATTEMPT_HASH="recover:secondary:email-enrichment:attempted:v1";
 const EMAIL_PENDING_REFRESH_MS=Math.max(60000,Number(process.env.SECONDARY_ENRICH_REFRESH_MS||600000));
@@ -218,7 +219,7 @@ function leadLocationHint(lead={}){
 }
 async function targetedEmailEnrichmentCycle(){
   await refreshEmailPendingQueue();
-  const picked=await redis.sRandMember(EMAIL_PENDING_SET);
+  const picked=await redis.sPop(EMAIL_PENDING_SET);
   const key=String(picked||"");
   if(!key) return {ran:false,reason:"empty"};
   const raw=await redis.hGet("recover:leadstore:qualified",key);
@@ -235,19 +236,31 @@ async function targetedEmailEnrichmentCycle(){
   const variants=phoneVariants(phone);
   const location=leadLocationHint(lead);
   const business=String(lead.name||lead.title||"").trim();
-  const query=`"${business}" ("${variants[1]}" OR "${variants[2]}" OR "${variants[0]}") ${location}`.trim();
-  let body={results:[],count:0,warnings:[]};
+  const queries=[
+    `"${variants[1]}" "${business}"`,
+    `"${variants[2]}" "${business}"`,
+    `"${business}" ${location} email`,
+    `"${business}" "${phone}"`
+  ].filter(Boolean);
+  let body={results:[],count:0,warnings:[]},query=queries[0]||"";
+  let directoryResults=[];
   try{
-    body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{
-      method:"POST",headers:{"content-type":"application/json"},
-      body:JSON.stringify({query,engine:"bing",locale:"us",limit:TARGETED_SEARCH_LIMIT,scrape:false,proxy_type:"none",max_retries:2})
-    },120000);
+    for(const candidateQuery of queries){
+      query=candidateQuery;
+      body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{
+        method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({query,engine:"bing",locale:"us",limit:TARGETED_SEARCH_LIMIT,scrape:false,proxy_type:"none",max_retries:2})
+      },120000);
+      directoryResults=(body.results||[]).filter(result=>isDirectoryUrl(result?.url)).slice(0,TARGETED_SEARCH_LIMIT);
+      if(directoryResults.length) break;
+    }
   }catch(error){
     await redis.hIncrBy("recover:secondary:stats","targeted_errors",1);
+    // Put transient failures back so they are not lost from the queue.
+    await redis.sAdd(EMAIL_PENDING_SET,key);
     throw error;
   }
 
-  const directoryResults=(body.results||[]).filter(result=>isDirectoryUrl(result?.url)).slice(0,TARGETED_SEARCH_LIMIT);
   const scraped=await scrapeDirectoryProfiles(directoryResults);
   let foundEmails=[],sourceUrl="";
   for(const result of scraped){
@@ -375,7 +388,14 @@ while(true){
   try{
     const scoped=await redis.sCard(campaignLeadSetKey(PROFILE_JOB));
     if(helperCycle%2===0){
-      await targetedEmailEnrichmentCycle();
+      const batch=await Promise.allSettled(
+        Array.from({length:TARGETED_CONCURRENCY},()=>targetedEmailEnrichmentCycle())
+      );
+      const fulfilled=batch.filter(x=>x.status==="fulfilled").length;
+      const rejected=batch.length-fulfilled;
+      await redis.hIncrBy("recover:secondary:stats","targeted_batches",1);
+      if(rejected) await redis.hIncrBy("recover:secondary:stats","targeted_batch_errors",rejected);
+      console.log(JSON.stringify({event:"secondary_targeted_batch",concurrency:TARGETED_CONCURRENCY,fulfilled,rejected,pending:await redis.sCard(EMAIL_PENDING_SET)}));
       helperCycle++;
       await redis.set("recover:secondary:helper_cycle",String(helperCycle));
       await sleep(LOOP_MS);
