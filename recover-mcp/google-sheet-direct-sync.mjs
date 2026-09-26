@@ -5,7 +5,7 @@ const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
 const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const ASSIGN_HASH = "recover:sheet:assigned:v1";
 const COUNT_HASH = "recover:sheet:counts:v1";
-const EMAIL_SYNC_HASH = "recover:sheet:email-synced:v1";
+const EMAIL_SYNC_HASH = "recover:sheet:email-synced:v2";
 
 const clean = (v) => String(v ?? "").trim();
 const digits = (v) => clean(v).replace(/\D+/g, "");
@@ -139,16 +139,22 @@ function createSheetsClient(serviceAccount) {
   async function updateEmailCells(spreadsheetId, tabName, updates) {
     for (let i = 0; i < updates.length; i += 500) {
       const chunk = updates.slice(i, i + 500);
+      const data = [];
+      for (const { row, email, phone } of chunk) {
+        data.push({
+          range: `${quoteTab(tabName)}!J${row}`,
+          majorDimension: "ROWS",
+          values: [[email]],
+        });
+        data.push({
+          range: `${quoteTab(tabName)}!N${row}`,
+          majorDimension: "ROWS",
+          values: [[phone && email ? "Phone + Email" : email ? "Email" : phone ? "Phone" : ""]],
+        });
+      }
       await request(spreadsheetId, "/values:batchUpdate", {
         method: "POST",
-        body: {
-          valueInputOption: "RAW",
-          data: chunk.map(({ row, email }) => ({
-            range: `${quoteTab(tabName)}!J${row}`,
-            majorDimension: "ROWS",
-            values: [[email]],
-          })),
-        },
+        body: { valueInputOption: "RAW", data },
       });
     }
   }
@@ -314,6 +320,7 @@ export function startQualifiedGoogleSheetSync({
       for (const lead of leads) {
         const identity = leadIdentity(lead);
         const email = leadEmails(lead)[0] || "";
+        const phone = digits(lead?.phone);
         if (!email || emailSynced?.[identity] === email || !assigned?.[identity]) continue;
         let assignment;
         try { assignment = JSON.parse(assigned[identity]); } catch { continue; }
@@ -321,7 +328,7 @@ export function startQualifiedGoogleSheetSync({
         const row = Number(assignment?.row || 0);
         if (!slot || row < 7) continue;
         const list = emailUpdatesBySlot.get(slot.key) || [];
-        list.push({ row, email });
+        list.push({ row, email, phone });
         emailUpdatesBySlot.set(slot.key, list);
         emailSyncWrites[identity] = email;
       }
