@@ -27,7 +27,7 @@ const PREVIOUS_CONTROLLER_KEY='recover:controller:us-core-family:v6';
 const BATCH_ID=process.env.US_FAMILY_BATCH_ID||'us-core-home-service-100k-family-v4-2026-09-12';
 const BATCH_JOB_SET=`recover:batch:${BATCH_ID}:jobs`;
 
-const profileJob={industry:'HVAC',require_no_website:true,require_contact:true,require_phone:false,require_email:false,include_no_website:true,min_score:30};
+const profileJob={industry:'HVAC',require_no_website:true,require_contact:true,require_phone:true,require_email:false,include_no_website:true,min_score:30};
 const familyByKey=new Map(FAMILY_SHARDS.map(f=>[f.key,f]));
 const familyKeys=FAMILY_SHARDS.map(f=>f.key);
 
@@ -131,7 +131,7 @@ async function enqueueUnit(area,family,mode){
     partition_state:area.state,partition_city:area.city,partition_zip:area.zip,
     service_family:family.key,service_query_index:family.queryIndex,service_query_label:family.label,
     location:searchLocation,target:TARGET_PER_JOB,min_score:30,
-    require_phone:false,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,
+    require_phone:true,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,
     max_rounds:1,depth:DEPTH,status:'queued',phase:'queued',round:0,rounds_completed:0,
     raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],
     source:'us_core_family_partition_controller_v5',source_zip:area.zip,source_population:area.population,
