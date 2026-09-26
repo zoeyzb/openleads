@@ -147,18 +147,48 @@ async function enqueueUnit(area,family,mode){
   return true;
 }
 
+function normalizeAreaPart(value=''){
+  return String(value).toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+}
+
+async function areaIsSaturated(area){
+  const field=[
+    normalizeAreaPart(area?.state),
+    normalizeAreaPart(area?.city),
+    normalizeAreaPart(area?.zip)
+  ].join('|')+'|';
+  if(!field || field==='|||') return false;
+  const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
+    redis.hGet('recover:yield:area:attempts',field),
+    redis.hGet('recover:yield:area:new',field),
+    redis.hGet('recover:yield:area:duplicates',field),
+  ]);
+  const attempts=Number(attemptsRaw||0);
+  const netNew=Number(newRaw||0);
+  const duplicates=Number(dupRaw||0);
+  // Retire an area quickly when repeated searches only rediscover businesses
+  // already in the permanent lead store / historical sheets.
+  return (attempts>=1 && netNew===0 && duplicates>=5) ||
+    (attempts>=2 && netNew===0 && duplicates>=2) ||
+    (attempts>=4 && netNew/attempts<0.5 && duplicates>netNew*3);
+}
+
 async function enqueueNext(mode,familyKey){
   const family=familyByKey.get(familyKey);
   if(!family) return {seeded:false,checked:0,exhausted:true};
   const areas=mode==='coverage'?coverageAreas:yieldAreas;
   const cursors=mode==='coverage'?coverageCursors:yieldCursors;
-  let checked=0;
+  let checked=0,saturatedSkipped=0;
   while(cursors[familyKey]<areas.length){
     const area=areas[cursors[familyKey]++];
     checked++;
-    if(await enqueueUnit(area,family,mode)) return {seeded:true,checked,exhausted:false};
+    if(await areaIsSaturated(area)){
+      saturatedSkipped++;
+      continue;
+    }
+    if(await enqueueUnit(area,family,mode)) return {seeded:true,checked,saturatedSkipped,exhausted:false};
   }
-  return {seeded:false,checked,exhausted:true};
+  return {seeded:false,checked,saturatedSkipped,exhausted:true};
 }
 
 function allWorkExhausted(){
@@ -175,19 +205,20 @@ async function persistControllerState(){
 }
 
 async function maintainCityPriorityFloor(queue,ranked){
-  let seeded=0,checked=0;
+  let seeded=0,checked=0,saturatedSkipped=0;
   const productive=buildProductiveFamilySchedule(ranked,CITY_PRIORITY_TARGET*2,0.20,coverageFloorCursor);
   while(queue.city<CITY_PRIORITY_TARGET && seeded<SEED_BATCH_SIZE){
     const family=productive[coverageFloorCursor%productive.length]||ranked[0]||familyKeys[0];
     coverageFloorCursor++;
     const result=await enqueueNext('coverage',family);
     checked+=result.checked;
+    saturatedSkipped+=Number(result.saturatedSkipped||0);
     if(result.seeded){ seeded++; queue.city++; queue.total++; }
     if(result.exhausted && FAMILY_SHARDS.every(f=>coverageCursors[f.key]>=coverageAreas.length)) break;
   }
   if(seeded){
     await persistControllerState();
-    console.log(JSON.stringify({event:'family_city_priority_floor_refill',seeded,checked,city_after:queue.city,total_after:queue.total,cityPriorityTarget:CITY_PRIORITY_TARGET,ranked,coverageCursors}));
+    console.log(JSON.stringify({event:'family_city_priority_floor_refill',seeded,checked,saturatedSkipped,city_after:queue.city,total_after:queue.total,cityPriorityTarget:CITY_PRIORITY_TARGET,ranked,coverageCursors}));
   }
   return seeded;
 }
@@ -213,12 +244,13 @@ while(true){
     }
 
     const schedule=buildCoverageYieldSchedule(familyKeys,ranked,Math.max(SEED_BATCH_SIZE*2,familyKeys.length),COVERAGE_SHARE);
-    let seeded=0,checked=0,coverageSeeded=0,yieldSeeded=0;
+    let seeded=0,checked=0,saturatedSkipped=0,coverageSeeded=0,yieldSeeded=0;
     while(seeded<SEED_BATCH_SIZE && (await pendingQueueDepth()).total<QUEUE_HIGH_WATER && !allWorkExhausted()){
       const slot=schedule[scheduleCursor%schedule.length];
       scheduleCursor++;
       const result=await enqueueNext(slot.mode,slot.family);
       checked+=result.checked;
+      saturatedSkipped+=Number(result.saturatedSkipped||0);
       if(result.seeded){
         seeded++;
         if(slot.mode==='coverage') coverageSeeded++; else yieldSeeded++;
@@ -226,7 +258,7 @@ while(true){
     }
     await persistControllerState();
     const queueAfter=await pendingQueueDepth();
-    console.log(JSON.stringify({event:'family_city_coverage_seed_cycle',scoped,queue_before:queue,queue_after:queueAfter,checked,seeded,coverageSeeded,yieldSeeded,ranked,yieldStats,uniqueCities,coverageCursors,yieldCursors,totalWorkUnits}));
+    console.log(JSON.stringify({event:'family_city_coverage_seed_cycle',scoped,queue_before:queue,queue_after:queueAfter,checked,saturatedSkipped,seeded,coverageSeeded,yieldSeeded,ranked,yieldStats,uniqueCities,coverageCursors,yieldCursors,totalWorkUnits}));
     if(allWorkExhausted()){
       console.log(JSON.stringify({event:'family_pass_complete',scoped,totalWorkUnits,uniqueCities,coverageCursors,yieldCursors}));
       await new Promise(r=>setTimeout(r,60000));
