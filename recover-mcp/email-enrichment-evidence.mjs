@@ -36,18 +36,28 @@ export function compactLocation(location=''){
   if(m) return `${m[1].trim()} ${m[2].toUpperCase()}`;
   return raw.replace(/\b\d{5}(?:-\d{4})?\b/g,'').replace(/\s+/g,' ').replace(/^\s*\d+[A-Za-z-]*\s+[^,]+,\s*/,'').trim();
 }
+export function searchBusinessName(business=''){
+  const raw=String(business||'').trim();
+  const cleaned=normalizeText(raw)
+    .split(' ')
+    .filter(t=>!['llc','inc','corp','corporation','company','co','ltd','limited'].includes(t))
+    .join(' ')
+    .trim();
+  return cleaned||raw;
+}
 export function searchQueries({business='',phone='',location=''}){
-  const b=String(business||'').trim(), p=normalizePhone(phone), l=compactLocation(location);
+  const raw=String(business||'').trim(), b=searchBusinessName(raw), p=normalizePhone(phone), l=compactLocation(location);
   const q=[
-    `\"${b}\" ${l} email`,
-    `\"${b}\" ${l} contact`,
-    `site:facebook.com \"${b}\" ${l}`,
-    `site:yelp.com \"${b}\" ${l}`,
-    `site:chamberofcommerce.com \"${b}\" ${l}`,
-    `site:manta.com \"${b}\" ${l}`,
-    `site:bbb.org \"${b}\" ${l}`,
-    `\"${b}\" ${l}`,
-    p?`\"${b}\" \"${p}\"`:''
+    `"${b}" ${l} email`,
+    `"${b}" ${l} contact`,
+    raw!==b?`"${raw}" ${l}`:'',
+    `site:facebook.com "${b}" ${l}`,
+    `site:yelp.com "${b}" ${l}`,
+    `site:chamberofcommerce.com "${b}" ${l}`,
+    `site:manta.com "${b}" ${l}`,
+    `site:bbb.org "${b}" ${l}`,
+    `"${b}" ${l}`,
+    p?`"${b}" "${p}"`:''
   ];
   return [...new Set(q.filter(Boolean))];
 }
