@@ -77,20 +77,21 @@ async function scrapePages(results=[]){
 let lastRefresh=0;
 async function refreshPending({force=false}={}){
   if(!force&&Date.now()-lastRefresh<REFRESH_MS)return;
-  lastRefresh=Date.now();const now=Date.now();const attempted=await redis.hGetAll(ATTEMPTED);let scanned=0,queued=0,batch=[];
+  lastRefresh=Date.now();const now=Date.now();const attempted=await redis.hGetAll(ATTEMPTED);let scanned=0,queued=0,withEmail=0,withWebsite=0,noPhone=0,batch=[];
   for await(const page of redis.hScanIterator('recover:leadstore:qualified',{COUNT:500})){
     for(const entry of (Array.isArray(page)?page:[page])){
       if(!entry?.field||entry.value===undefined)continue; scanned++;
       let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
-      if(leadEmails(lead).length||String(lead.website||'').trim())continue;
-      if(normalizePhone(lead.phone).length!==10)continue;
+      if(leadEmails(lead).length){withEmail++;continue;}
+      if(String(lead.website||'').trim()){withWebsite++;continue;}
+      if(normalizePhone(lead.phone).length!==10){noPhone++;continue;}
       const last=Number(attempted?.[entry.field]||0);if(last&&now-last<RETRY_MS)continue;
       batch.push(entry.field);
       if(batch.length>=500){queued+=Number(await redis.sAdd(PENDING,batch)||0);batch=[];}
     }
   }
   if(batch.length)queued+=Number(await redis.sAdd(PENDING,batch)||0);
-  console.log(JSON.stringify({event:'email_v2_pending_refresh',scanned,queued,pending:await redis.sCard(PENDING)}));
+  console.log(JSON.stringify({event:'email_v2_pending_refresh',scanned,withEmail,withWebsite,noPhone,queued,pending:await redis.sCard(PENDING)}));
 }
 
 function promisingResult(result,business,phone,location){
