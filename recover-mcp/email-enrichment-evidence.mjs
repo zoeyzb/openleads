@@ -39,13 +39,13 @@ export function compactLocation(location=''){
 export function searchQueries({business='',phone='',location=''}){
   const b=String(business||'').trim(), p=normalizePhone(phone), l=compactLocation(location);
   const q=[
+    `\"${b}\" ${l} email`,
+    `\"${b}\" ${l} contact`,
     `site:facebook.com \"${b}\" ${l}`,
     `site:yelp.com \"${b}\" ${l}`,
     `site:chamberofcommerce.com \"${b}\" ${l}`,
     `site:manta.com \"${b}\" ${l}`,
     `site:bbb.org \"${b}\" ${l}`,
-    `\"${b}\" ${l} email`,
-    `\"${b}\" ${l} contact`,
     `\"${b}\" ${l}`,
     p?`\"${b}\" \"${p}\"`:''
   ];
