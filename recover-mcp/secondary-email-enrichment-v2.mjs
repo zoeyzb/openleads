@@ -109,8 +109,51 @@ async function duckSearch(query){
     return out;
   }finally{clearTimeout(timer);}
 }
+async function yahooSearch(query){
+  const ctl=new AbortController();const timer=setTimeout(()=>ctl.abort(),12000);
+  try{
+    const url='https://search.yahoo.com/search?p='+encodeURIComponent(query);
+    const r=await fetch(url,{signal:ctl.signal,headers:{
+      'user-agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+      'accept-language':'en-US,en;q=0.9'
+    }});
+    if(!r.ok)throw new Error(`yahoo ${r.status}`);
+    const html=await r.text();const $=loadHtml(html);const out=[];
+    const unwrap=(href='')=>{
+      try{
+        if(!href)return '';
+        const decoded=decodeHtml(href);
+        const m=decoded.match(/\/RU=([^/]+)\/RK=/);
+        if(m)return decodeURIComponent(m[1]);
+        const u=new URL(decoded,'https://search.yahoo.com');
+        return u.href;
+      }catch{return String(href||'');}
+    };
+    $('div.algo-sr, div.dd.algo, li div.algo').each((_,el)=>{
+      if(out.length>=SEARCH_LIMIT)return false;
+      const a=$(el).find('h3 a').first();
+      const href=unwrap(a.attr('href')||'');
+      if(!/^https?:\/\//i.test(href)||/search\.yahoo\.com/i.test(href))return;
+      const title=decodeHtml(a.text().trim());
+      const snippet=decodeHtml($(el).find('.compText, p').first().text().trim());
+      out.push({url:href,title,snippet});
+    });
+    if(!out.length){
+      $('h3 a').each((_,el)=>{
+        if(out.length>=SEARCH_LIMIT)return false;
+        const href=unwrap($(el).attr('href')||'');
+        if(/^https?:\/\//i.test(href)&&!/search\.yahoo\.com/i.test(href)){
+          out.push({url:href,title:decodeHtml($(el).text().trim()),snippet:''});
+        }
+      });
+    }
+    return out;
+  }finally{clearTimeout(timer);}
+}
+
 async function search(query,engine){
   if(engine==='duckduckgo') return duckSearch(query);
+  if(engine==='yahoo') return yahooSearch(query);
   const body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,engine,locale:'us',limit:SEARCH_LIMIT,scrape:false,proxy_type:'none',max_retries:1})},30000);
   return Array.isArray(body.results)?body.results:[];
 }
