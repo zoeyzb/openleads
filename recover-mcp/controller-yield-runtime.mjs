@@ -64,3 +64,4 @@ async function main(){
 
 if (import.meta.url===pathToFileURL(process.argv[1]||'').href) await main();
 // email-v2 rollout marker 2026-09-27 compact-query-v2
+// email audit rollout marker 2026-09-27 live-coverage
