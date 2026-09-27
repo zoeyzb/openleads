@@ -6,7 +6,7 @@ const REDIS_URL=process.env.ACQUISITION_REDIS_URL||'';
 const SUPABASE_URL=(process.env.SUPABASE_HISTORICAL_URL||'').replace(/\/$/,'');
 const SUPABASE_KEY=process.env.SUPABASE_HISTORICAL_ANON_KEY||'';
 const INTERVAL_MS=Math.max(60*60*1000,Number(process.env.HISTORICAL_EMAIL_BACKFILL_INTERVAL_MS||6*60*60*1000));
-const LEADER='recover:historical-email-backfill:leader:v1';
+const LEADER='recover:historical-email-backfill:leader:v2';
 const STATS='recover:historical-email-backfill:stats:v1';
 if(!REDIS_URL) throw new Error('ACQUISITION_REDIS_URL required');
 if(!SUPABASE_URL||!SUPABASE_KEY) throw new Error('Supabase historical backfill config required');
