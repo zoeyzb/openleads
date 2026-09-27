@@ -79,12 +79,12 @@ async function scrapePages(results=[]){
 let lastRefresh=0;
 async function refreshPending({force=false}={}){
   if(!force&&Date.now()-lastRefresh<REFRESH_MS)return;
-  lastRefresh=Date.now();const now=Date.now();const attempted=await redis.hGetAll(ATTEMPTED);let scanned=0,queued=0,withEmail=0,withWebsite=0,noPhone=0,nonTarget=0,batch=[];
+  lastRefresh=Date.now();const now=Date.now();const attempted=await redis.hGetAll(ATTEMPTED);let scanned=0,queued=0,withEmail=0,usableTargetEmail=0,emailNonTarget=0,withWebsite=0,noPhone=0,nonTarget=0,batch=[];
   for await(const page of redis.hScanIterator('recover:leadstore:qualified',{COUNT:500})){
     for(const entry of (Array.isArray(page)?page:[page])){
       if(!entry?.field||entry.value===undefined)continue; scanned++;
       let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
-      if(leadEmails(lead).length){withEmail++;continue;}
+      if(leadEmails(lead).length){withEmail++;if(isCoreHomeServiceLead(lead))usableTargetEmail++;else emailNonTarget++;continue;}
       if(!isCoreHomeServiceLead(lead)){nonTarget++;continue;}
       if(String(lead.website||'').trim())withWebsite++;
       const phone=normalizePhone(lead.phone), business=String(lead.name||lead.title||'').trim(), location=leadLocation(lead);
@@ -95,7 +95,7 @@ async function refreshPending({force=false}={}){
     }
   }
   if(batch.length)queued+=Number(await redis.sAdd(PENDING,batch)||0);
-  console.log(JSON.stringify({event:'email_v2_pending_refresh',scanned,withEmail,withWebsite,noPhone,nonTarget,queued,pending:await redis.sCard(PENDING)}));
+  console.log(JSON.stringify({event:'email_v2_pending_refresh',scanned,withEmail,usableTargetEmail,emailNonTarget,withWebsite,noPhone,nonTarget,queued,pending:await redis.sCard(PENDING)}));
 }
 
 function promisingResult(result,business,phone,location){
@@ -117,7 +117,8 @@ async function enrichOne(){
   if(!isCoreHomeServiceLead(lead)){await redis.hSet(ATTEMPTED,key,String(Date.now()));return {ran:false,reason:'non_target'};}
   const phone=normalizePhone(lead.phone), business=String(lead.name||lead.title||'').trim(), location=leadLocation(lead);
   if(!business||(phone.length!==10&&!location))return {ran:false};
-  const queries=searchQueries({business,phone,location}).slice(0,QUERY_BUDGET);
+  const noWebsite=!String(lead.website||'').trim();
+  const queries=searchQueries({business,phone,location,address:String(lead.address||''),noWebsite}).slice(0,QUERY_BUDGET);
   const seen=new Set();let found=[],source='',rawResults=0,promising=0,enginesTried=0;
   try{
     const directUrl=String(lead.website||lead.social_profile_url||lead.profile_url||'').trim();
