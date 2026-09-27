@@ -18,7 +18,8 @@ const REDIS_URL=process.env.ACQUISITION_REDIS_URL||'';
 const YOZH_BASE_URL=(process.env.YOZH_BASE_URL||'').replace(/\/$/,'');
 const CONCURRENCY=Math.max(1,Math.min(8,Number(process.env.EMAIL_V2_CONCURRENCY||3)));
 const SEARCH_LIMIT=Math.max(4,Math.min(10,Number(process.env.EMAIL_V2_SEARCH_LIMIT||8)));
-const QUERY_BUDGET=Math.max(2,Math.min(9,Number(process.env.EMAIL_V2_QUERY_BUDGET||5)));
+const QUERY_BUDGET=Math.max(1,Math.min(9,Number(process.env.EMAIL_V2_QUERY_BUDGET||2)));
+const ENGINES=String(process.env.EMAIL_V2_ENGINES||'bing,yandex').split(',').map(x=>x.trim()).filter(Boolean).slice(0,2);
 const RETRY_MS=Math.max(30*60*1000,Number(process.env.EMAIL_V2_RETRY_MS||6*60*60*1000));
 const REFRESH_MS=Math.max(60*1000,Number(process.env.EMAIL_V2_REFRESH_MS||10*60*1000));
 const LOOP_MS=Math.max(750,Number(process.env.EMAIL_V2_LOOP_MS||1500));
@@ -64,16 +65,16 @@ async function fetchJson(url,init={},timeout=90000){
   try{const r=await fetch(url,{...init,signal:ctl.signal});const text=await r.text();let body={};try{body=text?JSON.parse(text):{};}catch{body={raw:text};}if(!r.ok)throw new Error(`${r.status} ${r.statusText}: ${text.slice(0,300)}`);return body;}finally{clearTimeout(timer);}
 }
 async function search(query,engine){
-  const body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,engine,locale:'us',limit:SEARCH_LIMIT,scrape:false,proxy_type:'none',max_retries:2})},120000);
+  const body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,engine,locale:'us',limit:SEARCH_LIMIT,scrape:false,proxy_type:'none',max_retries:0})},30000);
   return Array.isArray(body.results)?body.results:[];
 }
 async function scrapePages(results=[]){
-  const chosen=results.map(r=>({...r,url:resultUrl(r)})).filter(r=>r.url).slice(0,4);
+  const chosen=results.map(r=>({...r,url:resultUrl(r)})).filter(r=>r.url).slice(0,1);
   if(!chosen.length)return [];
-  const create=await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/pages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pages:chosen.map(r=>({url:r.url,proxy_type:'none',raw_html:true,formats:['markdown'],timeout_ms:30000}))})},30000);
+  const create=await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/pages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pages:chosen.map(r=>({url:r.url,proxy_type:'none',raw_html:true,formats:['markdown'],timeout_ms:15000}))})},20000);
   const id=String(create?.job_id||''); if(!id)return chosen;
-  const deadline=Date.now()+65000;let snap=null;
-  while(Date.now()<deadline){snap=await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/${encodeURIComponent(id)}/results`,{},30000);if(Number(snap?.done||0)>=Number(snap?.total||chosen.length)||['completed','failed','cancelled','canceled'].includes(String(snap?.status||'').toLowerCase()))break;await sleep(1000);}
+  const deadline=Date.now()+25000;let snap=null;
+  while(Date.now()<deadline){snap=await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/${encodeURIComponent(id)}/results`,{},15000);if(Number(snap?.done||0)>=Number(snap?.total||chosen.length)||['completed','failed','cancelled','canceled'].includes(String(snap?.status||'').toLowerCase()))break;await sleep(1000);}
   const out=Array.isArray(snap?.results)?snap.results:[];
   return chosen.map((r,i)=>({...r,scrape:out[i]||null}));
 }
@@ -132,7 +133,7 @@ async function enrichOne(){
         const emails=candidateEmailsFromEvidence({text:page,sourceUrl:directUrl,business,phone,location});
         if(emails.length){found.push(...emails);source=directUrl;}
         if(!emails.length){
-          const contactUrls=discoverContactUrls(result).slice(0,3);
+          const contactUrls=discoverContactUrls(result).slice(0,1);
           if(contactUrls.length){
             const contactPages=await scrapePages(contactUrls.map(url=>({url})));
             for(const contact of contactPages){
@@ -145,7 +146,7 @@ async function enrichOne(){
       }
       found=[...new Set(found)];
     }
-    for(const engine of ['bing','yandex','google']){
+    for(const engine of ENGINES){
       if(found.length)break;
       enginesTried++;
       for(const query of queries){
@@ -157,14 +158,14 @@ async function enrichOne(){
           if(snippetEmails.length){found.push(...snippetEmails);source=source||url;}
         }
         found=[...new Set(found)];if(found.length)break;
-        const candidates=results.filter(r=>promisingResult(r,business,phone,location)).filter(r=>{const u=resultUrl(r);return u&&freshUrls.has(u);}).slice(0,4);
+        const candidates=results.filter(r=>promisingResult(r,business,phone,location)).filter(r=>{const u=resultUrl(r);return u&&freshUrls.has(u);}).slice(0,1);
         promising+=candidates.length;
         const scraped=await scrapePages(candidates);
         for(const result of scraped){
           const page=[resultText(result),result?.scrape?.markdown,result?.scrape?.fit_markdown,result?.scrape?.raw_html,result?.scrape?.html].filter(Boolean).join('\n');
           const emails=candidateEmailsFromEvidence({text:page,sourceUrl:result.url,business,phone,location});
           if(emails.length){found.push(...emails);source=source||result.url;continue;}
-          const contactUrls=discoverContactUrls(result).slice(0,3);
+          const contactUrls=discoverContactUrls(result).slice(0,1);
           if(contactUrls.length){
             const contactPages=await scrapePages(contactUrls.map(url=>({url})));
             for(const contact of contactPages){
