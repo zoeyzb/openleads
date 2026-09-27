@@ -191,9 +191,13 @@ async function enrichOne(){
         found=[...new Set(found)];if(found.length)break;
         const candidates=results.filter(r=>promisingResult(r,business,phone,location)).filter(r=>{const u=resultUrl(r);return u&&freshUrls.has(u);}).slice(0,1);
         promising+=candidates.length;
-        if(candidates.length){
-          const harvested=await harvestCandidateDomain(candidates[0],business);
-          if(harvested.emails.length){found.push(...harvested.emails);source=source||harvested.source;}
+        const harvestPool=results.filter(r=>{
+          const u=resultUrl(r);const h=hostOf(u);
+          return u&&freshUrls.has(u)&&h&&!platformDomain(h)&&!/(^|\.)(bing|google|yahoo|duckduckgo|yandex)\./i.test(h);
+        }).slice(0,3);
+        for(const candidate of harvestPool){
+          const harvested=await harvestCandidateDomain(candidate,business);
+          if(harvested.emails.length){found.push(...harvested.emails);source=source||harvested.source;break;}
         }
         found=[...new Set(found)];if(found.length)break;
         const scraped=await scrapePages(candidates);
