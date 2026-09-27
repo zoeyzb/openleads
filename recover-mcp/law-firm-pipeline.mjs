@@ -24,11 +24,30 @@ const STATS="recover:law-firm:stats:v1";
 const PROFILE={industry:"LAW_FIRM",require_phone:false,require_email:false,require_contact:true,require_no_website:false,include_no_website:true,min_score:35};
 const SCOPE_SET=campaignLeadSetKey(PROFILE);
 
-const redis=createClient({url:REDIS_URL});
+const redis=createClient({
+  url:REDIS_URL,
+  socket:{
+    connectTimeout:10000,
+    keepAlive:5000,
+    reconnectStrategy:(retries)=>Math.min(5000,250*Math.max(1,retries))
+  }
+});
 redis.on("error",e=>console.error("law-firm redis error",e));
-await redis.connect();
-
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function connectRedis(){
+  let attempt=0;
+  while(!redis.isReady){
+    attempt++;
+    try{
+      if(!redis.isOpen) await redis.connect();
+      if(redis.isReady) break;
+    }catch(error){
+      console.warn(JSON.stringify({event:"law_firm_redis_connect_retry",attempt,error:String(error?.message||error)}));
+    }
+    await sleep(Math.min(5000,500*attempt));
+  }
+}
+await connectRedis();
 function normalize(v=""){return String(v||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
 function parseCsvLine(line){
   const out=[];let cell="",quoted=false;
