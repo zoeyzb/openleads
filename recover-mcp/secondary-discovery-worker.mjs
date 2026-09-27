@@ -256,48 +256,69 @@ async function targetedEmailEnrichmentCycle(){
   const queries=[
     `"${variants[1]}" "${business}"`,
     `"${variants[2]}" "${business}"`,
+    `"${variants[1]}"`,
+    `"${phone}"`,
     `"${business}" ${location} email`,
+    `"${business}" ${location} contact`,
     `"${business}" "${phone}"`
   ].filter(Boolean);
-  let body={results:[],count:0,warnings:[]},query=queries[0]||"";
-  let directoryResults=[];
+
+  let foundEmails=[],sourceUrl="",lastQuery=queries[0]||"";
+  let totalRawResults=0,totalDirectoryResults=0;
+  const observedDomains=[];
+  const seenUrls=new Set();
   try{
     for(const candidateQuery of queries){
-      query=candidateQuery;
-      body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{
+      lastQuery=candidateQuery;
+      const body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{
         method:"POST",headers:{"content-type":"application/json"},
-        body:JSON.stringify({query,engine:"bing",locale:"us",limit:TARGETED_SEARCH_LIMIT,scrape:false,proxy_type:"none",max_retries:2})
+        body:JSON.stringify({query:candidateQuery,engine:"bing",locale:"us",limit:TARGETED_SEARCH_LIMIT,scrape:false,proxy_type:"none",max_retries:2})
       },120000);
-      directoryResults=(body.results||[]).filter(result=>isDirectoryResult(result)).slice(0,TARGETED_SEARCH_LIMIT);
-      if(directoryResults.length) break;
+      const rawResults=Array.isArray(body.results)?body.results:[];
+      totalRawResults+=rawResults.length;
+      for(const result of rawResults){
+        const h=hostOf(resultUrl(result));
+        if(h&&!observedDomains.includes(h)&&observedDomains.length<12) observedDomains.push(h);
+      }
+      const directoryResults=rawResults
+        .filter(result=>isDirectoryResult(result))
+        .filter(result=>{
+          const url=resultUrl(result);
+          if(!url||seenUrls.has(url)) return false;
+          seenUrls.add(url);
+          return true;
+        })
+        .slice(0,TARGETED_SEARCH_LIMIT);
+      totalDirectoryResults+=directoryResults.length;
+      if(!directoryResults.length) continue;
+
+      const scraped=await scrapeDirectoryProfiles(directoryResults);
+      for(const result of scraped){
+        const page=[result.title,result.snippet,result?.scrape?.markdown,result?.scrape?.fit_markdown].filter(Boolean).join("\n");
+        const pagePhones=phonesFrom(page);
+        if(!pagePhones.includes(phone)) continue;
+        const domain=hostOf(result.url);
+        const emails=businessEmailsFrom(page,domain);
+        if(!emails.length) continue;
+        foundEmails.push(...emails);
+        sourceUrl=sourceUrl||result.url;
+      }
+      foundEmails=[...new Set(foundEmails)];
+      if(foundEmails.length) break;
     }
   }catch(error){
     await redis.hIncrBy("recover:secondary:stats","targeted_errors",1);
-    // Put transient failures back so they are not lost from the queue.
     await redis.sAdd(EMAIL_PENDING_SET,key);
     throw error;
   }
 
-  const scraped=await scrapeDirectoryProfiles(directoryResults);
-  let foundEmails=[],sourceUrl="";
-  for(const result of scraped){
-    const page=[result.title,result.snippet,result?.scrape?.markdown,result?.scrape?.fit_markdown].filter(Boolean).join("\n");
-    const pagePhones=phonesFrom(page);
-    if(!pagePhones.includes(phone)) continue;
-    const domain=hostOf(result.url);
-    const emails=businessEmailsFrom(page,domain);
-    if(!emails.length) continue;
-    foundEmails.push(...emails);
-    sourceUrl=result.url;
-  }
-  foundEmails=[...new Set(foundEmails)];
   await redis.hSet(EMAIL_ATTEMPT_HASH,key,String(Date.now()));
   await redis.sRem(EMAIL_PENDING_SET,key);
   await redis.hIncrBy("recover:secondary:stats","targeted_attempts",1);
 
   if(!foundEmails.length){
     await redis.hIncrBy("recover:secondary:stats","targeted_no_email",1);
-    console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query,raw_results:Number(body.count||body.results?.length||0),directory_results:directoryResults.length,result_domains:(body.results||[]).map(r=>hostOf(resultUrl(r))).filter(Boolean).slice(0,8),emails:0}));
+    console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query:lastQuery,queries_tried:queries.length,raw_results:totalRawResults,directory_results:totalDirectoryResults,result_domains:observedDomains,emails:0}));
     return {ran:true,enriched:false,key};
   }
 
@@ -305,10 +326,9 @@ async function targetedEmailEnrichmentCycle(){
   await redis.hSet("recover:leadstore:qualified",key,JSON.stringify(merged));
   await redis.hIncrBy("recover:secondary:stats","targeted_email_enriched",foundEmails.length);
   await redis.hIncrBy("recover:secondary:stats","email_enriched",foundEmails.length);
-  console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query,raw_results:Number(body.count||body.results?.length||0),directory_results:directoryResults.length,result_domains:(body.results||[]).map(r=>hostOf(resultUrl(r))).filter(Boolean).slice(0,8),emails:foundEmails.length,source:sourceUrl}));
+  console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query:lastQuery,queries_tried:queries.length,raw_results:totalRawResults,directory_results:totalDirectoryResults,result_domains:observedDomains,emails:foundEmails.length,source:sourceUrl}));
   return {ran:true,enriched:true,key,emails:foundEmails.length};
 }
-
 async function loadCities(){
   const csv=await (await fetch(ZIP_SOURCE_URL)).text(); const rows=parseCsv(csv); const by=new Map();
   for(const r of rows){
