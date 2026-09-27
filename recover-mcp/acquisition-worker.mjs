@@ -737,6 +737,8 @@ async function deleteRawForJob(id) {
 const NY_PRIORITY_QUEUE="recover:acquisition:queue:ny-priority";
 const US_CITY_PRIORITY_QUEUE="recover:acquisition:queue:us-city-priority";
 const ACTIVE_QUEUE="recover:acquisition:queue";
+const LAW_FIRM_QUEUE="recover:acquisition:queue:law-firm";
+const ALLOWED_PROFILE=String(process.env.ACQUISITION_ALLOWED_PROFILE||"").trim();
 const PAUSED_NATIONAL_QUEUE="recover:acquisition:queue:paused-national";
 const PAUSED_NY_SURPLUS_QUEUE="recover:acquisition:queue:paused-ny-surplus";
 const PAUSED_LEGACY_NATIONAL_QUEUE="recover:acquisition:queue:paused-legacy-national-v1";
@@ -1328,9 +1330,11 @@ async function acquisitionWorkerLoop(slot){
       // Give it bounded capacity without starving general nationwide work.
       // Fresh nationwide yield work should dominate once a city has been
       // covered. Only sample the legacy city-priority queue occasionally.
-      const queueOrder=(queuePollCursor%10===0)
-        ? [NY_PRIORITY_QUEUE,US_CITY_PRIORITY_QUEUE,ACTIVE_QUEUE]
-        : [NY_PRIORITY_QUEUE,ACTIVE_QUEUE,US_CITY_PRIORITY_QUEUE];
+      const queueOrder=ALLOWED_PROFILE==="law-firm"
+        ? [LAW_FIRM_QUEUE]
+        : ((queuePollCursor%10===0)
+          ? [NY_PRIORITY_QUEUE,US_CITY_PRIORITY_QUEUE,ACTIVE_QUEUE]
+          : [NY_PRIORITY_QUEUE,ACTIVE_QUEUE,US_CITY_PRIORITY_QUEUE]);
       const item=await redis.brPop(queueOrder,5);
       if (shuttingDown) break;
       const id=item?.element||item;
