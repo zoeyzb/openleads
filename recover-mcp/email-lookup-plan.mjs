@@ -9,19 +9,19 @@ export function buildLookupPlan({business='',phone='',location='',address='',noW
   if(noWebsite){
     return {
       stage1:[
+        `"${b}" ${l} email`,
         p?`"${p}" "${b}"`:'',
-        p?`site:facebook.com "${p}" "${b}"`:'',
-        p?`site:yelp.com "${p}" "${b}"`:''
+        a?`"${b}" "${a}" email`:''
       ].filter(Boolean),
       stage2:[
+        p?`site:facebook.com "${p}" "${b}"`:'',
+        p?`site:yelp.com "${p}" "${b}"`:'',
         p?`site:bbb.org "${p}" "${b}"`:'',
         p?`site:chamberofcommerce.com "${p}" "${b}"`:'',
         p?`site:manta.com "${p}" "${b}"`:'',
         p?`site:angi.com "${p}" "${b}"`:'',
         p?`site:homeadvisor.com "${p}" "${b}"`:'',
-        p?`site:thumbtack.com "${p}" "${b}"`:'',
-        a?`"${b}" "${a}" email`:'',
-        `"${b}" ${l} email`
+        p?`site:thumbtack.com "${p}" "${b}"`:''
       ].filter(Boolean)
     };
   }
