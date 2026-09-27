@@ -1,5 +1,7 @@
 import { createClient } from 'redis';
 import { mergeLeadRecords } from './acquisition-persistence.mjs';
+import { isCoreHomeServiceLead } from './home-service-targeting.mjs';
+import { discoverContactUrls } from './email-contact-links.mjs';
 import {
   candidateEmailsFromEvidence,
   searchQueries,
@@ -13,7 +15,7 @@ import {
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||'';
 const YOZH_BASE_URL=(process.env.YOZH_BASE_URL||'').replace(/\/$/,'');
-const CONCURRENCY=Math.max(1,Math.min(6,Number(process.env.EMAIL_V2_CONCURRENCY||3)));
+const CONCURRENCY=Math.max(1,Math.min(8,Number(process.env.EMAIL_V2_CONCURRENCY||3)));
 const SEARCH_LIMIT=Math.max(4,Math.min(10,Number(process.env.EMAIL_V2_SEARCH_LIMIT||8)));
 const QUERY_BUDGET=Math.max(2,Math.min(9,Number(process.env.EMAIL_V2_QUERY_BUDGET||5)));
 const RETRY_MS=Math.max(30*60*1000,Number(process.env.EMAIL_V2_RETRY_MS||6*60*60*1000));
@@ -66,7 +68,7 @@ async function search(query,engine){
 async function scrapePages(results=[]){
   const chosen=results.map(r=>({...r,url:resultUrl(r)})).filter(r=>r.url).slice(0,4);
   if(!chosen.length)return [];
-  const create=await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/pages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pages:chosen.map(r=>({url:r.url,proxy_type:'none',raw_html:false,formats:['markdown'],timeout_ms:30000}))})},30000);
+  const create=await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/pages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({pages:chosen.map(r=>({url:r.url,proxy_type:'none',raw_html:true,formats:['markdown'],timeout_ms:30000}))})},30000);
   const id=String(create?.job_id||''); if(!id)return chosen;
   const deadline=Date.now()+65000;let snap=null;
   while(Date.now()<deadline){snap=await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/${encodeURIComponent(id)}/results`,{},30000);if(Number(snap?.done||0)>=Number(snap?.total||chosen.length)||['completed','failed','cancelled','canceled'].includes(String(snap?.status||'').toLowerCase()))break;await sleep(1000);}
@@ -77,13 +79,14 @@ async function scrapePages(results=[]){
 let lastRefresh=0;
 async function refreshPending({force=false}={}){
   if(!force&&Date.now()-lastRefresh<REFRESH_MS)return;
-  lastRefresh=Date.now();const now=Date.now();const attempted=await redis.hGetAll(ATTEMPTED);let scanned=0,queued=0,withEmail=0,withWebsite=0,noPhone=0,batch=[];
+  lastRefresh=Date.now();const now=Date.now();const attempted=await redis.hGetAll(ATTEMPTED);let scanned=0,queued=0,withEmail=0,withWebsite=0,noPhone=0,nonTarget=0,batch=[];
   for await(const page of redis.hScanIterator('recover:leadstore:qualified',{COUNT:500})){
     for(const entry of (Array.isArray(page)?page:[page])){
       if(!entry?.field||entry.value===undefined)continue; scanned++;
       let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
       if(leadEmails(lead).length){withEmail++;continue;}
-      if(String(lead.website||'').trim()){withWebsite++;continue;}
+      if(!isCoreHomeServiceLead(lead)){nonTarget++;continue;}
+      if(String(lead.website||'').trim())withWebsite++;
       const phone=normalizePhone(lead.phone), business=String(lead.name||lead.title||'').trim(), location=leadLocation(lead);
       if(phone.length!==10){noPhone++;if(!business||!location)continue;}
       const last=Number(attempted?.[entry.field]||0);if(last&&now-last<RETRY_MS)continue;
@@ -92,7 +95,7 @@ async function refreshPending({force=false}={}){
     }
   }
   if(batch.length)queued+=Number(await redis.sAdd(PENDING,batch)||0);
-  console.log(JSON.stringify({event:'email_v2_pending_refresh',scanned,withEmail,withWebsite,noPhone,queued,pending:await redis.sCard(PENDING)}));
+  console.log(JSON.stringify({event:'email_v2_pending_refresh',scanned,withEmail,withWebsite,noPhone,nonTarget,queued,pending:await redis.sCard(PENDING)}));
 }
 
 function promisingResult(result,business,phone,location){
@@ -110,19 +113,31 @@ async function enrichOne(){
   const key=String(await redis.sPop(PENDING)||'');if(!key)return {ran:false};
   const raw=await redis.hGet('recover:leadstore:qualified',key);if(!raw)return {ran:false};
   let lead;try{lead=JSON.parse(raw)||{};}catch{return {ran:false};}
-  if(leadEmails(lead).length||String(lead.website||'').trim())return {ran:false};
+  if(leadEmails(lead).length)return {ran:false};
+  if(!isCoreHomeServiceLead(lead)){await redis.hSet(ATTEMPTED,key,String(Date.now()));return {ran:false,reason:'non_target'};}
   const phone=normalizePhone(lead.phone), business=String(lead.name||lead.title||'').trim(), location=leadLocation(lead);
   if(!business||(phone.length!==10&&!location))return {ran:false};
   const queries=searchQueries({business,phone,location}).slice(0,QUERY_BUDGET);
   const seen=new Set();let found=[],source='',rawResults=0,promising=0,enginesTried=0;
   try{
-    const directUrl=String(lead.social_profile_url||'').trim();
+    const directUrl=String(lead.website||lead.social_profile_url||lead.profile_url||'').trim();
     if(/^https?:\/\//i.test(directUrl)){
       const direct=await scrapePages([{url:directUrl}]);
       for(const result of direct){
-        const page=[result?.scrape?.markdown,result?.scrape?.fit_markdown].filter(Boolean).join('\n');
+        const page=[resultText(result),result?.scrape?.markdown,result?.scrape?.fit_markdown,result?.scrape?.raw_html,result?.scrape?.html].filter(Boolean).join('\n');
         const emails=candidateEmailsFromEvidence({text:page,sourceUrl:directUrl,business,phone,location});
         if(emails.length){found.push(...emails);source=directUrl;}
+        if(!emails.length){
+          const contactUrls=discoverContactUrls(result).slice(0,3);
+          if(contactUrls.length){
+            const contactPages=await scrapePages(contactUrls.map(url=>({url})));
+            for(const contact of contactPages){
+              const contactText=[resultText(contact),contact?.scrape?.markdown,contact?.scrape?.fit_markdown,contact?.scrape?.raw_html,contact?.scrape?.html].filter(Boolean).join('\n');
+              const more=candidateEmailsFromEvidence({text:contactText,sourceUrl:contact.url,business,phone,location});
+              if(more.length){found.push(...more);source=source||contact.url;}
+            }
+          }
+        }
       }
       found=[...new Set(found)];
     }
@@ -142,9 +157,18 @@ async function enrichOne(){
         promising+=candidates.length;
         const scraped=await scrapePages(candidates);
         for(const result of scraped){
-          const page=[resultText(result),result?.scrape?.markdown,result?.scrape?.fit_markdown].filter(Boolean).join('\n');
+          const page=[resultText(result),result?.scrape?.markdown,result?.scrape?.fit_markdown,result?.scrape?.raw_html,result?.scrape?.html].filter(Boolean).join('\n');
           const emails=candidateEmailsFromEvidence({text:page,sourceUrl:result.url,business,phone,location});
-          if(emails.length){found.push(...emails);source=source||result.url;}
+          if(emails.length){found.push(...emails);source=source||result.url;continue;}
+          const contactUrls=discoverContactUrls(result).slice(0,3);
+          if(contactUrls.length){
+            const contactPages=await scrapePages(contactUrls.map(url=>({url})));
+            for(const contact of contactPages){
+              const contactText=[resultText(contact),contact?.scrape?.markdown,contact?.scrape?.fit_markdown,contact?.scrape?.raw_html,contact?.scrape?.html].filter(Boolean).join('\n');
+              const more=candidateEmailsFromEvidence({text:contactText,sourceUrl:contact.url,business,phone,location});
+              if(more.length){found.push(...more);source=source||contact.url;}
+            }
+          }
         }
         found=[...new Set(found)];if(found.length)break;
       }
