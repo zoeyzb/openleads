@@ -126,7 +126,7 @@ async function enrichOne(){
       }
       found=[...new Set(found)];
     }
-    for(const engine of ['bing','google']){
+    for(const engine of ['bing','yandex','google']){
       if(found.length)break;
       enginesTried++;
       for(const query of queries){
