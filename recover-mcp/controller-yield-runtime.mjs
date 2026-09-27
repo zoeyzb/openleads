@@ -8,52 +8,48 @@ const MILLION_PASS_MARKER='if(TARGET_TOTAL>=1000000&&coveragePass<3)';
 
 export function patchControllerSource(source='') {
   let out=String(source);
-
-  if (out.includes(OLD_IMPORT_LINE)) {
-    out=out.replace(OLD_IMPORT_LINE,IMPORT_LINE);
-  } else if (!out.includes(IMPORT_LINE)) {
+  if (out.includes(OLD_IMPORT_LINE)) out=out.replace(OLD_IMPORT_LINE,IMPORT_LINE);
+  else if (!out.includes(IMPORT_LINE)) {
     const anchor=/import[^\n]+from\s+['"]\.\/nationwide-shard-scheduler\.mjs['"];?\s*\n/;
     if (!anchor.test(out)) throw new Error('controller import anchor missing');
     out=out.replace(anchor,match=>match+IMPORT_LINE+'\n');
   }
-
   if (!out.includes('return orderControllerAreas(out);')) {
     const returnPattern=/return\s+partitionNationwideAreas\s*\(\s*out\s*\)\s*;?/;
     if (!returnPattern.test(out)) throw new Error('controller area-order marker missing');
     out=out.replace(returnPattern,'return orderControllerAreas(out);');
   }
-
   if (!out.includes(MILLION_PASS_MARKER)) {
     const statePattern=/(let cursor=Number\(await redis\.hGet\(CONTROLLER_KEY,"cursor"\)\|\|0\);\s*let coveragePass=Math\.max\(1,Number\(await redis\.hGet\(CONTROLLER_KEY,"coverage_pass"\)\|\|1\)\);)/;
     if (!statePattern.test(out)) throw new Error('controller coverage state marker missing');
     out=out.replace(statePattern,`$1\nif(TARGET_TOTAL>=1000000&&coveragePass<3){coveragePass=3;cursor=0;await redis.hSet(CONTROLLER_KEY,{cursor:'0',coverage_pass:'3'});console.log(JSON.stringify({event:'million_target_query_refresh_pass',coveragePass,cursor}));}`);
   }
-
   if (!out.includes('location:locationForCoveragePass(area,coveragePass)')) {
     const locationPattern=/location\s*:\s*area\.location/;
     if (!locationPattern.test(out)) throw new Error('controller job location marker missing');
     out=out.replace(locationPattern,'location:locationForCoveragePass(area,coveragePass)');
   }
-
   return out;
 }
 
+function spawnHelper(script,eventPrefix){
+  const child=spawn(process.execPath,[script],{cwd:process.cwd(),env:process.env,stdio:'inherit'});
+  child.on('exit',(code,signal)=>console.warn(JSON.stringify({event:`${eventPrefix}_exit`,code,signal})));
+  child.on('error',error=>console.warn(JSON.stringify({event:`${eventPrefix}_error`,error:String(error?.message||error)})));
+  process.on('SIGTERM',()=>{try{child.kill('SIGTERM')}catch{}});
+  process.on('SIGINT',()=>{try{child.kill('SIGINT')}catch{}});
+  console.log(JSON.stringify({event:`${eventPrefix}_started`,pid:child.pid}));
+  return child;
+}
+
 async function startSecondaryDiscoveryChild(){
-  if(String(process.env.SECONDARY_DISCOVERY_ENABLED||"1")==="0") return;
-  const child=spawn(process.execPath,["recover-mcp/secondary-discovery-worker.mjs"],{
-    cwd:process.cwd(),
-    env:process.env,
-    stdio:"inherit"
-  });
-  child.on("exit",(code,signal)=>{
-    console.warn(JSON.stringify({event:"secondary_discovery_child_exit",code,signal}));
-  });
-  child.on("error",error=>{
-    console.warn(JSON.stringify({event:"secondary_discovery_child_error",error:String(error?.message||error)}));
-  });
-  process.on("SIGTERM",()=>{try{child.kill("SIGTERM")}catch{}});
-  process.on("SIGINT",()=>{try{child.kill("SIGINT")}catch{}});
-  console.log(JSON.stringify({event:"secondary_discovery_child_started",pid:child.pid}));
+  if(String(process.env.SECONDARY_DISCOVERY_ENABLED||'1')==='0') return;
+  spawnHelper('recover-mcp/secondary-discovery-worker.mjs','secondary_discovery_child');
+}
+
+async function startEmailV2Child(){
+  if(String(process.env.EMAIL_V2_ENABLED||'1')==='0') return;
+  spawnHelper('recover-mcp/secondary-email-enrichment-v2.mjs','email_v2_child');
 }
 
 async function main(){
@@ -62,6 +58,7 @@ async function main(){
   const source=fs.readFileSync(sourceUrl,'utf8');
   fs.writeFileSync(runtimeUrl,patchControllerSource(source));
   await startSecondaryDiscoveryChild();
+  await startEmailV2Child();
   await import(pathToFileURL(runtimeUrl.pathname).href+`?v=${Date.now()}`);
 }
 
