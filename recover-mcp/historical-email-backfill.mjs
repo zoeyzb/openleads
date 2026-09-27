@@ -201,6 +201,7 @@ while(true){
       const timer=setInterval(()=>renewLeader().catch(()=>{}),15000);timer.unref?.();
       await runOnce();
       clearInterval(timer);
+      await redis.del(FAILURES_KEY,NEXT_RETRY_KEY);
       if(await redis.get(LEADER)===INSTANCE)await redis.del(LEADER);
       await sleep(INTERVAL_MS);
     } else {
@@ -208,8 +209,15 @@ while(true){
       await sleep(30000);
     }
   }catch(error){
-    console.error(JSON.stringify({event:'historical_email_backfill_error',error:String(error?.message||error)}));
+    const failures=Number(await redis.incr(FAILURES_KEY).catch(()=>1))||1;
+    const delayMs=backfillRetryDelayMs(Math.max(0,failures-1));
+    const nextRetryAt=Date.now()+delayMs;
+    try{
+      await redis.expire(FAILURES_KEY,24*60*60);
+      await redis.set(NEXT_RETRY_KEY,String(nextRetryAt),{PX:delayMs});
+    }catch{}
+    console.error(JSON.stringify({event:'historical_email_backfill_error',error:String(error?.message||error),failures,retry_in_ms:delayMs,next_retry_at:new Date(nextRetryAt).toISOString()}));
     try{if(await redis.get(LEADER)===INSTANCE)await redis.del(LEADER);}catch{}
-    await sleep(15000);
+    await sleep(delayMs);
   }
 }
