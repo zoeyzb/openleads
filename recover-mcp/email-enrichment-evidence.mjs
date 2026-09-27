@@ -28,7 +28,7 @@ export function candidateEmailsFromEvidence({text='',sourceUrl='',business='',ph
   const exactPhone=Boolean(p && phones.includes(p));
   const nameScore=businessTokenScore(text,business);
   const loc=normalizeText(location); const locationMatch=Boolean(loc && normalizeText(text).includes(loc.split(' ').filter(Boolean)[0]||loc));
-  if(!exactPhone && !(nameScore>=0.75 && locationMatch)) return [];
+  if(!((exactPhone && nameScore>=0.5) || (nameScore>=0.75 && locationMatch))) return [];
   const sourceHost=hostOf(sourceUrl);
   return emailsFrom(text).filter(email=>{
     const domain=(email.split('@')[1]||'').toLowerCase().replace(/^www\./,'');
@@ -37,9 +37,13 @@ export function candidateEmailsFromEvidence({text='',sourceUrl='',business='',ph
     if(BLOCKED_EMAIL_DOMAINS.some(d=>domain===d||domain.endsWith('.'+d))) return false;
     if(platformDomain(sourceHost) && domain===sourceHost) return false;
     const sourceIsPlatform=platformDomain(sourceHost);
-    if(!sourceIsPlatform) return true;
-    if(FREE_MAIL.has(domain)) return exactPhone && nameScore>=0.5;
-    return domainBusinessAffinity(domain,business)>=0.34;
+    if(!sourceIsPlatform){
+      if(FREE_MAIL.has(domain)) return exactPhone && nameScore>=0.75 && locationMatch;
+      const emailMatchesSource=sourceHost===domain||sourceHost.endsWith('.'+domain)||domain.endsWith('.'+sourceHost);
+      return emailMatchesSource && domainBusinessAffinity(domain,business)>=0.5;
+    }
+    if(FREE_MAIL.has(domain)) return exactPhone && nameScore>=0.75 && locationMatch;
+    return domainBusinessAffinity(domain,business)>=0.5;
   });
 }
 export function compactLocation(location=''){
