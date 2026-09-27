@@ -22,8 +22,9 @@ const QUERY_BUDGET=Math.max(2,Math.min(9,Number(process.env.EMAIL_V2_QUERY_BUDGE
 const RETRY_MS=Math.max(30*60*1000,Number(process.env.EMAIL_V2_RETRY_MS||6*60*60*1000));
 const REFRESH_MS=Math.max(60*1000,Number(process.env.EMAIL_V2_REFRESH_MS||10*60*1000));
 const LOOP_MS=Math.max(750,Number(process.env.EMAIL_V2_LOOP_MS||1500));
-const PENDING='recover:secondary:email-v2:pending:v1';
-const ATTEMPTED='recover:secondary:email-v2:attempted:v1';
+const STRATEGY_VERSION=String(process.env.EMAIL_V2_STRATEGY_VERSION||'v3-directory-staged');
+const PENDING=`recover:secondary:email-v2:pending:${STRATEGY_VERSION}`;
+const ATTEMPTED=`recover:secondary:email-v2:attempted:${STRATEGY_VERSION}`;
 const LEADER='recover:secondary:email-v2:leader';
 if(!REDIS_URL) throw new Error('ACQUISITION_REDIS_URL required');
 if(!YOZH_BASE_URL) throw new Error('YOZH_BASE_URL required');
@@ -190,7 +191,7 @@ async function enrichOne(){
 }
 
 await refreshPending({force:true});
-console.log(JSON.stringify({event:'email_v2_started',concurrency:CONCURRENCY,pending:await redis.sCard(PENDING),retry_ms:RETRY_MS}));
+console.log(JSON.stringify({event:'email_v2_started',strategy_version:STRATEGY_VERSION,concurrency:CONCURRENCY,pending:await redis.sCard(PENDING),retry_ms:RETRY_MS}));
 while(true){
   try{const batch=await Promise.allSettled(Array.from({length:CONCURRENCY},()=>enrichOne()));const enriched=batch.filter(x=>x.status==='fulfilled'&&x.value?.enriched).length;const rejected=batch.filter(x=>x.status==='rejected').length;console.log(JSON.stringify({event:'email_v2_batch',concurrency:CONCURRENCY,enriched,rejected,pending:await redis.sCard(PENDING)}));}
   catch(error){console.error('email-v2 loop error',error?.message||error);}
