@@ -56,11 +56,11 @@ export function chooseHistoricalMatch(row={},index={},opts={}){
       } else return {...v,method:'raw_lead_id'};
     }
   }
-  const phone=normalizePhone(row.phone); if(phone){const v=index.byPhone?.get(phone); if(v)return {...v,method:'phone'};}
   for(const id of [row.place_id?`place:${row.place_id}`:'',row.cid?`cid:${row.cid}`:'',mapIdentityFromUrl(row.maps_url||row.google_maps_url||'')]){
     if(!id)continue; const v=index.byMap?.get(id); if(v)return {...v,method:'maps'};
   }
   const na=`${normalizeText(row.name||row.title)}|${normalizeAddress(row.address)}`;
   if(na!=='|'){const v=index.byNameAddress?.get(na);if(v)return {...v,method:'name_address'};}
+  const phone=normalizePhone(row.phone); if(phone){const v=index.byPhone?.get(phone); if(v)return {...v,method:'phone'};}
   return null;
 }
