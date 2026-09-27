@@ -15,17 +15,17 @@ export function buildLookupPlan({business='',phone='',location='',address='',noW
     const ps=phoneSearch(p);
     return {
       stage1:[
+        ps?`${ps} "${b}"`:'',
+        ps?`${ps} email`:'',
+        a?`"${b}" "${a}"`:'',
+        `"${b}" ${l} contact`
+      ].filter(Boolean),
+      stage2:[
         ps?`site:facebook.com ${ps} "${b}"`:'',
         ps?`site:chamberofcommerce.com ${ps} "${b}"`:'',
         ps?`site:manta.com ${ps} "${b}"`:'',
         ps?`site:bbb.org ${ps} "${b}"`:'',
-        ps?`site:yelp.com ${ps} "${b}"`:''
-      ].filter(Boolean),
-      stage2:[
-        ps?`${ps} "${b}"`:'',
-        ps?`${ps} email`:'',
-        a?`"${b}" "${a}"`:'',
-        `"${b}" ${l} contact`,
+        ps?`site:yelp.com ${ps} "${b}"`:'',
         ps?`site:angi.com ${ps} "${b}"`:'',
         ps?`site:homeadvisor.com ${ps} "${b}"`:'',
         ps?`site:thumbtack.com ${ps} "${b}"`:''
