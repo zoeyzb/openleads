@@ -13,7 +13,7 @@ const TARGETED_CONCURRENCY=Math.min(6,Math.max(1,Number(process.env.SECONDARY_EN
 const EMAIL_PENDING_SET="recover:secondary:email-enrichment:pending:v1";
 const EMAIL_ATTEMPT_HASH="recover:secondary:email-enrichment:attempted:v1";
 const EMAIL_PENDING_REFRESH_MS=Math.max(60000,Number(process.env.SECONDARY_ENRICH_REFRESH_MS||600000));
-const EMAIL_RETRY_MS=Math.max(86400000,Number(process.env.SECONDARY_ENRICH_RETRY_MS||2592000000));
+const EMAIL_RETRY_MS=Math.max(3600000,Number(process.env.SECONDARY_ENRICH_RETRY_MS||21600000));
 const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||1000000);
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
 if(!YOZH_BASE_URL) throw new Error("YOZH_BASE_URL required");
@@ -234,6 +234,18 @@ function leadLocationHint(lead={}){
   if(direct) return direct;
   return String(lead.address||"").trim();
 }
+
+function businessNameMatches(result={},business=""){
+  const wanted=normalizeText(business);
+  if(!wanted) return false;
+  const hay=normalizeText([result?.title,result?.snippet].filter(Boolean).join(" "));
+  if(!hay) return false;
+  if(hay.includes(wanted)) return true;
+  const wantedTokens=wanted.split(" ").filter(t=>t.length>=3);
+  if(!wantedTokens.length) return false;
+  const matched=wantedTokens.filter(t=>hay.includes(t)).length;
+  return matched>=Math.min(2,wantedTokens.length) && matched/wantedTokens.length>=0.6;
+}
 async function targetedEmailEnrichmentCycle(){
   await refreshEmailPendingQueue();
   const picked=await redis.sPop(EMAIL_PENDING_SET);
@@ -282,13 +294,14 @@ async function targetedEmailEnrichmentCycle(){
   }
 
   const queries=[
-    `"${variants[1]}" "${business}"`,
-    `"${variants[2]}" "${business}"`,
-    `"${variants[1]}"`,
-    `"${phone}"`,
     `"${business}" ${location} email`,
     `"${business}" ${location} contact`,
-    `"${business}" "${phone}"`
+    `"${business}" "${variants[1]}"`,
+    `site:facebook.com "${business}" ${location}`,
+    `site:yelp.com "${business}" ${location}`,
+    `site:bbb.org "${business}" ${location}`,
+    `site:chamberofcommerce.com "${business}" ${location}`,
+    `site:manta.com "${business}" ${location}`
   ].filter(Boolean);
 
   let foundEmails=[],sourceUrl="",lastQuery=queries[0]||"";
@@ -298,7 +311,7 @@ async function targetedEmailEnrichmentCycle(){
   try{
     for(const candidateQuery of queries){
       lastQuery=candidateQuery;
-      const preferredEngine=/\b(email|contact)\b/i.test(candidateQuery)?"google":"bing";
+      const preferredEngine=/\b(email|contact)\b|site:/i.test(candidateQuery)?"google":"bing";
       let body;
       try{
         body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{
@@ -320,6 +333,7 @@ async function targetedEmailEnrichmentCycle(){
       }
       const directoryResults=rawResults
         .filter(result=>isDirectoryResult(result))
+        .filter(result=>businessNameMatches(result,business) || phonesFrom([result?.title,result?.snippet].filter(Boolean).join(" ")).includes(phone))
         .filter(result=>{
           const url=resultUrl(result);
           if(!url||seenUrls.has(url)) return false;
@@ -356,7 +370,7 @@ async function targetedEmailEnrichmentCycle(){
 
   if(!foundEmails.length){
     await redis.hIncrBy("recover:secondary:stats","targeted_no_email",1);
-    console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query:lastQuery,queries_tried:queries.length,search_mix:"bing-phone+google-business",raw_results:totalRawResults,directory_results:totalDirectoryResults,result_domains:observedDomains,emails:0}));
+    console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query:lastQuery,queries_tried:queries.length,search_mix:"identity-first-google+verified-directory",raw_results:totalRawResults,directory_results:totalDirectoryResults,result_domains:observedDomains,emails:0}));
     return {ran:true,enriched:false,key};
   }
 
@@ -364,7 +378,7 @@ async function targetedEmailEnrichmentCycle(){
   await redis.hSet("recover:leadstore:qualified",key,JSON.stringify(merged));
   await redis.hIncrBy("recover:secondary:stats","targeted_email_enriched",foundEmails.length);
   await redis.hIncrBy("recover:secondary:stats","email_enriched",foundEmails.length);
-  console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query:lastQuery,queries_tried:queries.length,search_mix:"bing-phone+google-business",raw_results:totalRawResults,directory_results:totalDirectoryResults,result_domains:observedDomains,emails:foundEmails.length,source:sourceUrl}));
+  console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query:lastQuery,queries_tried:queries.length,search_mix:"identity-first-google+verified-directory",raw_results:totalRawResults,directory_results:totalDirectoryResults,result_domains:observedDomains,emails:foundEmails.length,source:sourceUrl}));
   return {ran:true,enriched:true,key,emails:foundEmails.length};
 }
 async function loadCities(){
