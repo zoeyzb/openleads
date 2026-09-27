@@ -64,9 +64,11 @@ async function fetchZipRows(){
     const city=String(row[idx.city]||'').trim();
     const state=String(row[idx.state]||'').trim().toUpperCase();
     const population=Number(String(row[idx.population]||'0').replace(/[^0-9.-]/g,''))||0;
+    const latitude=idx.latitude===undefined?null:Number(row[idx.latitude]);
+    const longitude=idx.longitude===undefined?null:Number(row[idx.longitude]);
     if(!/^\d{5}$/.test(zip)||!city||!/^[A-Z]{2}$/.test(state)) continue;
     if(['PR','VI','GU','AS','MP'].includes(state)) continue;
-    out.push({zip,city,state,population,location:`${zip} ${city}, ${state}`});
+    out.push({zip,city,state,population,latitude:Number.isFinite(latitude)?latitude:null,longitude:Number.isFinite(longitude)?longitude:null,location:`${zip} ${city}, ${state}`});
   }
   if(!out.length) throw new Error('zip source parsed zero areas');
   return out;
@@ -150,6 +152,7 @@ async function enqueueUnit(area,family,mode){
     max_rounds:1,depth:DEPTH,status:'queued',phase:'queued',round:0,rounds_completed:0,
     raw_count:0,unique_count:0,qualified_count:0,stored_count:0,maps_jobs:[],
     source:'us_core_family_partition_controller_v5',source_zip:area.zip,source_population:area.population,
+    source_latitude:area.latitude,source_longitude:area.longitude,
     scheduler_mode:mode,search_location_mode:mode==='coverage'?'city-state':'zip-city-state',created_at:now,updated_at:now
   };
   const claim=await claimCoverage(redis,job,{source:job.source,service_family:family.key,query_index:family.queryIndex});
