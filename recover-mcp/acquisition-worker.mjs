@@ -613,7 +613,13 @@ const HOME_COMFORT_QUERIES=[
   "drain contractor",
   "sewer contractor"
 ];
+const LAW_FIRM_QUERIES=[
+  "law firm","personal injury law firm","family law attorney","estate planning attorney",
+  "probate attorney","employment law firm","business law firm","real estate attorney",
+  "civil litigation attorney","workers compensation attorney","elder law attorney"
+];
 const queryVariants=(industry,location)=>{
+  if (/\blaw\s*firm\b|\battorney\b|\blawyer\b/.test(normalizeText(industry))) return LAW_FIRM_QUERIES.map(q=>`${q} in ${location}`);
   if (isHomeComfortTarget(industry)) return HOME_COMFORT_QUERIES.map(q=>`${q} in ${location}`);
   return [
     `${industry} in ${location}`,
