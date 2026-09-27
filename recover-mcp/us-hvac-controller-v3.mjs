@@ -45,7 +45,7 @@ function minPopulationForCoveragePass(pass){
   return 0;
 }
 
-const profileJob={industry:"HVAC",require_no_website:true,require_contact:true,require_phone:true,require_email:false,include_no_website:true,min_score:30};
+const profileJob={industry:"HVAC",require_no_website:true,require_contact:true,require_phone:false,require_email:false,include_no_website:true,min_score:30};
 
 function isNyLocation(value=""){return /\bny\b|new york/i.test(String(value||""));}
 
