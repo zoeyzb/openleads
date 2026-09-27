@@ -47,16 +47,16 @@ export function searchBusinessName(business=''){
 export function searchQueries({business='',phone='',location=''}){
   const raw=String(business||'').trim(), b=searchBusinessName(raw), p=normalizePhone(phone), l=compactLocation(location);
   const q=[
-    p?`"${p}"`:'',
-    p?`"${b}" "${p}"`:'',
     `"${b}" ${l} email`,
     `"${b}" ${l} contact`,
-    raw!==b?`"${raw}" ${l}`:'',
-    `site:facebook.com "${b}" ${l}`,
-    `site:yelp.com "${b}" ${l}`,
-    `site:chamberofcommerce.com "${b}" ${l}`,
-    `site:manta.com "${b}" ${l}`,
-    `site:bbb.org "${b}" ${l}`,
+    raw!==b?`"${raw}" ${l} email`:'',
+    `site:facebook.com "${b}" ${l} email`,
+    `site:yelp.com "${b}" ${l} email`,
+    `site:chamberofcommerce.com "${b}" ${l} email`,
+    `site:manta.com "${b}" ${l} email`,
+    `site:bbb.org "${b}" ${l} email`,
+    p?`"${b}" "${p}"`:'',
+    p?`"${p}"`:'',
     `"${b}" ${l}`
   ];
   return [...new Set(q.filter(Boolean))];
