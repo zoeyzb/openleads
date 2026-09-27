@@ -47,7 +47,9 @@ async function connectRedis(){
     await sleep(Math.min(5000,500*attempt));
   }
 }
+console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"redis_connect"}));
 await connectRedis();
+console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"redis_connected"}));
 function normalize(v=""){return String(v||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
 function parseCsvLine(line){
   const out=[];let cell="",quoted=false;
@@ -209,7 +211,9 @@ async function seed(cities){
   return seeded;
 }
 
+console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_load"}));
 const cities=await loadCities();
+console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_loaded",cities:cities.length}));
 console.log(JSON.stringify({event:"law_firm_pipeline_started",cities:cities.length,target:TARGET_TOTAL,queueHighWater:QUEUE_HIGH_WATER,seedBatch:SEED_BATCH,enrichBatch:ENRICH_BATCH}));
 while(true){
   try{
