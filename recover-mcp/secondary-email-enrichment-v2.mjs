@@ -65,7 +65,7 @@ async function fetchJson(url,init={},timeout=90000){
   try{const r=await fetch(url,{...init,signal:ctl.signal});const text=await r.text();let body={};try{body=text?JSON.parse(text):{};}catch{body={raw:text};}if(!r.ok)throw new Error(`${r.status} ${r.statusText}: ${text.slice(0,300)}`);return body;}finally{clearTimeout(timer);}
 }
 async function search(query,engine){
-  const body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,engine,locale:'us',limit:SEARCH_LIMIT,scrape:false,proxy_type:'none',max_retries:0})},30000);
+  const body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,engine,locale:'us',limit:SEARCH_LIMIT,scrape:false,proxy_type:'none',max_retries:1})},30000);
   return Array.isArray(body.results)?body.results:[];
 }
 async function scrapePages(results=[]){
