@@ -4,6 +4,7 @@ import { isCoreHomeServiceLead } from './home-service-targeting.mjs';
 import { discoverContactUrls } from './email-contact-links.mjs';
 import { buildLookupPlan } from './email-lookup-plan.mjs';
 import emailEnrichPkg from 'email-enrich';
+import { load as loadHtml } from 'cheerio';
 const { harvestPublicEmails } = emailEnrichPkg;
 import {
   candidateEmailsFromEvidence,
@@ -67,7 +68,49 @@ async function fetchJson(url,init={},timeout=90000){
   const ctl=new AbortController();const timer=setTimeout(()=>ctl.abort(),timeout);
   try{const r=await fetch(url,{...init,signal:ctl.signal});const text=await r.text();let body={};try{body=text?JSON.parse(text):{};}catch{body={raw:text};}if(!r.ok)throw new Error(`${r.status} ${r.statusText}: ${text.slice(0,300)}`);return body;}finally{clearTimeout(timer);}
 }
+function decodeHtml(value=''){
+  return String(value||'')
+    .replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'")
+    .replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+}
+function unwrapDuckUrl(href=''){
+  try{
+    const u=new URL(href.startsWith('//')?'https:'+href:href,'https://duckduckgo.com');
+    const target=u.searchParams.get('uddg');
+    return target?decodeURIComponent(target):u.href;
+  }catch{return String(href||'');}
+}
+async function duckSearch(query){
+  const ctl=new AbortController();const timer=setTimeout(()=>ctl.abort(),12000);
+  try{
+    const url='https://html.duckduckgo.com/html/?q='+encodeURIComponent(query);
+    const r=await fetch(url,{signal:ctl.signal,headers:{
+      'user-agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+      'accept-language':'en-US,en;q=0.9'
+    }});
+    if(!r.ok)throw new Error(`duckduckgo ${r.status}`);
+    const html=await r.text();const $=loadHtml(html);const out=[];
+    $('.result').each((_,el)=>{
+      if(out.length>=SEARCH_LIMIT)return false;
+      const a=$(el).find('a.result__a').first();
+      const href=unwrapDuckUrl(a.attr('href')||'');
+      if(!/^https?:\/\//i.test(href))return;
+      const title=decodeHtml(a.text().trim());
+      const snippet=decodeHtml($(el).find('.result__snippet').first().text().trim());
+      out.push({url:href,title,snippet});
+    });
+    if(!out.length){
+      $('a.result-link').each((_,el)=>{
+        if(out.length>=SEARCH_LIMIT)return false;
+        const href=unwrapDuckUrl($(el).attr('href')||'');
+        if(/^https?:\/\//i.test(href))out.push({url:href,title:decodeHtml($(el).text().trim()),snippet:''});
+      });
+    }
+    return out;
+  }finally{clearTimeout(timer);}
+}
 async function search(query,engine){
+  if(engine==='duckduckgo') return duckSearch(query);
   const body=await fetchJson(`${YOZH_BASE_URL}/api/v1/search`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query,engine,locale:'us',limit:SEARCH_LIMIT,scrape:false,proxy_type:'none',max_retries:1})},30000);
   return Array.isArray(body.results)?body.results:[];
 }
