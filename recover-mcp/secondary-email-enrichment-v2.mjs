@@ -118,13 +118,14 @@ async function enrichOne(){
       enginesTried++;
       for(const query of queries){
         const results=await search(query,engine);rawResults+=results.length;
+        const freshUrls=new Set();
         for(const result of results){
-          const url=resultUrl(result);if(!url||seen.has(url))continue;seen.add(url);
+          const url=resultUrl(result);if(!url||seen.has(url))continue;seen.add(url);freshUrls.add(url);
           const snippetEmails=candidateEmailsFromEvidence({text:resultText(result),sourceUrl:url,business,phone,location});
           if(snippetEmails.length){found.push(...snippetEmails);source=source||url;}
         }
         found=[...new Set(found)];if(found.length)break;
-        const candidates=results.filter(r=>promisingResult(r,business,phone,location)).filter(r=>{const u=resultUrl(r);return u&&seen.has(u);}).slice(0,4);
+        const candidates=results.filter(r=>promisingResult(r,business,phone,location)).filter(r=>{const u=resultUrl(r);return u&&freshUrls.has(u);}).slice(0,4);
         promising+=candidates.length;
         const scraped=await scrapePages(candidates);
         for(const result of scraped){
