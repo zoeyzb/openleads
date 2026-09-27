@@ -253,6 +253,34 @@ async function targetedEmailEnrichmentCycle(){
   const variants=phoneVariants(phone);
   const location=leadLocationHint(lead);
   const business=String(lead.name||lead.title||"").trim();
+
+  // Prefer the profile URL already attached to the lead. It is stronger
+  // identity evidence than a fresh search and avoids wasting search queries.
+  const knownProfile=String(lead.social_profile_url||lead.profile_url||"").trim();
+  if(knownProfile && isDirectoryResult({url:knownProfile})){
+    try{
+      const scraped=await scrapeDirectoryProfiles([{url:knownProfile,title:business,snippet:""}]);
+      const profile=scraped[0];
+      const page=[profile?.title,profile?.snippet,profile?.scrape?.markdown,profile?.scrape?.fit_markdown].filter(Boolean).join("\n");
+      const pagePhones=phonesFrom(page);
+      const profileEmails=pagePhones.includes(phone)?businessEmailsFrom(page,hostOf(knownProfile)):[];
+      if(profileEmails.length){
+        const merged=mergeLeadRecords(lead,{emails:profileEmails,social_profile_url:knownProfile,source_email_enrichment:"known_directory_profile_phone_match"});
+        await redis.hSet("recover:leadstore:qualified",key,JSON.stringify(merged));
+        await redis.hSet(EMAIL_ATTEMPT_HASH,key,String(Date.now()));
+        await redis.sRem(EMAIL_PENDING_SET,key);
+        await redis.hIncrBy("recover:secondary:stats","targeted_attempts",1);
+        await redis.hIncrBy("recover:secondary:stats","targeted_email_enriched",profileEmails.length);
+        await redis.hIncrBy("recover:secondary:stats","email_enriched",profileEmails.length);
+        console.log(JSON.stringify({event:"secondary_known_profile_email_hit",key,business,phone,profile:knownProfile,emails:profileEmails.length}));
+        return {ran:true,enriched:true,key,emails:profileEmails.length,source:"known_profile"};
+      }
+      console.log(JSON.stringify({event:"secondary_known_profile_checked",key,business,phone,profile:knownProfile,phone_match:pagePhones.includes(phone),emails:0}));
+    }catch(error){
+      console.warn("Known profile enrichment failed",key,knownProfile,String(error?.message||error));
+    }
+  }
+
   const queries=[
     `"${variants[1]}" "${business}"`,
     `"${variants[2]}" "${business}"`,
