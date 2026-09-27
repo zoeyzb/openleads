@@ -19,7 +19,7 @@ if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
 if(!YOZH_BASE_URL) throw new Error("YOZH_BASE_URL required");
 
 const PROFILE_JOB={industry:"HVAC",search_profile:"core-home-service",require_contact:true,require_phone:true,require_no_website:true,include_no_website:true,min_score:30};
-const DIRECTORY_DOMAINS=["yellowpages.com","chamberofcommerce.com","manta.com","bbb.org","yelp.com","angi.com","homeadvisor.com","thumbtack.com","houzz.com","nextdoor.com","superpages.com","porch.com","buildzoom.com","facebook.com"];
+const DIRECTORY_DOMAINS=["yellowpages.com","chamberofcommerce.com","manta.com","bbb.org","yelp.com","angi.com","homeadvisor.com","thumbtack.com","houzz.com","nextdoor.com","superpages.com","porch.com","buildzoom.com","facebook.com","mapquest.com","birdeye.com","loc8nearme.com","merchantcircle.com","cylex.us.com","yellowbook.com","hotfrog.com","dexknows.com","ezlocal.com","citysquares.com","2findlocal.com","opendi.us","find-open.com"];
 const FAMILIES=[
   "HVAC contractor","heating contractor","air conditioning repair service","HVAC repair service",
   "HVAC maintenance","heating and cooling service","furnace repair service","boiler repair service",
@@ -133,7 +133,24 @@ function phonesFrom(text=""){
   return out;
 }
 function hostOf(url=""){try{return new URL(url).hostname.toLowerCase().replace(/^www\./,"");}catch{return "";}}
+function resultUrl(result={}){
+  for(const value of [result?.url,result?.link,result?.href,result?.target_url,result?.destination_url,result?.canonical_url]){
+    const url=String(value||"").trim();
+    if(/^https?:\/\//i.test(url)) return url;
+  }
+  return "";
+}
+function directoryDomainForResult(result={}){
+  const url=resultUrl(result);
+  const h=hostOf(url);
+  const direct=DIRECTORY_DOMAINS.find(d=>h===d||h.endsWith("."+d));
+  if(direct) return direct;
+  const evidence=[result?.display_url,result?.visible_url,result?.title,result?.snippet]
+    .filter(Boolean).join(" ").toLowerCase();
+  return DIRECTORY_DOMAINS.find(d=>evidence.includes(d))||"";
+}
 function isDirectoryUrl(url=""){const h=hostOf(url);return DIRECTORY_DOMAINS.some(d=>h===d||h.endsWith("."+d));}
+function isDirectoryResult(result={}){return Boolean(directoryDomainForResult(result));}
 function explicitWebsiteFromHtml(html=""){
   const src=String(html||"");
   const patterns=[
@@ -179,7 +196,7 @@ async function fetchJson(url,init={},timeout=90000){
   }finally{clearTimeout(timer);}
 }
 async function scrapeDirectoryProfiles(results=[]){
-  const chosen=(results||[]).slice(0,SEARCH_LIMIT);
+  const chosen=(results||[]).map(r=>({...r,url:resultUrl(r)})).filter(r=>r.url).slice(0,SEARCH_LIMIT);
   if(!chosen.length) return [];
   const create=await fetchJson(`${YOZH_BASE_URL}/api/v1/scrape/pages`,{
     method:"POST",headers:{"content-type":"application/json"},
@@ -251,7 +268,7 @@ async function targetedEmailEnrichmentCycle(){
         method:"POST",headers:{"content-type":"application/json"},
         body:JSON.stringify({query,engine:"bing",locale:"us",limit:TARGETED_SEARCH_LIMIT,scrape:false,proxy_type:"none",max_retries:2})
       },120000);
-      directoryResults=(body.results||[]).filter(result=>isDirectoryUrl(result?.url)).slice(0,TARGETED_SEARCH_LIMIT);
+      directoryResults=(body.results||[]).filter(result=>isDirectoryResult(result)).slice(0,TARGETED_SEARCH_LIMIT);
       if(directoryResults.length) break;
     }
   }catch(error){
@@ -280,7 +297,7 @@ async function targetedEmailEnrichmentCycle(){
 
   if(!foundEmails.length){
     await redis.hIncrBy("recover:secondary:stats","targeted_no_email",1);
-    console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query,results:directoryResults.length,emails:0}));
+    console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query,raw_results:Number(body.count||body.results?.length||0),directory_results:directoryResults.length,result_domains:(body.results||[]).map(r=>hostOf(resultUrl(r))).filter(Boolean).slice(0,8),emails:0}));
     return {ran:true,enriched:false,key};
   }
 
@@ -288,7 +305,7 @@ async function targetedEmailEnrichmentCycle(){
   await redis.hSet("recover:leadstore:qualified",key,JSON.stringify(merged));
   await redis.hIncrBy("recover:secondary:stats","targeted_email_enriched",foundEmails.length);
   await redis.hIncrBy("recover:secondary:stats","email_enriched",foundEmails.length);
-  console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query,results:directoryResults.length,emails:foundEmails.length,source:sourceUrl}));
+  console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query,raw_results:Number(body.count||body.results?.length||0),directory_results:directoryResults.length,result_domains:(body.results||[]).map(r=>hostOf(resultUrl(r))).filter(Boolean).slice(0,8),emails:foundEmails.length,source:sourceUrl}));
   return {ran:true,enriched:true,key,emails:foundEmails.length};
 }
 
@@ -303,10 +320,10 @@ async function loadCities(){
   return [...by.values()].filter(x=>x.population>=10000).sort((a,b)=>b.population-a.population||a.state.localeCompare(b.state)||a.city.localeCompare(b.city));
 }
 async function saveCandidate({result,city,state,family,domain}){
-  if(!result?.url||!isDirectoryUrl(result.url)) return {accepted:false,reason:"not_directory"};
+  const candidateUrl=resultUrl(result); if(!candidateUrl||!isDirectoryResult(result)) return {accepted:false,reason:"not_directory"};
   const scrape=result.scrape||{};
   const page=[result.title,result.snippet,scrape.markdown,scrape.fit_markdown].filter(Boolean).join("\n");
-  const locationOk=locationMatches(page,city,state,result.url);
+  const locationOk=locationMatches(page,city,state,candidateUrl);
   const owned=explicitWebsiteFromHtml(scrape.raw_html||scrape.html||"");
   if(owned) return {accepted:false,reason:"owned_website"};
   const phones=phonesFrom(page),emails=businessEmailsFrom(page,domain);
@@ -318,7 +335,7 @@ async function saveCandidate({result,city,state,family,domain}){
     description:[result.snippet,scrape.markdown].filter(Boolean).join(" ").slice(0,8000),
     address:"",
     city:locationOk?city:"",region:locationOk?state:"",website:"",
-    social_profile_url:result.url,
+    social_profile_url:candidateUrl,
     phone:phones[0]||"",emails,
     source:"secondary_directory_search",source_directory:domain,source_query_family:family,discovery_query_location:`${city}, ${state}`
   };
@@ -415,23 +432,25 @@ while(true){
         method:"POST",headers:{"content-type":"application/json"},
         body:JSON.stringify({query,engine:"bing",locale:"us",limit:SEARCH_LIMIT,scrape:false,proxy_type:"none",max_retries:2})
       },120000);
-      const directoryResults=(body.results||[]).filter(result=>isDirectoryUrl(result?.url)&&hostOf(result.url).includes(domain.replace(/^www\./,"")));
+      const rawResults=Array.isArray(body.results)?body.results:[];
+      const directoryResults=rawResults.filter(result=>isDirectoryResult(result));
       if(directoryResults.length){
         const scrapedResults=await scrapeDirectoryProfiles(directoryResults);
-        body={...body,results:scrapedResults,count:scrapedResults.length};
+        body={...body,results:scrapedResults,count:scrapedResults.length,raw_count:rawResults.length};
         break;
       }
+      body={...body,raw_count:rawResults.length};
       body={...body,results:[],count:0};
     }
     let added=0,rejected={};
     for(const result of body.results||[]){
-      const r=await saveCandidate({result,city:city.city,state:city.state,family,domain});
+      const r=await saveCandidate({result,city:city.city,state:city.state,family,domain:directoryDomainForResult(result)||domain});
       if(r.accepted)added++;else rejected[r.reason]=(rejected[r.reason]||0)+1;
     }
     await redis.hIncrBy("recover:secondary:stats","searches",1);
     await redis.hIncrBy("recover:secondary:stats","results",Number(body.count||0));
     await redis.hSet("recover:secondary:stats",{last_city:`${city.city}, ${city.state}`,last_family:family,last_domain:domain,last_added:String(added),last_at:new Date().toISOString()});
-    console.log(JSON.stringify({event:"secondary_discovery_cycle",city:`${city.city}, ${city.state}`,family,domain,query,results:Number(body.count||0),added,rejected,warnings:body.warnings||[]}));
+    console.log(JSON.stringify({event:"secondary_discovery_cycle",city:`${city.city}, ${city.state}`,family,domain,query,raw_results:Number(body.raw_count||body.count||0),directory_results:Number(body.count||0),result_domains:(body.results||[]).map(r=>hostOf(resultUrl(r))).filter(Boolean).slice(0,8),added,rejected,warnings:body.warnings||[]}));
     domainCursor++; if(domainCursor%DIRECTORY_DOMAINS.length===0)familyCursor++; if(familyCursor%FAMILIES.length===0&&domainCursor%DIRECTORY_DOMAINS.length===0)cursor++;
     await redis.mSet(["recover:secondary:cursor",String(cursor),"recover:secondary:family_cursor",String(familyCursor),"recover:secondary:domain_cursor",String(domainCursor)]);
     helperCycle++;
