@@ -25,7 +25,7 @@ const LOOP_MS=Math.max(750,Number(process.env.EMAIL_V2_LOOP_MS||1500));
 const STRATEGY_VERSION=String(process.env.EMAIL_V2_STRATEGY_VERSION||'v3-directory-staged');
 const PENDING=`recover:secondary:email-v2:pending:${STRATEGY_VERSION}`;
 const ATTEMPTED=`recover:secondary:email-v2:attempted:${STRATEGY_VERSION}`;
-const LEADER='recover:secondary:email-v2:leader';
+const LEADER=String(process.env.EMAIL_V2_LEADER_KEY||'recover:secondary:email-v2:leader');
 if(!REDIS_URL) throw new Error('ACQUISITION_REDIS_URL required');
 if(!YOZH_BASE_URL) throw new Error('YOZH_BASE_URL required');
 
