@@ -15,20 +15,20 @@ export function buildLookupPlan({business='',phone='',location='',address='',noW
     const ps=phoneSearch(p);
     return {
       stage1:[
+        ps?`site:facebook.com ${ps} "${b}"`:'',
+        ps?`site:chamberofcommerce.com ${ps} "${b}"`:'',
+        ps?`site:manta.com ${ps} "${b}"`:'',
+        ps?`site:bbb.org ${ps} "${b}"`:'',
+        ps?`site:yelp.com ${ps} "${b}"`:''
+      ].filter(Boolean),
+      stage2:[
         ps?`${ps} "${b}"`:'',
         ps?`${ps} email`:'',
         a?`"${b}" "${a}"`:'',
-        `"${b}" ${l} contact`
-      ].filter(Boolean),
-      stage2:[
-        ps?`site:facebook.com ${ps}`:'',
-        ps?`site:yelp.com ${ps}`:'',
-        ps?`site:bbb.org ${ps}`:'',
-        ps?`site:chamberofcommerce.com ${ps}`:'',
-        ps?`site:manta.com ${ps}`:'',
-        ps?`site:angi.com ${ps}`:'',
-        ps?`site:homeadvisor.com ${ps}`:'',
-        ps?`site:thumbtack.com ${ps}`:''
+        `"${b}" ${l} contact`,
+        ps?`site:angi.com ${ps} "${b}"`:'',
+        ps?`site:homeadvisor.com ${ps} "${b}"`:'',
+        ps?`site:thumbtack.com ${ps} "${b}"`:''
       ].filter(Boolean)
     };
   }
