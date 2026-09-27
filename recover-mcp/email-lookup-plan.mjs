@@ -2,10 +2,7 @@ import { normalizePhone, compactLocation, searchBusinessName } from './email-enr
 
 function phoneSearch(phone=''){
   const p=normalizePhone(phone);
-  if(p.length!==10)return '';
-  const a=`${p.slice(0,3)}-${p.slice(3,6)}-${p.slice(6)}`;
-  const b=`(${p.slice(0,3)}) ${p.slice(3,6)}-${p.slice(6)}`;
-  return `("${p}" OR "${a}" OR "${b}")`;
+  return p.length===10 ? `"${p}"` : '';
 }
 
 export function buildLookupPlan({business='',phone='',location='',address='',noWebsite=false}={}){
