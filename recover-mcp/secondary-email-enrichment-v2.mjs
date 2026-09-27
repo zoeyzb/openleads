@@ -108,7 +108,10 @@ function promisingResult(result,business,phone,location){
   const score=businessTokenScore(text,business);
   const locationToken=normalizeText(location).split(' ').find(x=>x.length>=3)||'';
   const locationMatch=locationToken&&normalizeText(text).includes(locationToken);
-  return platformDomain(h)||exactPhone||score>=0.6||(score>=0.45&&locationMatch);
+  const root=String(h||'').toLowerCase().replace(/^www\./,'').split('.')[0].replace(/[^a-z0-9]/g,'');
+  const bizTokens=normalizeText(business).split(' ').filter(t=>t.length>=4&&!['heating','cooling','plumbing','service','services','hvac','air','conditioning','mechanical','company'].includes(t));
+  const domainMatch=Boolean(root&&bizTokens.some(t=>root.includes(t.replace(/[^a-z0-9]/g,''))));
+  return platformDomain(h)||exactPhone||domainMatch||score>=0.45||(score>=0.35&&locationMatch);
 }
 
 async function enrichOne(){
