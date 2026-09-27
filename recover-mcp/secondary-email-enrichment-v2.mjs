@@ -107,12 +107,17 @@ async function refreshPending({force=false}={}){
 function domainFromUrl(url=''){
   try{return new URL(url).hostname.toLowerCase().replace(/^www\./,'');}catch{return '';}
 }
-function genericBusinessEmails(emails=[],domain=''){
-  const generic=new Set(['info','contact','sales','service','services','office','support','hello','admin','dispatch','estimating','estimate','estimates','customerservice','customer.service','team','business']);
-  return [...new Set((emails||[]).map(x=>String(x||'').trim().toLowerCase()).filter(email=>{
-    const [local,d]=email.split('@');
-    return local&&d&&d===domain&&generic.has(local);
-  }))];
+function publicBusinessEmails(emails=[],domain=''){
+  const generic=new Set(['info','contact','sales','service','services','office','support','hello','admin','dispatch','estimating','estimate','estimates','customerservice','customer.service','team','business','quotes','quote','schedule','appointments','billing']);
+  const free=new Set(['gmail.com','yahoo.com','outlook.com','hotmail.com','icloud.com','aol.com','live.com','proton.me','protonmail.com']);
+  const clean=[...new Set((emails||[]).map(x=>String(x||'').trim().toLowerCase()).filter(Boolean))];
+  const ownGeneric=[], ownNamed=[], publicFree=[];
+  for(const email of clean){
+    const [local,d]=email.split('@'); if(!local||!d)continue;
+    if(d===domain){(generic.has(local)?ownGeneric:ownNamed).push(email);continue;}
+    if(free.has(d))publicFree.push(email);
+  }
+  return [...ownGeneric,...ownNamed,...publicFree].slice(0,3);
 }
 async function harvestCandidateDomain(candidate,business){
   const url=resultUrl(candidate);const domain=domainFromUrl(url);
@@ -124,7 +129,7 @@ async function harvestCandidateDomain(candidate,business){
   if(!domainMatch&&titleScore<0.45)return {emails:[],source:''};
   try{
     const h=await harvestPublicEmails({domain,mode:'fast'});
-    const emails=genericBusinessEmails(h?.emails||[],domain);
+    const emails=publicBusinessEmails(h?.emails||[],domain);
     return {emails,source:(h?.sources_checked||[])[0]||url};
   }catch{return {emails:[],source:''};}
 }
