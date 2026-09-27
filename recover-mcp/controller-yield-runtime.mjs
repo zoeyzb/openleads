@@ -47,6 +47,11 @@ async function startSecondaryDiscoveryChild(){
   spawnHelper('recover-mcp/secondary-discovery-worker.mjs','secondary_discovery_child');
 }
 
+async function startHistoricalEmailBackfillChild(){
+  if(String(process.env.HISTORICAL_EMAIL_BACKFILL_ENABLED||'1')==='0') return;
+  spawnHelper('recover-mcp/historical-email-backfill.mjs','historical_email_backfill_child');
+}
+
 async function startEmailV2Child(){
   if(String(process.env.EMAIL_V2_ENABLED||'1')==='0') return;
   spawnHelper('recover-mcp/secondary-email-enrichment-v2.mjs','email_v2_child');
@@ -58,6 +63,7 @@ async function main(){
   const source=fs.readFileSync(sourceUrl,'utf8');
   fs.writeFileSync(runtimeUrl,patchControllerSource(source));
   await startSecondaryDiscoveryChild();
+  await startHistoricalEmailBackfillChild();
   await startEmailV2Child();
   await import(pathToFileURL(runtimeUrl.pathname).href+`?v=${Date.now()}`);
 }
@@ -65,3 +71,4 @@ async function main(){
 if (import.meta.url===pathToFileURL(process.argv[1]||'').href) await main();
 // email-v2 rollout marker 2026-09-27 compact-query-v2
 // email audit rollout marker 2026-09-27 live-coverage
+// historical email backfill rollout marker 2026-09-27
