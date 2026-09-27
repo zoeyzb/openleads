@@ -26,7 +26,6 @@ export function candidateEmailsFromEvidence({text='',sourceUrl='',business='',ph
     const domain=email.split('@')[1]||'';
     if(platformDomain(domain)) return false;
     if(platformDomain(sourceHost) && domain===sourceHost) return false;
-    if(!platformDomain(sourceHost) && domain===sourceHost && !FREE_MAIL.has(domain)) return false;
     return true;
   });
 }
