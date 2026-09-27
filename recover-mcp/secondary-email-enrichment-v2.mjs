@@ -315,7 +315,12 @@ async function enrichOne(){
       }
       if(found.length)break;
     }
-  }catch(error){await redis.sAdd(PENDING,key);await redis.hIncrBy('recover:secondary:email-v2:stats','errors',1);throw error;}
+  }catch(error){
+    await redis.sAdd(PENDING,key);
+    await redis.hIncrBy('recover:secondary:email-v2:stats','errors',1);
+    console.error(JSON.stringify({event:'email_v2_error',key,business,phone,error:String(error?.message||error).slice(0,500)}));
+    throw error;
+  }
   await redis.hSet(ATTEMPTED,key,String(Date.now()));
   if(!found.length){await redis.hIncrBy('recover:secondary:email-v2:stats','no_email',1);console.log(JSON.stringify({event:'email_v2_cycle',key,business,phone,queries:queries.length,engines:enginesTried,raw_results:rawResults,promising,emails:0}));return {ran:true,enriched:false};}
   const latestRaw=await redis.hGet('recover:leadstore:qualified',key);let latest=lead;try{if(latestRaw)latest=JSON.parse(latestRaw)||lead;}catch{}
