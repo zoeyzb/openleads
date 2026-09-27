@@ -87,14 +87,68 @@ async function loadLiveRows(){
   return rows;
 }
 
+function emailDomain(email=''){return String(email||'').toLowerCase().split('@')[1]||'';}
+function stripEmail(lead,email){
+  const target=String(email||'').toLowerCase();
+  const next={...lead};
+  if(String(next.email||'').toLowerCase()===target) delete next.email;
+  if(Array.isArray(next.emails)) next.emails=next.emails.filter(x=>String(x||'').toLowerCase()!==target);
+  return next;
+}
+async function cleanLegacyContactContamination(live=[]){
+  const pairGroups=new Map();
+  for(const rec of live){
+    const phone=String(rec.lead?.phone||'').replace(/\D/g,'').slice(-10);
+    for(const email of validEmails([...(Array.isArray(rec.lead?.emails)?rec.lead.emails:[]),rec.lead?.email||''])){
+      const pair=phone&&email?`${phone}|${email}`:'';
+      if(pair){if(!pairGroups.has(pair))pairGroups.set(pair,[]);pairGroups.get(pair).push(rec);}
+    }
+  }
+  let rowsCleaned=0,emailsRemoved=0,phonesRemoved=0,platformEmailsRemoved=0;
+  const suspiciousPairs=new Set();
+  for(const [pair,recs] of pairGroups){
+    const distinctBusinesses=new Set(recs.map(r=>String(r.lead?.name||r.lead?.title||'').toLowerCase().trim()).filter(Boolean));
+    const distinctAddresses=new Set(recs.map(r=>String(r.lead?.address||'').toLowerCase().trim()).filter(Boolean));
+    if(recs.length>=5&&distinctBusinesses.size>=5&&distinctAddresses.size>=5)suspiciousPairs.add(pair);
+  }
+  for(const rec of live){
+    let lead={...rec.lead},changed=false;
+    const phone=String(lead.phone||'').replace(/\D/g,'').slice(-10);
+    const emails=validEmails([...(Array.isArray(lead.emails)?lead.emails:[]),lead.email||'']);
+    for(const email of emails){
+      const pair=phone&&email?`${phone}|${email}`:'';
+      const platformOwned=['linktr.ee'].includes(emailDomain(email));
+      if(suspiciousPairs.has(pair)){
+        lead=stripEmail(lead,email);emailsRemoved++;changed=true;
+        if(phone&&String(lead.phone||'').replace(/\D/g,'').slice(-10)===phone){delete lead.phone;phonesRemoved++;}
+        lead.contact_contamination_reason='mass_reused_phone_email_pair';
+        lead.contact_contamination_cleaned_at=new Date().toISOString();
+      }else if(platformOwned){
+        lead=stripEmail(lead,email);emailsRemoved++;platformEmailsRemoved++;changed=true;
+        lead.contact_contamination_reason='platform_owned_email';
+        lead.contact_contamination_cleaned_at=new Date().toISOString();
+      }
+    }
+    if(changed){
+      await redis.hSet('recover:leadstore:qualified',rec.key,JSON.stringify(lead));
+      rec.lead=lead;rowsCleaned++;
+    }
+  }
+  const out={rowsCleaned,emailsRemoved,phonesRemoved,platformEmailsRemoved,suspiciousPairs:suspiciousPairs.size};
+  if(rowsCleaned)console.log(JSON.stringify({event:'historical_email_contact_cleanup',...out}));
+  return out;
+}
+
 async function runOnce(){
   const started=Date.now();
   const live=await loadLiveRows();
+  const cleanup=await cleanLegacyContactContamination(live);
   const index=buildIdentityIndex(live);
   const historical=await fetchHistoricalRows();
   const history=historical.rows;
   const stats={
     historical_source:historical.source,
+    cleanup_rows:cleanup.rowsCleaned,cleanup_emails_removed:cleanup.emailsRemoved,cleanup_phones_removed:cleanup.phonesRemoved,
     historical_rows:history.length,
     historical_with_valid_email:0,
     live_rows:live.length,
