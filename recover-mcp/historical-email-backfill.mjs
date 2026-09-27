@@ -6,7 +6,7 @@ const REDIS_URL=process.env.ACQUISITION_REDIS_URL||'';
 const SUPABASE_URL=(process.env.SUPABASE_HISTORICAL_URL||'').replace(/\/$/,'');
 const SUPABASE_KEY=process.env.SUPABASE_HISTORICAL_ANON_KEY||'';
 const INTERVAL_MS=Math.max(60*60*1000,Number(process.env.HISTORICAL_EMAIL_BACKFILL_INTERVAL_MS||6*60*60*1000));
-const LEADER='recover:historical-email-backfill:leader:v2';
+const LEADER='recover:historical-email-backfill:leader:v3';
 const STATS='recover:historical-email-backfill:stats:v1';
 if(!REDIS_URL) throw new Error('ACQUISITION_REDIS_URL required');
 if(!SUPABASE_URL||!SUPABASE_KEY) throw new Error('Supabase historical backfill config required');
@@ -18,11 +18,11 @@ const INSTANCE=process.env.RAILWAY_REPLICA_ID||process.env.HOSTNAME||Math.random
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
 async function acquireLeader(){
-  return (await redis.set(LEADER,INSTANCE,{NX:true,EX:180}))==='OK';
+  return (await redis.set(LEADER,INSTANCE,{NX:true,EX:45}))==='OK';
 }
 async function renewLeader(){
   if(await redis.get(LEADER)!==INSTANCE)return false;
-  await redis.expire(LEADER,180);return true;
+  await redis.expire(LEADER,45);return true;
 }
 
 function validEmails(value){
@@ -111,7 +111,7 @@ async function runOnce(){
 while(true){
   try{
     if(await acquireLeader()){
-      const timer=setInterval(()=>renewLeader().catch(()=>{}),60000);timer.unref?.();
+      const timer=setInterval(()=>renewLeader().catch(()=>{}),15000);timer.unref?.();
       await runOnce();
       clearInterval(timer);
       if(await redis.get(LEADER)===INSTANCE)await redis.del(LEADER);
