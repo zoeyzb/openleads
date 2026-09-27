@@ -2,6 +2,7 @@ import { createClient } from 'redis';
 import { mergeLeadRecords } from './acquisition-persistence.mjs';
 import { isCoreHomeServiceLead } from './home-service-targeting.mjs';
 import { discoverContactUrls } from './email-contact-links.mjs';
+import { buildLookupPlan } from './email-lookup-plan.mjs';
 import {
   candidateEmailsFromEvidence,
   searchQueries,
@@ -118,7 +119,8 @@ async function enrichOne(){
   const phone=normalizePhone(lead.phone), business=String(lead.name||lead.title||'').trim(), location=leadLocation(lead);
   if(!business||(phone.length!==10&&!location))return {ran:false};
   const noWebsite=!String(lead.website||'').trim();
-  const queries=searchQueries({business,phone,location,address:String(lead.address||''),noWebsite}).slice(0,QUERY_BUDGET);
+  const plan=buildLookupPlan({business,phone,location,address:String(lead.address||''),noWebsite});
+  const queries=[...plan.stage1,...plan.stage2].slice(0,QUERY_BUDGET);
   const seen=new Set();let found=[],source='',rawResults=0,promising=0,enginesTried=0;
   try{
     const directUrl=String(lead.website||lead.social_profile_url||lead.profile_url||'').trim();
