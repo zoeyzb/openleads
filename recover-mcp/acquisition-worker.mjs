@@ -614,9 +614,10 @@ const HOME_COMFORT_QUERIES=[
   "sewer contractor"
 ];
 const LAW_FIRM_QUERIES=[
-  "law firm","personal injury law firm","family law attorney","estate planning attorney",
-  "probate attorney","employment law firm","business law firm","real estate attorney",
-  "civil litigation attorney","workers compensation attorney","elder law attorney"
+  "law office","boutique law firm","small law firm","law offices",
+  "personal injury law office","family law office","estate planning law office","probate law office",
+  "employment law firm","business law office","real estate law office","civil litigation attorney",
+  "workers compensation attorney","elder law attorney","law firm"
 ];
 const queryVariants=(industry,location)=>{
   if (/\blaw\s*firm\b|\battorney\b|\blawyer\b/.test(normalizeText(industry))) return LAW_FIRM_QUERIES.map(q=>`${q} in ${location}`);
