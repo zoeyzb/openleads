@@ -16,3 +16,11 @@ test('city coverage has an independent priority floor before total queue backpre
   assert.ok(floor>=0,'missing city-priority floor');
   assert.ok(backpressure>floor,'total backpressure must be checked after city-priority floor');
 });
+
+
+test('nationwide family jobs accept email-only contact instead of requiring a phone',()=>{
+  assert.match(source,/require_phone:false/);
+  assert.match(source,/require_email:false/);
+  assert.match(source,/require_contact:true/);
+  assert.doesNotMatch(source,/require_phone:true,require_email:false,require_contact:true/);
+});
