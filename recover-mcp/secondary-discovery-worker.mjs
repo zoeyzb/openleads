@@ -95,7 +95,12 @@ async function refreshEmailPendingQueue({force=false}={}){
         ...String(lead?.email||"").split(/[;,\s]+/)
       ].map(x=>String(x||"").trim()).filter(Boolean);
       const phone=String(lead?.phone||"").replace(/\D/g,"").slice(-10);
-      if(emails.length||!phone||String(lead?.website||"").trim()) continue;
+      if(emails.length||String(lead?.website||"").trim()) continue;
+      if(!phone){
+        const business=String(lead?.name||lead?.title||"").trim();
+        const location=leadLocationHint(lead);
+        if(!business||!location) continue;
+      }
       const lastAttempt=Number(attempted?.[field]||0);
       if(lastAttempt && now-lastAttempt<EMAIL_RETRY_MS) continue;
       batch.push(field);
@@ -268,12 +273,14 @@ async function targetedEmailEnrichmentCycle(){
     return {ran:false,reason:"already_resolved"};
   }
   const phone=normalizePhone(lead.phone||"");
-  if(phone.length!==10){await redis.sRem(EMAIL_PENDING_SET,key);return {ran:false,reason:"no_phone"};}
-
   const variants=phoneVariants(phone);
   const location=leadLocationHint(lead);
   const business=String(lead.name||lead.title||"").trim();
   const searchBusiness=searchBusinessName(business);
+  if(!business||(phone.length!==10&&!location)){
+    await redis.sRem(EMAIL_PENDING_SET,key);
+    return {ran:false,reason:"insufficient_identity"};
+  }
 
   // Prefer the profile URL already attached to the lead. It is stronger
   // identity evidence than a fresh search and avoids wasting search queries.
@@ -309,7 +316,7 @@ async function targetedEmailEnrichmentCycle(){
     `"${searchBusiness}" ${location} email`,
     `"${searchBusiness}" ${location} contact`,
     business!==searchBusiness?`"${business}" ${location}`:"",
-    `"${searchBusiness}" "${variants[1]}"`,
+    variants[1]?`"${searchBusiness}" "${variants[1]}"`:"",
     `site:facebook.com "${searchBusiness}" ${location}`,
     `site:yelp.com "${searchBusiness}" ${location}`,
     `site:bbb.org "${searchBusiness}" ${location}`,
@@ -386,7 +393,7 @@ async function targetedEmailEnrichmentCycle(){
 
   if(!foundEmails.length){
     await redis.hIncrBy("recover:secondary:stats","targeted_no_email",1);
-    console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query:lastQuery,queries_tried:queries.length,search_mix:"identity-first-google+verified-directory",raw_results:totalRawResults,directory_results:totalDirectoryResults,result_domains:observedDomains,emails:0}));
+    console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query:lastQuery,queries_tried:queries.length,search_mix:"email-first-google+verified-directory",raw_results:totalRawResults,directory_results:totalDirectoryResults,result_domains:observedDomains,emails:0}));
     return {ran:true,enriched:false,key};
   }
 
@@ -394,7 +401,7 @@ async function targetedEmailEnrichmentCycle(){
   await redis.hSet("recover:leadstore:qualified",key,JSON.stringify(merged));
   await redis.hIncrBy("recover:secondary:stats","targeted_email_enriched",foundEmails.length);
   await redis.hIncrBy("recover:secondary:stats","email_enriched",foundEmails.length);
-  console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query:lastQuery,queries_tried:queries.length,search_mix:"identity-first-google+verified-directory",raw_results:totalRawResults,directory_results:totalDirectoryResults,result_domains:observedDomains,emails:foundEmails.length,source:sourceUrl}));
+  console.log(JSON.stringify({event:"secondary_targeted_email_cycle",key,business,phone,query:lastQuery,queries_tried:queries.length,search_mix:"email-first-google+verified-directory",raw_results:totalRawResults,directory_results:totalDirectoryResults,result_domains:observedDomains,emails:foundEmails.length,source:sourceUrl}));
   return {ran:true,enriched:true,key,emails:foundEmails.length};
 }
 async function loadCities(){
