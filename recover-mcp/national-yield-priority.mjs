@@ -28,14 +28,18 @@ export function buildYieldStats(jobs=[]){
 export function familyYieldScore(key,stats={}){
   const s=stats[key]||{attempts:0,new:0,duplicates:0,positive:0};
   const prior=PRIOR[key]||8;
-  if(s.attempts<8) return prior;
-  const avgNew=s.new/s.attempts;
-  const positive=s.positive/s.attempts;
-  const totalSeen=s.new+s.duplicates;
-  const duplicateRate=totalSeen>0?s.duplicates/totalSeen:0;
-  // Rank on actual net-new discoveries, not local stored rows. Heavy historical
-  // rediscovery is explicitly penalized so exhausted families lose capacity.
-  return avgNew*14+positive*6-duplicateRate*10+prior*0.03;
+  const attempts=Math.max(0,Number(s.attempts||0));
+  // Untested families belong in the explicit exploration lane. They must not
+  // outrank families that have already demonstrated net-new yield.
+  if(attempts===0) return prior*0.03;
+  const avgNew=Number(s.new||0)/attempts;
+  const positive=Number(s.positive||0)/attempts;
+  const totalSeen=Number(s.new||0)+Number(s.duplicates||0);
+  const duplicateRate=totalSeen>0?Number(s.duplicates||0)/totalSeen:0;
+  // Low-sample families get a small uncertainty bonus, not a giant static-prior
+  // advantage. This preserves exploration while exploit capacity follows proof.
+  const uncertaintyBonus=Math.max(0,8-attempts)*0.05;
+  return avgNew*14+positive*6-duplicateRate*10+prior*0.03+uncertaintyBonus;
 }
 
 export function rankFamilies(families,stats={}){
