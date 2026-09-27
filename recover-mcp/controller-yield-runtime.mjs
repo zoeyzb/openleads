@@ -78,3 +78,4 @@ if (import.meta.url===pathToFileURL(process.argv[1]||'').href) await main();
 // unified email-first rollout marker 2026-09-27
 // identity-priority rollout marker 2026-09-27
 // no-website-email rollout marker 2026-09-27
+// strict-email-evidence rollout marker 2026-09-27
