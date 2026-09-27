@@ -3,6 +3,7 @@ import { mergeLeadRecords } from './acquisition-persistence.mjs';
 import { isCoreHomeServiceLead } from './home-service-targeting.mjs';
 import { discoverContactUrls } from './email-contact-links.mjs';
 import { buildLookupPlan } from './email-lookup-plan.mjs';
+import { harvestPublicEmails } from 'email-enrich';
 import {
   candidateEmailsFromEvidence,
   searchQueries,
@@ -101,6 +102,32 @@ async function refreshPending({force=false}={}){
   console.log(JSON.stringify({event:'email_v2_pending_refresh',scanned,withEmail,usableTargetEmail,emailNonTarget,withWebsite,noPhone,nonTarget,queued,pending:await redis.sCard(PENDING)}));
 }
 
+
+function domainFromUrl(url=''){
+  try{return new URL(url).hostname.toLowerCase().replace(/^www\./,'');}catch{return '';}
+}
+function genericBusinessEmails(emails=[],domain=''){
+  const generic=new Set(['info','contact','sales','service','services','office','support','hello','admin','dispatch','estimating','estimate','estimates','customerservice','customer.service','team','business']);
+  return [...new Set((emails||[]).map(x=>String(x||'').trim().toLowerCase()).filter(email=>{
+    const [local,d]=email.split('@');
+    return local&&d&&d===domain&&generic.has(local);
+  }))];
+}
+async function harvestCandidateDomain(candidate,business){
+  const url=resultUrl(candidate);const domain=domainFromUrl(url);
+  if(!domain||platformDomain(domain))return {emails:[],source:''};
+  const titleScore=businessTokenScore(resultText(candidate),business);
+  const root=domain.split('.')[0].replace(/[^a-z0-9]/g,'');
+  const tokens=normalizeText(business).split(' ').filter(t=>t.length>=4&&!['heating','cooling','plumbing','service','services','hvac','air','conditioning','mechanical','company'].includes(t));
+  const domainMatch=Boolean(root&&tokens.some(t=>root.includes(t.replace(/[^a-z0-9]/g,''))));
+  if(!domainMatch&&titleScore<0.45)return {emails:[],source:''};
+  try{
+    const h=await harvestPublicEmails({domain,mode:'fast'});
+    const emails=genericBusinessEmails(h?.emails||[],domain);
+    return {emails,source:(h?.sources_checked||[])[0]||url};
+  }catch{return {emails:[],source:''};}
+}
+
 function promisingResult(result,business,phone,location){
   const url=resultUrl(result);if(!url)return false;
   const text=resultText(result);const h=hostOf(url);
@@ -163,6 +190,11 @@ async function enrichOne(){
         found=[...new Set(found)];if(found.length)break;
         const candidates=results.filter(r=>promisingResult(r,business,phone,location)).filter(r=>{const u=resultUrl(r);return u&&freshUrls.has(u);}).slice(0,1);
         promising+=candidates.length;
+        if(candidates.length){
+          const harvested=await harvestCandidateDomain(candidates[0],business);
+          if(harvested.emails.length){found.push(...harvested.emails);source=source||harvested.source;}
+        }
+        found=[...new Set(found)];if(found.length)break;
         const scraped=await scrapePages(candidates);
         for(const result of scraped){
           const page=[resultText(result),result?.scrape?.markdown,result?.scrape?.fit_markdown,result?.scrape?.raw_html,result?.scrape?.html].filter(Boolean).join('\n');
