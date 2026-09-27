@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { candidateEmailsFromEvidence } from './email-enrichment-evidence.mjs';
+import { candidateEmailsFromEvidence, searchQueries } from './email-enrichment-evidence.mjs';
 
 assert.deepEqual(
   candidateEmailsFromEvidence({
@@ -37,3 +37,8 @@ assert.deepEqual(
   'business plus location evidence should work without a phone'
 );
 console.log('email enrichment evidence tests passed');
+
+
+const prioritized=searchQueries({business:'Acme Heating LLC',phone:'6305551212',location:'Aurora IL'});
+assert.match(prioritized[0],/email$/,'email lookup must be the first search intent');
+assert.ok(prioritized.findIndex(q=>q.includes('6305551212'))>1,'phone lookup must be fallback identity evidence, not the primary search');
