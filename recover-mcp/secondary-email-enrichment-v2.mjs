@@ -37,6 +37,7 @@ redis.on('error',e=>console.error('email-v2 redis error',e));
 await redis.connect();
 const INSTANCE=process.env.RAILWAY_REPLICA_ID||process.env.HOSTNAME||Math.random().toString(36).slice(2);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let SEARCH_DEBUG_REMAINING=Math.max(0,Number(process.env.EMAIL_V2_DEBUG_SAMPLES||0));
 
 async function acquireLeader(){return (await redis.set(LEADER,INSTANCE,{NX:true,EX:45}))==='OK';}
 async function renewLeader(){if(await redis.get(LEADER)!==INSTANCE)return false;await redis.expire(LEADER,45);return true;}
@@ -187,6 +188,10 @@ async function enrichOne(){
       enginesTried++;
       for(const query of queries){
         const results=await search(query,engine);rawResults+=results.length;
+        if(SEARCH_DEBUG_REMAINING>0){
+          SEARCH_DEBUG_REMAINING--;
+          console.log(JSON.stringify({event:'email_v2_search_sample',business,phone,query,engine,results:results.slice(0,5).map(r=>({url:resultUrl(r),title:r.title||'',snippet:String(r.snippet||'').slice(0,180)}))}));
+        }
         const freshUrls=new Set();
         for(const result of results){
           const url=resultUrl(result);if(!url||seen.has(url))continue;seen.add(url);freshUrls.add(url);
