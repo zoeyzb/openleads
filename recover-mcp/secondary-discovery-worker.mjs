@@ -18,7 +18,7 @@ const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||1000000);
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
 if(!YOZH_BASE_URL) throw new Error("YOZH_BASE_URL required");
 
-const PROFILE_JOB={industry:"HVAC",search_profile:"core-home-service",require_contact:true,require_phone:true,require_no_website:true,include_no_website:true,min_score:30};
+const PROFILE_JOB={industry:"HVAC",search_profile:"core-home-service",require_contact:true,require_phone:false,require_email:false,require_no_website:true,include_no_website:true,min_score:30};
 const DIRECTORY_DOMAINS=["yellowpages.com","chamberofcommerce.com","manta.com","bbb.org","yelp.com","angi.com","homeadvisor.com","thumbtack.com","houzz.com","nextdoor.com","superpages.com","porch.com","buildzoom.com","facebook.com","mapquest.com","birdeye.com","loc8nearme.com","merchantcircle.com","cylex.us.com","yellowbook.com","hotfrog.com","dexknows.com","ezlocal.com","citysquares.com","2findlocal.com","opendi.us","find-open.com"];
 const FAMILIES=[
   "HVAC contractor","heating contractor","air conditioning repair service","HVAC repair service",
@@ -415,7 +415,7 @@ async function saveCandidate({result,city,state,family,domain}){
   const owned=explicitWebsiteFromHtml(scrape.raw_html||scrape.html||"");
   if(owned) return {accepted:false,reason:"owned_website"};
   const phones=phonesFrom(page),emails=businessEmailsFrom(page,domain);
-  if(!phones.length) return {accepted:false,reason:"phone"};
+  if(!phones.length&&!emails.length) return {accepted:false,reason:"contact"};
   if(!locationOk) return {accepted:false,reason:"location"};
   const lead={
     name:cleanName(result.title||""),
@@ -425,6 +425,7 @@ async function saveCandidate({result,city,state,family,domain}){
     city:locationOk?city:"",region:locationOk?state:"",website:"",
     social_profile_url:candidateUrl,
     phone:phones[0]||"",emails,
+    preferred_contact_channel:emails.length?"email":"phone",
     source:"secondary_directory_search",source_directory:domain,source_query_family:family,discovery_query_location:`${city}, ${state}`
   };
   if(!lead.name||!isCoreHomeServiceLead(lead)) return {accepted:false,reason:"industry"};
