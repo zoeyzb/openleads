@@ -1,6 +1,7 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { lawFirmPracticeAreas } from "./law-firm-targeting.mjs";
+import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||"";
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
@@ -20,6 +21,8 @@ const SEEDED_SET="recover:law-firm:seeded:v1";
 const ENRICHED_SET="recover:law-firm:enriched:v1";
 const READY_SET="recover:law-firm:ready:v1";
 const STATS="recover:law-firm:stats:v1";
+const PROFILE={industry:"LAW_FIRM",require_phone:false,require_email:false,require_contact:true,require_no_website:false,include_no_website:true,min_score:35};
+const SCOPE_SET=campaignLeadSetKey(PROFILE);
 
 const redis=createClient({url:REDIS_URL});
 redis.on("error",e=>console.error("law-firm redis error",e));
@@ -164,7 +167,7 @@ async function enrichBatch(){
 async function seed(cities){
   const queue=await redis.lLen(ACTIVE_QUEUE);
   if(queue>=QUEUE_HIGH_WATER)return 0;
-  const scopeCount=await redis.sCard("recover:campaign:law-firm");
+  const scopeCount=await redis.sCard(SCOPE_SET);
   if(scopeCount>=TARGET_TOTAL)return 0;
   let seeded=0;
   for(const area of cities){
@@ -177,6 +180,8 @@ async function seed(cities){
       require_phone:false,require_email:false,require_contact:true,require_no_website:false,include_no_website:true,
       max_rounds:1,depth:3,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,
       qualified_count:0,stored_count:0,maps_jobs:[],source:"law_firm_pipeline_v1",created_at:now,updated_at:now};
+    const claim=await claimCoverage(redis,job,{source:"law_firm_pipeline_v1"});
+    if(!claim.claimed){await redis.sAdd(SEEDED_SET,areaKey);continue;}
     await redis.set(`recover:acq:${id}`,JSON.stringify(job),{EX:JOB_TTL});
     await redis.sAdd("recover:acq:index",id);await redis.lPush(ACTIVE_QUEUE,id);await redis.sAdd(SEEDED_SET,areaKey);
     seeded++;
