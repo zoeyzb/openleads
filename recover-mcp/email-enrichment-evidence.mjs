@@ -30,18 +30,24 @@ export function candidateEmailsFromEvidence({text='',sourceUrl='',business='',ph
     return true;
   });
 }
+export function compactLocation(location=''){
+  const raw=String(location||'').trim();
+  const m=raw.match(/(?:^|,\s*)([^,]+),\s*([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*$/i);
+  if(m) return `${m[1].trim()} ${m[2].toUpperCase()}`;
+  return raw.replace(/\b\d{5}(?:-\d{4})?\b/g,'').replace(/\s+/g,' ').replace(/^\s*\d+[A-Za-z-]*\s+[^,]+,\s*/,'').trim();
+}
 export function searchQueries({business='',phone='',location=''}){
-  const b=String(business||'').trim(), p=normalizePhone(phone), l=String(location||'').trim();
+  const b=String(business||'').trim(), p=normalizePhone(phone), l=compactLocation(location);
   const q=[
-    `\"${b}\" ${l}`,
-    `\"${b}\" ${l} email`,
-    `\"${b}\" ${l} contact`,
-    p?`\"${b}\" \"${p}\"`:'',
     `site:facebook.com \"${b}\" ${l}`,
     `site:yelp.com \"${b}\" ${l}`,
     `site:chamberofcommerce.com \"${b}\" ${l}`,
     `site:manta.com \"${b}\" ${l}`,
-    `site:bbb.org \"${b}\" ${l}`
+    `site:bbb.org \"${b}\" ${l}`,
+    `\"${b}\" ${l} email`,
+    `\"${b}\" ${l} contact`,
+    `\"${b}\" ${l}`,
+    p?`\"${b}\" \"${p}\"`:''
   ];
   return [...new Set(q.filter(Boolean))];
 }
