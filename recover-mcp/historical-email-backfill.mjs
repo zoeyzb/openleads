@@ -27,32 +27,55 @@ async function renewLeader(){
 
 function validEmails(value){
   const vals=Array.isArray(value)?value:String(value||'').split(/[;,\s]+/);
-  return [...new Set(vals.map(x=>String(x||'').trim().toLowerCase()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)))];
+  return [...new Set(vals.map(x=>{
+    let v=String(x||'').trim().toLowerCase();
+    try{v=decodeURIComponent(v);}catch{}
+    return v.trim().replace(/^mailto:/,'').replace(/^%20+/,'').trim();
+  }).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)))];
 }
 
 async function fetchHistoricalRows(){
   const out=[]; const limit=1000;
-  for(let offset=0;offset<100000;offset+=limit){
-    const params=new URLSearchParams({
-      select:'row_num,id,raw_lead_id,name,niche,address,city,region,phone,email,maps_url,updated_at',
-      email:'not.is.null',
-      order:'id.asc',
-      limit:String(limit),
-      offset:String(offset),
-    });
-    const r=await fetch(`${SUPABASE_URL}/rest/v1/sheet_acquisition_ranked_snapshot?${params}`,{
-      headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,Accept:'application/json'},
-      signal:AbortSignal.timeout(60000),
-    });
-    const text=await r.text();
-    if(!r.ok) throw new Error(`supabase_historical_${r.status}: ${text.slice(0,300)}`);
-    const rows=JSON.parse(text);
-    out.push(...rows);
-    if(rows.length<limit)break;
+  const sources=['sheet_acquisition_ranked_snapshot','acquisition_leads'];
+  let sourceUsed='';
+  for(const table of sources){
+    out.length=0;
+    let sourceOk=true;
+    for(let offset=0;offset<100000;offset+=limit){
+      const params=new URLSearchParams({
+        select:'id,raw_lead_id,name,niche,address,city,region,phone,email,maps_url,updated_at',
+        email:'not.is.null',
+        order:'id.asc',
+        limit:String(limit),
+        offset:String(offset),
+      });
+      let rows=null,lastError='';
+      for(let attempt=1;attempt<=4;attempt++){
+        try{
+          const r=await fetch(`${SUPABASE_URL}/rest/v1/${table}?${params}`,{
+            headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,Accept:'application/json'},
+            signal:AbortSignal.timeout(60000),
+          });
+          const body=await r.text();
+          if(r.ok){rows=JSON.parse(body);break;}
+          lastError=`supabase_historical_${r.status}: ${body.slice(0,300)}`;
+          if(![429,500,502,503,504].includes(r.status)) break;
+        }catch(error){lastError=String(error?.message||error);}
+        await sleep(Math.min(15000,1000*2**(attempt-1)));
+      }
+      if(!rows){
+        console.warn(JSON.stringify({event:'historical_email_source_failed',table,offset,error:lastError}));
+        sourceOk=false;break;
+      }
+      out.push(...rows);
+      if(rows.length<limit)break;
+    }
+    if(sourceOk){sourceUsed=table;break;}
   }
-  return out;
+  if(!sourceUsed) throw new Error('all_historical_email_sources_failed');
+  console.log(JSON.stringify({event:'historical_email_source_loaded',source:sourceUsed,rows:out.length}));
+  return {rows:out,source:sourceUsed};
 }
-
 async function loadLiveRows(){
   const rows=[];
   for await(const page of redis.hScanIterator('recover:leadstore:qualified',{COUNT:500})){
@@ -68,8 +91,10 @@ async function runOnce(){
   const started=Date.now();
   const live=await loadLiveRows();
   const index=buildIdentityIndex(live);
-  const history=await fetchHistoricalRows();
+  const historical=await fetchHistoricalRows();
+  const history=historical.rows;
   const stats={
+    historical_source:historical.source,
     historical_rows:history.length,
     historical_with_valid_email:0,
     live_rows:live.length,
@@ -122,6 +147,7 @@ while(true){
     }
   }catch(error){
     console.error(JSON.stringify({event:'historical_email_backfill_error',error:String(error?.message||error)}));
-    await sleep(60000);
+    try{if(await redis.get(LEADER)===INSTANCE)await redis.del(LEADER);}catch{}
+    await sleep(15000);
   }
 }
