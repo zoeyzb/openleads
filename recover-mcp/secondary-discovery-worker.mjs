@@ -232,7 +232,15 @@ function phoneVariants(phone=""){
 function leadLocationHint(lead={}){
   const direct=[lead.city,lead.region].filter(Boolean).join(" ").trim();
   if(direct) return direct;
-  return String(lead.address||"").trim();
+  const raw=String(lead.address||"").trim();
+  const m=raw.match(/(?:^|,\s*)([^,]+),\s*([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*$/i);
+  if(m) return `${m[1].trim()} ${m[2].toUpperCase()}`;
+  return raw.replace(/\b\d{5}(?:-\d{4})?\b/g,"").replace(/^\s*\d+[A-Za-z-]*\s+[^,]+,\s*/,"").trim();
+}
+function searchBusinessName(business=""){
+  const raw=String(business||"").trim();
+  const cleaned=normalizeText(raw).split(" ").filter(t=>!["llc","inc","corp","corporation","company","co","ltd","limited"].includes(t)).join(" ").trim();
+  return cleaned||raw;
 }
 
 function businessNameMatches(result={},business=""){
@@ -265,6 +273,7 @@ async function targetedEmailEnrichmentCycle(){
   const variants=phoneVariants(phone);
   const location=leadLocationHint(lead);
   const business=String(lead.name||lead.title||"").trim();
+  const searchBusiness=searchBusinessName(business);
 
   // Prefer the profile URL already attached to the lead. It is stronger
   // identity evidence than a fresh search and avoids wasting search queries.
@@ -297,14 +306,15 @@ async function targetedEmailEnrichmentCycle(){
   }
 
   const queries=[
-    `"${business}" ${location} email`,
-    `"${business}" ${location} contact`,
-    `"${business}" "${variants[1]}"`,
-    `site:facebook.com "${business}" ${location}`,
-    `site:yelp.com "${business}" ${location}`,
-    `site:bbb.org "${business}" ${location}`,
-    `site:chamberofcommerce.com "${business}" ${location}`,
-    `site:manta.com "${business}" ${location}`
+    `"${searchBusiness}" ${location} email`,
+    `"${searchBusiness}" ${location} contact`,
+    business!==searchBusiness?`"${business}" ${location}`:"",
+    `"${searchBusiness}" "${variants[1]}"`,
+    `site:facebook.com "${searchBusiness}" ${location}`,
+    `site:yelp.com "${searchBusiness}" ${location}`,
+    `site:bbb.org "${searchBusiness}" ${location}`,
+    `site:chamberofcommerce.com "${searchBusiness}" ${location}`,
+    `site:manta.com "${searchBusiness}" ${location}`
   ].filter(Boolean);
 
   let foundEmails=[],sourceUrl="",lastQuery=queries[0]||"";
