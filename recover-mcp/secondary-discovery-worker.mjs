@@ -451,7 +451,7 @@ while(true){
     await redis.hIncrBy("recover:secondary:stats","results",Number(body.count||0));
     await redis.hSet("recover:secondary:stats",{last_city:`${city.city}, ${city.state}`,last_family:family,last_domain:domain,last_added:String(added),last_at:new Date().toISOString()});
     console.log(JSON.stringify({event:"secondary_discovery_cycle",city:`${city.city}, ${city.state}`,family,domain,query,raw_results:Number(body.raw_count||body.count||0),directory_results:Number(body.count||0),result_domains:(body.results||[]).map(r=>hostOf(resultUrl(r))).filter(Boolean).slice(0,8),added,rejected,warnings:body.warnings||[]}));
-    domainCursor++; if(domainCursor%DIRECTORY_DOMAINS.length===0)familyCursor++; if(familyCursor%FAMILIES.length===0&&domainCursor%DIRECTORY_DOMAINS.length===0)cursor++;
+    domainCursor++; familyCursor++; cursor++;
     await redis.mSet(["recover:secondary:cursor",String(cursor),"recover:secondary:family_cursor",String(familyCursor),"recover:secondary:domain_cursor",String(domainCursor)]);
     helperCycle++;
     await redis.set("recover:secondary:helper_cycle",String(helperCycle));
