@@ -12,8 +12,8 @@ const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||'https://raw.githubuserconte
 const TARGET_TOTAL=Number(process.env.US_HVAC_TARGET_TOTAL||100000);
 // Keep enough work buffered for all workers without letting stale duplicate
 // areas occupy thousands of queue slots ahead of fresh nationwide coverage.
-const QUEUE_HIGH_WATER=Math.max(144,Math.min(512,Number(process.env.US_FAMILY_QUEUE_HIGH_WATER||384)));
-const SEED_BATCH_SIZE=Math.max(24,Math.min(96,Number(process.env.US_FAMILY_SEED_BATCH_SIZE||64)));
+const QUEUE_HIGH_WATER=Math.max(64,Math.min(512,Number(process.env.US_FAMILY_QUEUE_HIGH_WATER||192)));
+const SEED_BATCH_SIZE=Math.max(4,Math.min(96,Number(process.env.US_FAMILY_SEED_BATCH_SIZE||24)));
 const CITY_PRIORITY_TARGET=Math.max(8,Math.min(128,Number(process.env.US_FAMILY_CITY_PRIORITY_TARGET||32)));
 const COVERAGE_SHARE=Math.min(0.80,Math.max(0.05,Number(process.env.US_FAMILY_COVERAGE_SHARE||0.10)));
 const TARGET_PER_JOB=Math.max(8,Math.min(25,Number(process.env.US_FAMILY_TARGET_PER_JOB||18)));
