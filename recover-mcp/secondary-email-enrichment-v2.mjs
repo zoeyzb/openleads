@@ -3,7 +3,8 @@ import { mergeLeadRecords } from './acquisition-persistence.mjs';
 import { isCoreHomeServiceLead } from './home-service-targeting.mjs';
 import { discoverContactUrls } from './email-contact-links.mjs';
 import { buildLookupPlan } from './email-lookup-plan.mjs';
-import { harvestPublicEmails } from 'email-enrich';
+import emailEnrichPkg from 'email-enrich';
+const { harvestPublicEmails } = emailEnrichPkg;
 import {
   candidateEmailsFromEvidence,
   searchQueries,
