@@ -16,7 +16,7 @@ import {
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||'';
 const YOZH_BASE_URL=(process.env.YOZH_BASE_URL||'').replace(/\/$/,'');
-const CONCURRENCY=Math.max(1,Math.min(8,Number(process.env.EMAIL_V2_CONCURRENCY||3)));
+const CONCURRENCY=Math.max(1,Math.min(16,Number(process.env.EMAIL_V2_CONCURRENCY||3)));
 const SEARCH_LIMIT=Math.max(4,Math.min(10,Number(process.env.EMAIL_V2_SEARCH_LIMIT||8)));
 const QUERY_BUDGET=Math.max(1,Math.min(9,Number(process.env.EMAIL_V2_QUERY_BUDGET||2)));
 const ENGINES=String(process.env.EMAIL_V2_ENGINES||'bing,yandex').split(',').map(x=>x.trim()).filter(Boolean).slice(0,2);
