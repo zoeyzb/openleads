@@ -112,12 +112,29 @@ function linksFrom(base,html=""){
   }
   return [...new Set(out)].slice(0,4);
 }
-function attorneyEstimate(html=""){
-  const urls=[...String(html).matchAll(/href\s*=\s*["']([^"']*(?:attorney|lawyer|people|team)[^"']*)["']/gi)]
+function attorneyEstimate(html="",text=""){
+  const raw=String(html||"");
+  const urls=[...raw.matchAll(/href\s*=\s*["']([^"']*(?:attorney|lawyer|people|team|our-team|professionals)[^"']*)["']/gi)]
     .map(m=>m[1].replace(/[?#].*$/,"").replace(/\/$/,"")).filter(x=>x.length>3);
   const unique=[...new Set(urls)];
-  const profileLike=unique.filter(x=>/(attorney|lawyer)\//i.test(x)||/\/(people|team)\/[^/]+$/i.test(x));
-  return Math.min(100,profileLike.length);
+  const profileLike=unique.filter(x=>/(attorney|lawyer|professional)\//i.test(x)||/\/(people|team|our-team|professionals)\/[^/]+$/i.test(x));
+  let estimate=profileLike.length;
+
+  const plain=String(text||stripHtml(raw));
+  const explicit=[
+    ...plain.matchAll(/\b(?:team of|our team of|firm of|more than|over)\s+(\d{1,3})\s+(?:attorneys|lawyers)\b/gi),
+    ...plain.matchAll(/\b(\d{1,3})\s+(?:attorneys|lawyers)\s+(?:serving|across|with|at|in)\b/gi)
+  ].map(m=>Number(m[1])).filter(n=>n>0&&n<=500);
+  if(explicit.length) estimate=Math.max(estimate,Math.min(...explicit));
+
+  const headingNames=[...raw.matchAll(/<(?:h2|h3|h4|a)[^>]*>([^<]{2,80})<\/(?:h2|h3|h4|a)>/gi)]
+    .map(m=>stripHtml(m[1]).trim())
+    .filter(name=>/^[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,3}$/.test(name));
+  const uniqueNames=[...new Set(headingNames.map(x=>x.toLowerCase()))];
+  if(/\b(attorney|lawyer|our team|meet the team|professionals)\b/i.test(plain) && uniqueNames.length>=2 && uniqueNames.length<=50){
+    estimate=Math.max(estimate,uniqueNames.length);
+  }
+  return Math.min(100,estimate);
 }
 async function duckFallback(lead){
   const q=`"${String(lead.name||"").replace(/"/g,"")}" ${lead.city||""} ${lead.region||""} email`.trim();
@@ -130,10 +147,11 @@ async function duckFallback(lead){
 }
 function personalization({lead,text,practices,attorneyCount,source}){
   const city=String(lead.city||"").trim();
-  if(attorneyCount>=2&&attorneyCount<=5) return {fact:`Your firm appears to have a focused team of about ${attorneyCount} attorneys`,source};
-  if(attorneyCount>5) return {fact:`Your firm appears to have a team of about ${attorneyCount} attorneys`,source};
-  if(practices.length&&city) return {fact:`Your firm highlights ${practices[0]} work in ${city}`,source};
-  if(practices.length) return {fact:`Your firm highlights ${practices[0]} as a practice area`,source};
+  const safeSource=String(source||lead.website||lead.google_maps_url||"").trim();
+  if(practices.length&&city) return {fact:`Your firm highlights ${practices[0]} work in ${city}`,source:safeSource};
+  if(practices.length) return {fact:`Your firm highlights ${practices[0]} as a practice area`,source:safeSource};
+  if(attorneyCount>=2&&attorneyCount<=5) return {fact:`Your firm appears to have a focused team of about ${attorneyCount} attorneys`,source:safeSource};
+  if(attorneyCount>5&&attorneyCount<=15) return {fact:`Your firm appears to have a team of about ${attorneyCount} attorneys`,source:safeSource};
   const reviews=Number(lead.review_count||0),rating=Number(lead.review_rating||0);
   if(reviews>=5&&rating>0) return {fact:`I noticed your firm has ${reviews} Google reviews at about ${rating.toFixed(1)} stars`,source:String(lead.google_maps_url||"Google Maps")};
   if(city) return {fact:`I came across your firm while researching law firms in ${city}`,source:String(lead.google_maps_url||"Google Maps")};
@@ -146,9 +164,9 @@ async function enrichLead(key,lead){
   const website=String(lead.website||"").trim();
   if(/^https?:\/\//i.test(website)){
     try{
-      const home=await fetchText(website); combined+=" "+stripHtml(home); source=website; attorneyCount=Math.max(attorneyCount,attorneyEstimate(home));
+      const home=await fetchText(website); const homeText=stripHtml(home); combined+=" "+homeText; source=website; attorneyCount=Math.max(attorneyCount,attorneyEstimate(home,homeText));
       for(const url of linksFrom(website,home).slice(0,3)){
-        try{const page=await fetchText(url);combined+=" "+stripHtml(page);emails.push(...emailsFrom(page));attorneyCount=Math.max(attorneyCount,attorneyEstimate(page));if(!source)source=url;}catch{}
+        try{const page=await fetchText(url);const pageText=stripHtml(page);combined+=" "+pageText;emails.push(...emailsFrom(page));attorneyCount=Math.max(attorneyCount,attorneyEstimate(page,pageText));if(!source)source=url;}catch{}
       }
       emails.push(...emailsFrom(home));
     }catch{}
