@@ -1,5 +1,13 @@
 import { normalizePhone, compactLocation, searchBusinessName } from './email-enrichment-evidence.mjs';
 
+function phoneSearch(phone=''){
+  const p=normalizePhone(phone);
+  if(p.length!==10)return '';
+  const a=`${p.slice(0,3)}-${p.slice(3,6)}-${p.slice(6)}`;
+  const b=`(${p.slice(0,3)}) ${p.slice(3,6)}-${p.slice(6)}`;
+  return `("${p}" OR "${a}" OR "${b}")`;
+}
+
 export function buildLookupPlan({business='',phone='',location='',address='',noWebsite=false}={}){
   const raw=String(business||'').trim();
   const b=searchBusinessName(raw);
@@ -7,21 +15,23 @@ export function buildLookupPlan({business='',phone='',location='',address='',noW
   const l=compactLocation(location);
   const a=compactLocation(address);
   if(noWebsite){
+    const ps=phoneSearch(p);
     return {
       stage1:[
-        `"${b}" ${l} email`,
-        p?`"${p}" "${b}"`:'',
-        a?`"${b}" "${a}" email`:''
+        ps?`${ps} "${b}"`:'',
+        ps?`${ps} email`:'',
+        a?`"${b}" "${a}"`:'',
+        `"${b}" ${l} contact`
       ].filter(Boolean),
       stage2:[
-        p?`site:facebook.com "${p}" "${b}"`:'',
-        p?`site:yelp.com "${p}" "${b}"`:'',
-        p?`site:bbb.org "${p}" "${b}"`:'',
-        p?`site:chamberofcommerce.com "${p}" "${b}"`:'',
-        p?`site:manta.com "${p}" "${b}"`:'',
-        p?`site:angi.com "${p}" "${b}"`:'',
-        p?`site:homeadvisor.com "${p}" "${b}"`:'',
-        p?`site:thumbtack.com "${p}" "${b}"`:''
+        ps?`site:facebook.com ${ps}`:'',
+        ps?`site:yelp.com ${ps}`:'',
+        ps?`site:bbb.org ${ps}`:'',
+        ps?`site:chamberofcommerce.com ${ps}`:'',
+        ps?`site:manta.com ${ps}`:'',
+        ps?`site:angi.com ${ps}`:'',
+        ps?`site:homeadvisor.com ${ps}`:'',
+        ps?`site:thumbtack.com ${ps}`:''
       ].filter(Boolean)
     };
   }
