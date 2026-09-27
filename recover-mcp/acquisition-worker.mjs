@@ -628,10 +628,11 @@ function geoBiasForJob(job={},coveragePass=1){
   const pass=Math.max(1,Number(coveragePass)||1);
   const lat=Number(job.source_latitude),lon=Number(job.source_longitude);
   const population=Number(job.source_city_population||job.source_population||0);
-  if(pass<8||population<10000||!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180) return null;
+  const familyLane=String(job.source||"").includes("family_partition_controller");
+  if((pass<8&&!familyLane)||population<10000||!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180) return null;
   let hash=0;
   for(const ch of String((job.partition_state||"")+"|"+(job.partition_city||"")+"|"+(job.partition_zip||job.source_zip||""))) hash=(hash*31+ch.charCodeAt(0))>>>0;
-  const cell=(hash+Math.max(0,pass-8))%8;
+  const cell=(hash+(familyLane?Math.max(0,Number(job.service_query_index||0)):Math.max(0,pass-8)))%8;
   const angle=(Math.PI*2*cell)/8;
   const distanceKm=population>=300000?12:population>=100000?9.5:population>=50000?7.5:population>=25000?5.5:3.5;
   const latOffset=(distanceKm/111)*Math.cos(angle);
