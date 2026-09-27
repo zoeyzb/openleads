@@ -40,7 +40,7 @@ async function fetchHistoricalRows(){
       limit:String(limit),
       offset:String(offset),
     });
-    const r=await fetch(`${SUPABASE_URL}/rest/v1/acquisition_leads?${params}`,{
+    const r=await fetch(`${SUPABASE_URL}/rest/v1/sheet_acquisition_ranked_snapshot?${params}`,{
       headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,Accept:'application/json'},
       signal:AbortSignal.timeout(60000),
     });
