@@ -34,7 +34,7 @@ async function fetchHistoricalRows(){
   const out=[]; const limit=1000;
   for(let offset=0;offset<100000;offset+=limit){
     const params=new URLSearchParams({
-      select:'id,raw_lead_id,name,niche,address,city,region,phone,email,maps_url,email_verification_status,updated_at',
+      select:'row_num,id,raw_lead_id,name,niche,address,city,region,phone,email,maps_url,updated_at',
       email:'not.is.null',
       order:'id.asc',
       limit:String(limit),
@@ -89,8 +89,7 @@ async function runOnce(){
     const before=validEmails([...(Array.isArray(current.emails)?current.emails:[]),current.email||'']);
     const merged=mergeLeadRecords(current,{
       emails,
-      historical_email_verification_status:row.email_verification_status||'',
-      historical_email_source:'supabase_acquisition_leads',
+      historical_email_source:'supabase_sheet_acquisition_ranked_snapshot',
       historical_email_source_id:row.id||'',
       historical_email_recovered_at:new Date().toISOString(),
       historical_email_match_method:match.method,
@@ -116,9 +115,13 @@ while(true){
       await runOnce();
       clearInterval(timer);
       if(await redis.get(LEADER)===INSTANCE)await redis.del(LEADER);
-    } else console.log(JSON.stringify({event:'historical_email_backfill_standby'}));
+      await sleep(INTERVAL_MS);
+    } else {
+      console.log(JSON.stringify({event:'historical_email_backfill_standby'}));
+      await sleep(30000);
+    }
   }catch(error){
     console.error(JSON.stringify({event:'historical_email_backfill_error',error:String(error?.message||error)}));
+    await sleep(60000);
   }
-  await sleep(INTERVAL_MS);
 }
