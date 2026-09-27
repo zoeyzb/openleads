@@ -120,6 +120,11 @@ async function cleanLegacyContactContamination(live=[]){
       const platformOwned=['linktr.ee'].includes(emailDomain(email));
       if(suspiciousPairs.has(pair)){
         lead=stripEmail(lead,email);emailsRemoved++;changed=true;
+        if(phone&&String(lead.phone||'').replace(/\D/g,'').slice(-10)===phone){
+          lead.quarantined_phone=lead.phone;
+          delete lead.phone;
+          phonesRemoved++;
+        }
         lead.contact_phone_shared_suspected=true;
         lead.contact_contamination_reason='mass_reused_phone_email_pair';
         lead.contact_contamination_cleaned_at=new Date().toISOString();
