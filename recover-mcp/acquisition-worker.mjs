@@ -297,8 +297,8 @@ function scoreLead(lead) {
   const reviews=Number(lead.review_count||lead.reviews||0);
   if (reviews>=20) add(10,"20+ reviews");
   if (Number(lead.review_rating||lead.rating||0)>=4.2) add(5,"strong rating");
-  if (lead.phone) add(10,"phone available");
-  if (normalizeEmails(lead.emails||lead.email||"").length) add(10,"email available");
+  if (lead.phone) add(5,"phone available");
+  if (normalizeEmails(lead.emails||lead.email||"").length) add(15,"email available");
   if (ownerNameFromLead(lead)) add(10,"owner signal available");
   score=Math.min(100,score);
   const tier=score>=85?"hot":score>=70?"strong":score>=50?"maybe":score>=30?"weak":"reject";
@@ -841,9 +841,10 @@ async function processAcquisition(id) {
   }
   const job=JSON.parse(raw);
   if (String(job.search_profile||"")==="core-home-service") {
-    // Normalize legacy queued nationwide jobs at consume time so old backlog
-    // uses the same phone-only, family-specific contract as newly seeded jobs.
-    job.require_phone=true;
+    // Normalize legacy queued nationwide jobs to the email-first contact policy.
+    // A lead can qualify with email or phone; phone is no longer mandatory.
+    job.require_phone=false;
+    job.require_email=false;
     job.require_contact=true;
     if (!String(job.query_family||"").trim() && String(job.service_query_label||"").trim()) {
       job.query_family=String(job.service_query_label).trim();
