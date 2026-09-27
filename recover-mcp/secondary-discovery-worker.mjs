@@ -275,9 +275,12 @@ async function targetedEmailEnrichmentCycle(){
       const profile=scraped[0];
       const page=[profile?.title,profile?.snippet,profile?.scrape?.markdown,profile?.scrape?.fit_markdown].filter(Boolean).join("\n");
       const pagePhones=phonesFrom(page);
-      const profileEmails=pagePhones.includes(phone)?businessEmailsFrom(page,hostOf(knownProfile)):[];
+      const nameMatch=businessNameMatches(profile||{},business) || normalizeText(page).includes(normalizeText(business));
+      const locationMatch=locationMatches(page,lead.city||"",lead.region||"",knownProfile);
+      const identityVerified=pagePhones.includes(phone) || (nameMatch && locationMatch);
+      const profileEmails=identityVerified?businessEmailsFrom(page,hostOf(knownProfile)):[];
       if(profileEmails.length){
-        const merged=mergeLeadRecords(lead,{emails:profileEmails,social_profile_url:knownProfile,source_email_enrichment:"known_directory_profile_phone_match"});
+        const merged=mergeLeadRecords(lead,{emails:profileEmails,social_profile_url:knownProfile,source_email_enrichment:pagePhones.includes(phone)?"known_directory_profile_phone_match":"known_directory_profile_identity_match"});
         await redis.hSet("recover:leadstore:qualified",key,JSON.stringify(merged));
         await redis.hSet(EMAIL_ATTEMPT_HASH,key,String(Date.now()));
         await redis.sRem(EMAIL_PENDING_SET,key);
@@ -287,7 +290,7 @@ async function targetedEmailEnrichmentCycle(){
         console.log(JSON.stringify({event:"secondary_known_profile_email_hit",key,business,phone,profile:knownProfile,emails:profileEmails.length}));
         return {ran:true,enriched:true,key,emails:profileEmails.length,source:"known_profile"};
       }
-      console.log(JSON.stringify({event:"secondary_known_profile_checked",key,business,phone,profile:knownProfile,phone_match:pagePhones.includes(phone),emails:0}));
+      console.log(JSON.stringify({event:"secondary_known_profile_checked",key,business,phone,profile:knownProfile,phone_match:pagePhones.includes(phone),name_match:nameMatch,location_match:locationMatch,emails:0}));
     }catch(error){
       console.warn("Known profile enrichment failed",key,knownProfile,String(error?.message||error));
     }
@@ -348,7 +351,10 @@ async function targetedEmailEnrichmentCycle(){
       for(const result of scraped){
         const page=[result.title,result.snippet,result?.scrape?.markdown,result?.scrape?.fit_markdown].filter(Boolean).join("\n");
         const pagePhones=phonesFrom(page);
-        if(!pagePhones.includes(phone)) continue;
+        const phoneMatch=pagePhones.includes(phone);
+        const nameMatch=businessNameMatches(result,business) || normalizeText(page).includes(normalizeText(business));
+        const locationMatch=locationMatches(page,lead.city||"",lead.region||"",result.url);
+        if(!phoneMatch && !(nameMatch && locationMatch)) continue;
         const domain=hostOf(result.url);
         const emails=businessEmailsFrom(page,domain);
         if(!emails.length) continue;
@@ -374,7 +380,7 @@ async function targetedEmailEnrichmentCycle(){
     return {ran:true,enriched:false,key};
   }
 
-  const merged=mergeLeadRecords(lead,{emails:foundEmails,social_profile_url:sourceUrl,source_email_enrichment:"targeted_directory_phone_match"});
+  const merged=mergeLeadRecords(lead,{emails:foundEmails,social_profile_url:sourceUrl,source_email_enrichment:"targeted_directory_verified_identity_match"});
   await redis.hSet("recover:leadstore:qualified",key,JSON.stringify(merged));
   await redis.hIncrBy("recover:secondary:stats","targeted_email_enriched",foundEmails.length);
   await redis.hIncrBy("recover:secondary:stats","email_enriched",foundEmails.length);
