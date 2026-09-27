@@ -2,7 +2,7 @@ export const PLATFORM_DOMAINS = [
   'yellowpages.com','chamberofcommerce.com','manta.com','bbb.org','yelp.com','angi.com','homeadvisor.com',
   'thumbtack.com','houzz.com','nextdoor.com','superpages.com','porch.com','buildzoom.com','facebook.com','mapquest.com',
   'birdeye.com','loc8nearme.com','merchantcircle.com','cylex.us.com','yellowbook.com','hotfrog.com','dexknows.com',
-  'ezlocal.com','citysquares.com','2findlocal.com','opendi.us','find-open.com','whitepages.com','spokeo.com','anywho.com',
+  'ezlocal.com','linktr.ee','citysquares.com','2findlocal.com','opendi.us','find-open.com','whitepages.com','spokeo.com','anywho.com',
   'callercenter.com','reportedcalls.com','areacodes.net','usareacodes.net','thisnumber.com','411.com'
 ];
 const FREE_MAIL = new Set(['gmail.com','yahoo.com','outlook.com','hotmail.com','icloud.com','aol.com','proton.me','protonmail.com']);
