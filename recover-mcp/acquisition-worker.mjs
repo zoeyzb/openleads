@@ -4,6 +4,7 @@ import { matchesRequestedLocation, mergeLeadRecords, upsertQualifiedLeads } from
 import { geoBiasForJob } from './geo-coverage.mjs';
 import { markCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead, isCoreHomeServiceIndustry, isOwnedBusinessWebsite } from "./home-service-targeting.mjs";
+import { isLawFirmLead, scoreLawFirmLead } from "./law-firm-targeting.mjs";
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -235,6 +236,7 @@ function matchesRequestedIndustry(lead, industry) {
   const target=normalizeText(industry||"");
   const hay=normalizeText((lead.category||"")+" "+(lead.title||lead.name||"")+" "+(lead.descriptions||""));
   if (!target) return true;
+  if (/\blaw\s*firm\b|\battorney\b|\blawyer\b/.test(target)) return isLawFirmLead(lead);
   if (isHomeComfortTarget(target)) return matchesHomeComfortTrade(lead);
   if (/roof/.test(target)) return /roof/.test(hay);
   if (/electric/.test(target)) return /electric/.test(hay);
@@ -280,13 +282,14 @@ function qualificationFunnel(records=[],job={}){
     if(job.require_email&&!normalizeEmails(lead.emails||lead.email||"").length){counts.email++;continue;}
     if(job.require_contact&&!lead.phone&&!normalizeEmails(lead.emails||lead.email||"").length){counts.contact++;continue;}
     if(job.include_no_website===false&&!lead.website){counts.include_website++;continue;}
-    if(scoreLead(lead).score<Number(job.min_score||0)){counts.score++;continue;}
+    if(scoreLead(lead,job).score<Number(job.min_score||0)){counts.score++;continue;}
     counts.accepted++;
   }
   return counts;
 }
 
-function scoreLead(lead) {
+function scoreLead(lead,job={}) {
+  if(String(job?.search_profile||"")==="law-firm" || /\blaw\s*firm\b/.test(normalizeText(job?.industry||""))) return scoreLawFirmLead(lead);
   let score=0; const reasons=[]; const add=(p,r)=>{score+=p;reasons.push({points:p,reason:r});};
   const category=normalizeText(lead.category||lead.industry||"");
   if (/hvac|heating|air conditioning|plumb|roof|electric/.test(category)) add(15,"target local-service category");
@@ -507,6 +510,7 @@ async function persistPermanentQualified(redis, job, leads) {
       acquisition_id:job.id,
       acquisition_location:job.location||"",
       industry:job.industry||"",
+      search_profile:job.search_profile||"",
       campaign_scope:campaignLeadSetKey(job),
       persisted_at:new Date().toISOString()
     }));
@@ -1120,7 +1124,7 @@ async function processAcquisition(id) {
         .filter(lead=>!job.require_email||normalizeEmails(lead.emails||lead.email||"").length>0)
         .filter(lead=>!job.require_contact||!!lead.phone||normalizeEmails(lead.emails||lead.email||"").length>0)
         .filter(lead=>job.include_no_website!==false||!!lead.website)
-        .map(lead=>({...lead,qualification:scoreLead(lead)}))
+        .map(lead=>({...lead,qualification:scoreLead(lead,job)}))
         .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
         .sort((a,b)=>b.qualification.score-a.qualification.score);
 
@@ -1179,7 +1183,7 @@ async function processAcquisition(id) {
 
     let leads=locationCandidateSet(allRaw,job)
       .filter(lead=>matchesRequestedIndustry(lead,job.industry))
-      .map(lead=>({...lead,qualification:scoreLead(lead)}))
+      .map(lead=>({...lead,qualification:scoreLead(lead,job)}))
       .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
       .filter(lead=>!job.require_phone||!!lead.phone)
       .filter(lead=>!job.require_email||normalizeEmails(lead.emails||lead.email||"").length>0)
