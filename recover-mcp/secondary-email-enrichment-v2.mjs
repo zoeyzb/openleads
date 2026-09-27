@@ -8,6 +8,7 @@ import {
   businessTokenScore,
   normalizePhone,
   normalizeText,
+  compactLocation,
 } from './email-enrichment-evidence.mjs';
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||'';
@@ -44,8 +45,8 @@ function leadEmails(lead={}){
 }
 function leadLocation(lead={}){
   const city=String(lead.city||'').trim(), region=String(lead.region||lead.state||'').trim();
-  if(city||region)return [city,region].filter(Boolean).join(' ');
-  return String(lead.address||lead.acquisition_location||'').trim();
+  if(city||region)return compactLocation([city,region].filter(Boolean).join(' '));
+  return compactLocation(String(lead.address||lead.acquisition_location||'').trim());
 }
 function resultUrl(result={}){
   for(const v of [result.url,result.link,result.href,result.target_url,result.destination_url,result.canonical_url]){
@@ -95,7 +96,7 @@ async function refreshPending({force=false}={}){
 function promisingResult(result,business,phone,location){
   const url=resultUrl(result);if(!url)return false;
   const text=resultText(result);const h=hostOf(url);
-  const exactPhone=normalizeText(text).includes(normalizePhone(phone));
+  const exactPhone=Boolean(normalizePhone(phone) && String(text).replace(/\D/g,'').includes(normalizePhone(phone)));
   const score=businessTokenScore(text,business);
   const locationToken=normalizeText(location).split(' ').find(x=>x.length>=3)||'';
   const locationMatch=locationToken&&normalizeText(text).includes(locationToken);
