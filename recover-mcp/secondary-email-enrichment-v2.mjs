@@ -84,7 +84,8 @@ async function refreshPending({force=false}={}){
       let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
       if(leadEmails(lead).length){withEmail++;continue;}
       if(String(lead.website||'').trim()){withWebsite++;continue;}
-      if(normalizePhone(lead.phone).length!==10){noPhone++;continue;}
+      const phone=normalizePhone(lead.phone), business=String(lead.name||lead.title||'').trim(), location=leadLocation(lead);
+      if(phone.length!==10){noPhone++;if(!business||!location)continue;}
       const last=Number(attempted?.[entry.field]||0);if(last&&now-last<RETRY_MS)continue;
       batch.push(entry.field);
       if(batch.length>=500){queued+=Number(await redis.sAdd(PENDING,batch)||0);batch=[];}
@@ -111,11 +112,22 @@ async function enrichOne(){
   let lead;try{lead=JSON.parse(raw)||{};}catch{return {ran:false};}
   if(leadEmails(lead).length||String(lead.website||'').trim())return {ran:false};
   const phone=normalizePhone(lead.phone), business=String(lead.name||lead.title||'').trim(), location=leadLocation(lead);
-  if(phone.length!==10||!business)return {ran:false};
+  if(!business||(phone.length!==10&&!location))return {ran:false};
   const queries=searchQueries({business,phone,location}).slice(0,QUERY_BUDGET);
   const seen=new Set();let found=[],source='',rawResults=0,promising=0,enginesTried=0;
   try{
-    for(const engine of ['google','bing']){
+    const directUrl=String(lead.social_profile_url||'').trim();
+    if(/^https?:\/\//i.test(directUrl)){
+      const direct=await scrapePages([{url:directUrl}]);
+      for(const result of direct){
+        const page=[result?.scrape?.markdown,result?.scrape?.fit_markdown].filter(Boolean).join('\n');
+        const emails=candidateEmailsFromEvidence({text:page,sourceUrl:directUrl,business,phone,location});
+        if(emails.length){found.push(...emails);source=directUrl;}
+      }
+      found=[...new Set(found)];
+    }
+    for(const engine of ['bing','google']){
+      if(found.length)break;
       enginesTried++;
       for(const query of queries){
         const results=await search(query,engine);rawResults+=results.length;
