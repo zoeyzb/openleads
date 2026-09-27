@@ -1083,6 +1083,11 @@ async function processAcquisition(id) {
           }
         }
         job.phase="qualification";
+      } else if (String(job.search_profile||"")==="law-firm") {
+        // Law-firm enrichment runs once in the consolidated law-firm pipeline.
+        // Avoid duplicate DataForge crawling here.
+        leads=allRaw;
+        job.phase="qualification";
       } else {
         job.phase="enrichment";
         await saveJob(job);
