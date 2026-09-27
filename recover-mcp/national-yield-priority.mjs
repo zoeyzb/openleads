@@ -32,9 +32,13 @@ export function familyYieldScore(key,stats={}){
   // Untested families belong exclusively in the explicit exploration lane.
   // Give them a very low exploit score so they cannot crowd out proven yield.
   if(attempts===0) return -100+prior*0.03;
-  const avgNew=Number(s.new||0)/attempts;
+  const netNew=Number(s.new||0);
+  // A family that has been tried but has never produced a permanent net-new
+  // lead is exploration-only until it proves itself.
+  if(netNew<=0) return -50+Math.max(0,8-attempts)*0.02+prior*0.01;
+  const avgNew=netNew/attempts;
   const positive=Number(s.positive||0)/attempts;
-  const totalSeen=Number(s.new||0)+Number(s.duplicates||0);
+  const totalSeen=netNew+Number(s.duplicates||0);
   const duplicateRate=totalSeen>0?Number(s.duplicates||0)/totalSeen:0;
   // Net-new and positive-job rate dominate. Duplicate rate is still penalized,
   // but not so heavily that every historically searched family scores below
