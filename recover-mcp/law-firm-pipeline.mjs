@@ -29,6 +29,7 @@ const READY_SET="recover:law-firm:qualified:v3";
 const REJECTED_SET="recover:law-firm:rejected:v3";
 const PENDING_SET="recover:law-firm:enrich-pending:v3";
 const PRIORITY_PENDING_SET="recover:law-firm:enrich-priority:v3";
+const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const FL_BAR_CURSOR_KEY="recover:law-firm:florida-bar-cursor:v1";
 const FL_BAR_SEEN_SET="recover:law-firm:florida-bar-seen:v1";
@@ -711,6 +712,14 @@ function stateBarDomain(lead={}){
   const state=String(lead.region||lead.state||lead.state_code||"").trim().toUpperCase();
   return STATE_BAR_DOMAINS[state]||"";
 }
+function emailRecoveryPriority(lead={}){
+  let score=0;
+  if(likelyAttorneyName(lead))score+=2;
+  if(String(lead.phone||"").replace(/\D+/g,"").slice(-10).length===10)score+=2;
+  if(stateBarDomain(lead))score+=1;
+  if(String(lead.city||"").trim())score+=1;
+  return score;
+}
 function stateBarQueries(lead={},people=[]){
   const state=String(lead.region||lead.state||lead.state_code||"").trim().toUpperCase();
   const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
@@ -1065,7 +1074,8 @@ async function bootstrapExistingQualified(){
         }
         if(!website&&!emails.length&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
           await redis.sRem(ENRICHED_SET,entry.field);
-          queuedForEnrichment+=Number(await redis.sAdd(PRIORITY_PENDING_SET,entry.field)||0);
+          const retrySet=emailRecoveryPriority(lead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET;
+          queuedForEnrichment+=Number(await redis.sAdd(retrySet,entry.field)||0);
         }else if(!website&&emails.length&&!practiceKeys.length){
           await redis.sRem(ENRICHED_SET,entry.field);
           queuedForEnrichment+=Number(await redis.sAdd(PENDING_SET,entry.field)||0);
@@ -1155,10 +1165,12 @@ async function enrichBatch(){
   // highest marginal yield and should not wait behind thousands of historical misses.
   const freshKeys=await popSetBatch(SOURCE_PENDING_SET,ENRICH_BATCH);
   const afterFresh=Math.max(0,ENRICH_BATCH-freshKeys.length);
-  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,afterFresh):[];
-  const remaining=Math.max(0,ENRICH_BATCH-freshKeys.length-priorityKeys.length);
+  const recoverableKeys=afterFresh?await popSetBatch(RECOVERABLE_PENDING_SET,afterFresh):[];
+  const afterRecoverable=Math.max(0,afterFresh-recoverableKeys.length);
+  const priorityKeys=afterRecoverable?await popSetBatch(PRIORITY_PENDING_SET,afterRecoverable):[];
+  const remaining=Math.max(0,ENRICH_BATCH-freshKeys.length-recoverableKeys.length-priorityKeys.length);
   const regularKeys=remaining?await popSetBatch(PENDING_SET,remaining):[];
-  const keys=[...new Set([...freshKeys,...priorityKeys,...regularKeys])].slice(0,ENRICH_BATCH);
+  const keys=[...new Set([...freshKeys,...recoverableKeys,...priorityKeys,...regularKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
   let index=0,done=0;
   const run=async()=>{
@@ -1174,7 +1186,8 @@ async function enrichBatch(){
         let retryLead={};try{retryLead=rawRetry?JSON.parse(rawRetry):{};}catch{}
         const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(isUsableLawEmail);
         const retryKeys=Array.isArray(retryLead.practice_keys)?retryLead.practice_keys:[];
-        await redis.sAdd(retryEmails.length?PENDING_SET:PRIORITY_PENDING_SET,key);
+        const retrySet=retryEmails.length?PENDING_SET:(emailRecoveryPriority(retryLead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET);
+        await redis.sAdd(retrySet,key);
         console.warn(JSON.stringify({event:"law_firm_enrich_retry",key,error:String(error?.message||error)}));
       }
     }
@@ -1263,13 +1276,13 @@ async function enrichmentLoop(){
   while(true){
     try{
       const enriched=await enrichBatch();
-      const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource,emailStats]=await Promise.all([
+      const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,emailStats]=await Promise.all([
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
-        redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
+        redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
         redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit"])
       ]);
       console.log(JSON.stringify({
-        event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource,
+        event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,
         emailExisting:Number(emailStats?.[0]||0),emailDuck:Number(emailStats?.[1]||0),emailBing:Number(emailStats?.[2]||0),
         emailZeroCost:Number(emailStats?.[3]||0),emailNoHit:Number(emailStats?.[4]||0)
       }));
