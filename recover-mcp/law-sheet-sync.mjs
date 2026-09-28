@@ -5,6 +5,15 @@ const TOKEN_URL="https://oauth2.googleapis.com/token";
 const SHEETS_API="https://sheets.googleapis.com/v4/spreadsheets";
 const SCOPE="https://www.googleapis.com/auth/spreadsheets";
 const clean=v=>String(v??"").trim();
+
+const GENERIC_CONTACT_LOCAL=new Set(["info","contact","office","admin","hello","support","mail","reception","receptionist","intake","legal","law","team","general","marketing"]);
+function contactEmailRank(email=""){
+  const local=clean(email).toLowerCase().split("@")[0]||"";
+  if(GENERIC_CONTACT_LOCAL.has(local))return 5;
+  if(/^(info|contact|office|admin|hello|support|mail|reception|intake|legal|law|team|general|marketing)[._+-]/.test(local))return 4;
+  if(/^[a-z][a-z0-9.'_-]{2,}$/.test(local))return 1;
+  return 3;
+}
 const BLOCKED_CONTACT_DOMAINS=["reachattorneys.com","birdeye.com","avvo.com","findlaw.com","lawyers.com","justia.com","martindale.com","superlawyers.com","yellowpages.com","yelp.com"];
 function exportableLawEmail(value=""){
   const email=clean(value).toLowerCase();
@@ -60,7 +69,9 @@ async function collectRows(redis){
       const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
       if(!isLaw)continue;
       const website=clean(lead.website);
-      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email].map(x=>clean(x).toLowerCase()).filter(exportableLawEmail);
+      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+        .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
+        .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
       const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const practiceKeys=[...new Set([
         ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
