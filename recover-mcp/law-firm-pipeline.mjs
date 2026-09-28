@@ -127,8 +127,10 @@ function emailsFrom(text=""){
   source=source
     .replace(/&#64;|&commat;/gi,"@")
     .replace(/&#46;|&period;/gi,".")
-    .replace(/\s*(?:\[|\(|\{)?\s*(?:at|AT)\s*(?:\]|\)|\})?\s*/g,"@")
-    .replace(/\s*(?:\[|\(|\{)?\s*(?:dot|DOT)\s*(?:\]|\)|\})?\s*/g,".");
+    .replace(/\s*(?:\[at\]|\(at\)|\{at\})\s*/gi,"@")
+    .replace(/\s+(?:at)\s+/gi,"@")
+    .replace(/\s*(?:\[dot\]|\(dot\)|\{dot\})\s*/gi,".")
+    .replace(/\s+(?:dot)\s+/gi,".");
   return [...new Set((source.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)||[])
     .map(x=>x.toLowerCase().replace(/[),.;:]+$/,""))
     .filter(isUsableLawEmail))].slice(0,8);
