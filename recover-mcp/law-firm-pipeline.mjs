@@ -1,3 +1,4 @@
+// deployment trigger: qualified law sheet cleanup 2026-09-28
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail } from "./law-firm-targeting.mjs";
