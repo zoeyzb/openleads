@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
-const EMAIL_METHOD_VERSION="email-v13-conversion";
+const EMAIL_METHOD_VERSION="email-v14-direct-source";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -1259,7 +1259,7 @@ async function bootstrapExistingQualified(){
 
       const website=String(lead.website||"").trim();
       const existingSource=String(lead.law_email_source||lead.email_source||lead.email_evidence_url||"").trim();
-      const sourceBacked=/^https?:\/\//i.test(existingSource);
+      const sourceBacked=isDirectPublishedEmailSource(existingSource);
       const identityEmails=sourceBacked?[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>String(x||"").trim().toLowerCase())
         .filter(x=>emailIdentityStrong(x,lead)):[];
@@ -1294,7 +1294,7 @@ async function bootstrapExistingQualified(){
           await redis.sRem(READY_SET,entry.field);
           qualifiedRemoved++;
         }
-        if(!effectiveWebsite&&(!emails.length||!sourceBacked||attorneyCount===0)&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
+        if(!effectiveWebsite&&(!emails.length||!sourceBacked)&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
           // Do not turn every old miss into active work after a version bump.
           // Only high-signal records (named attorney + phone + bar/city evidence)
           // earn a bounded background retry; fresh discoveries use SOURCE_PENDING_SET.
