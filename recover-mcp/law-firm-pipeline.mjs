@@ -937,7 +937,8 @@ async function enrichLead(key,lead){
     target_area:String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"").trim(),
     email_angle:emailAngle,lead_priority_score:priority,qualified_lead:qualified,
     law_email_enrich_version:EMAIL_METHOD_VERSION,
-    law_email_method:emailMethod,law_bar_domain:stateBarDomain(lead),
+    law_email_method:emailMethod,law_email_source:source||"",
+    law_email_validation:"identity+mx",law_bar_domain:stateBarDomain(lead),
     law_firm_enriched_at:new Date().toISOString()};
 
   await redis.hSet(LEAD_HASH,key,JSON.stringify(enriched));
