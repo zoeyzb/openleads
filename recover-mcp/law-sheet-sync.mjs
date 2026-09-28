@@ -42,7 +42,7 @@ function typeLabel(keys=[],evidence=""){
   const labels=keys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
   return (labels.length?labels:lawFirmPracticeAreas(evidence))
     .map(x=>x.replace("personal injury","Personal Injury").replace("family/divorce","Family/Divorce").replace("criminal defense","Criminal Defense"))
-    .join(" + ");
+    .join(" + ") || "Needs Classification";
 }
 async function collectRows(redis){
   const out=[];
@@ -75,8 +75,10 @@ async function collectRows(redis){
         personal=`${name} has ${reviews} Google reviews at about ${rating.toFixed(1)} stars${city?` in ${city}`:""}`;
         source=clean(lead.google_maps_url||lead.maps_url);
       }
-      const generic=city?`I came across ${name} while researching ${type||"law"} firms in ${city}`:`I came across ${name} while researching ${type||"law"} firms`;
-      const opener=personal?`${personal}. I couldn't find a website for the firm, so I thought I'd reach out.`:`${generic}. I couldn't find a website for the firm, so I thought I'd reach out.`;
+      const context=city?`${type||"law"} firms in ${city}`:`${type||"law"} firms`;
+      const opener=personal
+        ? `I found ${name} while looking at ${context}. ${personal.replace(/^I noticed\s+/i,"")}. I couldn't find a firm website, so I wanted to reach out.`
+        : `I found ${name} while looking at ${context}, but I couldn't find a firm website, so I wanted to reach out.`;
       out.push({
         priority:Number(lead.lead_priority_score||0)||0,
         email:emails[0]||"",
