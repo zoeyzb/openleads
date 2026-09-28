@@ -7,7 +7,7 @@ import * as z from "zod/v4";
 import { orchestrate as enrichEmail } from "email-enrich";
 import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
-import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead } from "./law-firm-targeting.mjs";
+import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, isUsableLawEmail } from "./law-firm-targeting.mjs";
 import { startQualifiedGoogleSheetSync } from "./google-sheet-direct-sync.mjs";
 import { createSmsSheetBridge } from "./sms-sheet-bridge.mjs";
 import {
@@ -3111,7 +3111,7 @@ const httpServer = createHttpServer((req, res) => {
           noWebsite++;
           const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
             .map(x=>String(x||"").trim().toLowerCase())
-            .filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+            .filter(isUsableLawEmail);
           if(!emails.length)continue;
           noWebsiteEmail++;
           const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
