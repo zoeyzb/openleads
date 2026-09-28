@@ -1237,16 +1237,26 @@ async function bootstrapExistingQualified(){
       const practiceKeys=[...new Set([...storedKeys,...observedKeys,...(focus?[focus]:[])])];
 
       const wasQualified=await redis.sIsMember(READY_SET,entry.field);
-      if(!qualifiesNoWebsiteLawLead({website,emails,practice_keys:practiceKeys})){
+      let effectiveWebsite=website;
+      if(wasQualified&&!website&&emails.length){
+        const discovered=await detectOwnedWebsiteFromEmailDomains(emails,lead);
+        if(discovered){
+          effectiveWebsite=discovered;
+          const updatedLead={...lead,website:discovered,website_opportunity:"website_refresh"};
+          await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(updatedLead));
+          await queueWebsiteRefreshCandidate(entry.field,{...updatedLead,emails,practice_keys:practiceKeys},discovered);
+        }
+      }
+      if(!qualifiesNoWebsiteLawLead({website:effectiveWebsite,emails,practice_keys:practiceKeys})){
         if(wasQualified){
           await redis.sRem(READY_SET,entry.field);
           qualifiedRemoved++;
         }
-        if(!website&&!emails.length&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
+        if(!effectiveWebsite&&!emails.length&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
           await redis.sRem(ENRICHED_SET,entry.field);
           const retrySet=emailRecoveryPriority(lead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET;
           queuedForEnrichment+=Number(await redis.sAdd(retrySet,entry.field)||0);
-        }else if(!website&&emails.length&&!practiceKeys.length){
+        }else if(!effectiveWebsite&&emails.length&&!practiceKeys.length){
           await redis.sRem(ENRICHED_SET,entry.field);
           queuedForEnrichment+=Number(await redis.sAdd(PENDING_SET,entry.field)||0);
         }
