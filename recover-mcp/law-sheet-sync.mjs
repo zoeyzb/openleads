@@ -42,7 +42,7 @@ function typeLabel(keys=[],evidence=""){
   const labels=keys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
   return (labels.length?labels:lawFirmPracticeAreas(evidence))
     .map(x=>x.replace("personal injury","Personal Injury").replace("family/divorce","Family/Divorce").replace("criminal defense","Criminal Defense"))
-    .join(" + ");
+    .join(" + ") || "Other / General Law";
 }
 async function collectRows(redis){
   const out=[];
