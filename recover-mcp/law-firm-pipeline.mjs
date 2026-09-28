@@ -789,10 +789,14 @@ async function popSetBatch(setKey,count){
   return [...new Set(out)].slice(0,count);
 }
 async function enrichBatch(){
-  const priorityKeys=await popSetBatch(PRIORITY_PENDING_SET,ENRICH_BATCH);
-  const remaining=Math.max(0,ENRICH_BATCH-priorityKeys.length);
+  // Fresh discoveries should be attempted immediately; they generally have the
+  // highest marginal yield and should not wait behind thousands of historical misses.
+  const freshKeys=await popSetBatch(SOURCE_PENDING_SET,ENRICH_BATCH);
+  const afterFresh=Math.max(0,ENRICH_BATCH-freshKeys.length);
+  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,afterFresh):[];
+  const remaining=Math.max(0,ENRICH_BATCH-freshKeys.length-priorityKeys.length);
   const regularKeys=remaining?await popSetBatch(PENDING_SET,remaining):[];
-  const keys=[...new Set([...priorityKeys,...regularKeys])].slice(0,ENRICH_BATCH);
+  const keys=[...new Set([...freshKeys,...priorityKeys,...regularKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
   let index=0,done=0;
   const run=async()=>{
