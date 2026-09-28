@@ -3152,7 +3152,29 @@ const httpServer = createHttpServer((req, res) => {
         return;
       }
       const redis=await getLawExportRedis();
-      const rows=[["Type","Firm Name","Email","Phone","City","State","Attorney Count","Firm Size","Rating","Reviews","Personalization","Suggested Opener","Maps URL","Priority","Status"]];
+      const headers=[
+        "Type","Firm Name","Email","Phone","City","State","Website","Pain Point",
+        "Personal Fact","Personal Fact Source","Suggested Opener","Attorney Count","Firm Size",
+        "Rating","Reviews","Google Maps","Priority","Status"
+      ];
+      const dataRows=[];
+      const parseLocation=(lead)=>{
+        let city=String(lead.city||"").trim();
+        let state=String(lead.region||lead.state||"").trim().toUpperCase();
+        const raw=String(lead.address||lead.acquisition_location||lead.target_area||"").trim();
+        const addressMatch=raw.match(/(?:^|,\s*)([^,]+),\s*([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*$/i);
+        if(addressMatch){
+          if(!city) city=String(addressMatch[1]||"").trim();
+          if(!state) state=String(addressMatch[2]||"").trim().toUpperCase();
+        } else {
+          const simple=raw.match(/^\s*([^,]+),\s*([A-Z]{2})\s*$/i);
+          if(simple){
+            if(!city) city=String(simple[1]||"").trim();
+            if(!state) state=String(simple[2]||"").trim().toUpperCase();
+          }
+        }
+        return {city,state};
+      };
       for await (const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
         for(const entry of (Array.isArray(page)?page:[page])){
           if(!entry?.value) continue;
@@ -3160,31 +3182,60 @@ const httpServer = createHttpServer((req, res) => {
           const isLaw=String(lead.search_profile||"")==="law-firm" || String(lead.industry||"").toUpperCase()==="LAW_FIRM";
           if(!isLaw) continue;
           const website=String(lead.website||"").trim();
-          const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email].map(x=>String(x||"").trim().toLowerCase()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+          const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+            .map(x=>String(x||"").trim().toLowerCase())
+            .filter(isUsableLawEmail);
           const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
           const evidenceKeys=lawFirmPracticeKeys(evidence);
           const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
           const focus=String(lead.practice_focus||"").trim();
-          const practiceKeys=[...new Set([...storedKeys,...evidenceKeys,...(focus?[focus]:[])])];
+          const practiceKeys=[...new Set([...storedKeys,...evidenceKeys,...(focus?[focus]:[])])]
+            .filter(k=>["personal_injury","family_divorce","criminal_defense"].includes(k));
           if(!qualifiesNoWebsiteLawLead({website,emails,practice_keys:practiceKeys})) continue;
+
           const labels=practiceKeys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
-          const type=(labels.length?labels:lawFirmPracticeAreas(evidence)).map(x=>x.replace("personal injury","Personal Injury").replace("family/divorce","Family/Divorce").replace("criminal defense","Criminal Defense")).join(" + ");
+          const type=(labels.length?labels:lawFirmPracticeAreas(evidence))
+            .map(x=>x.replace("personal injury","Personal Injury").replace("family/divorce","Family/Divorce").replace("criminal defense","Criminal Defense"))
+            .join(" + ");
           const reviews=Number(lead.review_count||lead.reviews||0);
           const rating=Number(lead.review_rating||lead.rating||0);
-          const city=String(lead.city||"").trim();
+          const {city,state}=parseLocation(lead);
           const name=String(lead.name||lead.title||"").trim();
-          let personal=String(lead.personalization_fact||"").trim();
-          if(!personal && reviews>=5 && rating>0) personal=`${name} has ${reviews} Google reviews at about ${rating.toFixed(1)} stars${city?` in ${city}`:""}`;
-          if(!personal && city) personal=`I came across ${name} while looking at ${type||"law"} firms in ${city}`;
-          const opener=String(lead.email_angle||"").trim() || (personal ? `${personal}. I couldn't find a website for the firm, so I thought I'd reach out.` : `I came across ${name} while researching ${type||"law"} firms and couldn't find a website for the firm.`);
-          rows.push([
-            type,name,emails[0]||"",String(lead.phone||""),city,String(lead.region||""),
-            String(lead.attorney_count_estimate||""),String(lead.firm_size_tier||""),
-            rating?rating:"",reviews||"",personal,opener,String(lead.google_maps_url||lead.maps_url||""),
-            Number(lead.lead_priority_score||0)||"", "New"
-          ]);
+          const personalizationQuality=String(lead.personalization_quality||"").trim().toLowerCase();
+
+          let personal="";
+          let personalSource="";
+          const storedPersonal=String(lead.personalization_fact||"").trim();
+          const storedSource=String(lead.personalization_source||"").trim();
+          if(storedPersonal && personalizationQuality==="specific"){
+            personal=storedPersonal;
+            personalSource=storedSource;
+          } else if(reviews>=5 && rating>0) {
+            personal=`${name} has ${reviews} Google reviews at about ${rating.toFixed(1)} stars${city?` in ${city}`:""}`;
+            personalSource=String(lead.google_maps_url||lead.maps_url||"").trim();
+          }
+
+          const genericContext=city
+            ? `I came across ${name} while researching ${type||"law"} firms in ${city}`
+            : `I came across ${name} while researching ${type||"law"} firms`;
+          const opener=personal
+            ? `${personal}. I couldn't find a website for the firm, so I thought I'd reach out.`
+            : `${genericContext}. I couldn't find a website for the firm, so I thought I'd reach out.`;
+
+          dataRows.push({
+            priority:Number(lead.lead_priority_score||0)||0,
+            row:[
+              type,name,emails[0]||"",String(lead.phone||""),city,state,
+              "No website","No website",personal,personalSource,opener,
+              String(lead.attorney_count_estimate||""),String(lead.firm_size_tier||""),
+              rating?rating:"",reviews||"",String(lead.google_maps_url||lead.maps_url||""),
+              Number(lead.lead_priority_score||0)||"","New"
+            ]
+          });
         }
       }
+      dataRows.sort((a,b)=>b.priority-a.priority || String(a.row[0]).localeCompare(String(b.row[0])) || String(a.row[1]).localeCompare(String(b.row[1])));
+      const rows=[headers,...dataRows.map(x=>x.row)];
       const esc=v=>{const s=String(v??"");return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
       const csv=rows.map(row=>row.map(esc).join(",")).join("\r\n");
       res.writeHead(200,{
@@ -3199,7 +3250,6 @@ const httpServer = createHttpServer((req, res) => {
     });
     return;
   }
-
 
   if (requestUrl.pathname === "/inbox/events" && req.method === "GET") {
     if (!inboxAuthorized(req)) {
