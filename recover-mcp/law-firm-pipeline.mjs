@@ -340,7 +340,7 @@ async function enrichLead(key,lead){
   return true;
 }
 async function bootstrapExistingQualified(){
-  let scanned=0,qualifiedAdded=0,queuedForEnrichment=0,alreadyQualified=0;
+  let scanned=0,qualifiedAdded=0,qualifiedRemoved=0,queuedForEnrichment=0,alreadyQualified=0;
   for await(const page of redis.hScanIterator(LEAD_HASH,{COUNT:500})){
     for(const entry of (Array.isArray(page)?page:[page])){
       if(!entry?.field||entry.value===undefined)continue;
@@ -359,14 +359,18 @@ async function bootstrapExistingQualified(){
       const focus=String(lead.practice_focus||"").trim();
       const practiceKeys=[...new Set([...storedKeys,...observedKeys,...(focus?[focus]:[])])];
 
+      const wasQualified=await redis.sIsMember(READY_SET,entry.field);
       if(!qualifiesNoWebsiteLawLead({website,emails,practice_keys:practiceKeys})){
+        if(wasQualified){
+          await redis.sRem(READY_SET,entry.field);
+          qualifiedRemoved++;
+        }
         if(!website&&emails.length&&!practiceKeys.length){
           queuedForEnrichment+=Number(await redis.sAdd(PRIORITY_PENDING_SET,entry.field)||0);
         }
         continue;
       }
 
-      const wasQualified=await redis.sIsMember(READY_SET,entry.field);
       if(wasQualified){alreadyQualified++;continue;}
 
       const practices=[...new Set(practiceKeys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean))];
@@ -418,8 +422,8 @@ async function bootstrapExistingQualified(){
       }
     }
   }
-  console.log(JSON.stringify({event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,alreadyQualified,queuedForEnrichment}));
-  return {scanned,qualifiedAdded,alreadyQualified,queuedForEnrichment};
+  console.log(JSON.stringify({event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,queuedForEnrichment}));
+  return {scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,queuedForEnrichment};
 }
 
 async function enrichBatch(){
@@ -442,7 +446,7 @@ async function enrichBatch(){
       }catch(error){
         const rawRetry=await redis.hGet(LEAD_HASH,key);
         let retryLead={};try{retryLead=rawRetry?JSON.parse(rawRetry):{};}catch{}
-        const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(Boolean);
+        const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(isUsableLawEmail);
         const retryKeys=Array.isArray(retryLead.practice_keys)?retryLead.practice_keys:[];
         await redis.sAdd(retryEmails.length&&!retryKeys.length?PRIORITY_PENDING_SET:PENDING_SET,key);
         console.warn(JSON.stringify({event:"law_firm_enrich_retry",key,error:String(error?.message||error)}));
