@@ -1,6 +1,6 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
-import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries } from "./law-firm-targeting.mjs";
+import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail } from "./law-firm-targeting.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||"";
@@ -282,7 +282,7 @@ async function enrichLead(key,lead){
   emails.push(...fb.emails);
   combined+=" "+fb.text;
   source=fb.source||String(lead.google_maps_url||"Google Maps");
-  emails=[...new Set(emails.map(x=>String(x).toLowerCase().trim()).filter(Boolean))].slice(0,5);
+  emails=[...new Set(emails.map(x=>String(x).toLowerCase().trim()).filter(isUsableLawEmail))].slice(0,5);
 
   const observedText=combined+" "+[lead.category,lead.name,lead.description,lead.descriptions].join(" ");
   const observedPractices=lawFirmPracticeAreas(observedText);
@@ -352,7 +352,7 @@ async function bootstrapExistingQualified(){
       const website=String(lead.website||"").trim();
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>String(x||"").trim().toLowerCase())
-        .filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+        .filter(isUsableLawEmail);
       const evidenceText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const observedKeys=lawFirmPracticeKeys(evidenceText);
       const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
