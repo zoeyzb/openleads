@@ -62,23 +62,26 @@ function typeLabel(keys=[],evidence=""){
 }
 async function collectRows(redis){
   const out=[];
-  for await(const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
-    for(const entry of (Array.isArray(page)?page:[page])){
-      if(!entry?.value)continue;
-      let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
+  const readyKeys=await redis.sMembers("recover:law-firm:qualified:v3");
+  for(let offset=0;offset<readyKeys.length;offset+=250){
+    const keys=readyKeys.slice(offset,offset+250);
+    const values=await redis.hmGet("recover:leadstore:qualified",keys);
+    for(let i=0;i<keys.length;i++){
+      if(!values[i])continue;
+      let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
       const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
       if(!isLaw)continue;
-      const website=clean(lead.website);
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
         .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
+      if(!emails.length)continue;
+
       const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const practiceKeys=[...new Set([
         ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
         ...lawFirmPracticeKeys(evidence),
         ...(clean(lead.practice_focus)?[clean(lead.practice_focus)]:[])
       ])].filter(k=>LAW_PRACTICES.some(p=>p.key===k));
-      if(!qualifiesNoWebsiteLawLead({website,emails,practice_keys:practiceKeys}))continue;
 
       const type=typeLabel(practiceKeys,evidence);
       const name=clean(lead.name||lead.title);
