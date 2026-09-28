@@ -8,7 +8,8 @@ export function qualificationProfile(job={}) {
     `phone:${job.require_phone?1:0}`,
     `email:${job.require_email?1:0}`,
     `includeNW:${job.include_no_website===false?0:1}`,
-    `score:${Number(job.min_score||0)}`
+    `score:${Number(job.min_score||0)}`,
+    `practice:${norm(job.practice_focus||"")}`
   ].join("|");
 }
 export function campaignScope(job={}) {
