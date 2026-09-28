@@ -154,7 +154,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       const redis=await getRedis();
       const leads=await collectRows(redis);
       for(const item of leads){if(statuses.has(item.email))item.row[15]=statuses.get(item.email);}
-      const headers=["Type","Firm Name","Email","Phone","City","State","Personalization","Research Source","Suggested Opener","Attorney Count","Firm Size","Rating","Reviews","Google Maps","Priority","Status"];
+      const headers=["Type","Firm","Email","Phone","City","State","Personal Angle","Source","Opener","Attorneys","Firm Size","Rating","Reviews","Maps","Priority","Status"];
       const values=[headers,...leads.map(x=>x.row)];
       const endRow=Math.max(2,values.length),rowCount=Math.max(10,endRow+1);
       await request(`/values/${encodeURIComponent(`'${tabName}'!A1:R${Math.max(5000,endRow)}`)}:clear`,{method:"POST",body:{}});
