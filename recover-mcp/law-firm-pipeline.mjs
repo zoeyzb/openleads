@@ -184,6 +184,21 @@ const FREE_MAIL_DOMAINS=new Set([
   "proton.me","protonmail.com","live.com","comcast.net","att.net","bellsouth.net","verizon.net",
   "sbcglobal.net","earthlink.net","cs.com"
 ]);
+
+const GENERIC_EMAIL_LOCAL=new Set(["info","contact","office","admin","hello","support","mail","reception","receptionist","intake","legal","law","team","general","marketing"]);
+function emailContactRank(email=""){
+  const value=String(email||"").toLowerCase().trim();
+  const local=value.split("@")[0]||"";
+  if(!value)return 99;
+  if(GENERIC_EMAIL_LOCAL.has(local))return 5;
+  if(/^(info|contact|office|admin|hello|support|mail|reception|intake|legal|law|team|general|marketing)[._+-]/.test(local))return 4;
+  if(/^[a-z][a-z0-9.'_-]{2,}$/.test(local))return 1;
+  return 3;
+}
+function rankLawEmails(values=[]){
+  return [...new Set(values.map(x=>String(x||"").toLowerCase().trim()).filter(Boolean))]
+    .sort((a,b)=>emailContactRank(a)-emailContactRank(b)||a.localeCompare(b));
+}
 const THIRD_PARTY_EMAIL_DOMAINS=[
   "reachattorneys.com","birdeye.com","avvo.com","findlaw.com","lawyers.com","justia.com",
   "martindale.com","superlawyers.com","yellowpages.com","yelp.com","facebook.com","linkedin.com"
@@ -546,8 +561,8 @@ async function enrichLead(key,lead){
     if(!fb.personalFact&&bf.personalFact){fb.personalFact=bf.personalFact;fb.personalFactSource=bf.personalFactSource;}
     if(bf.emails.length)await redis.hIncrBy(STATS,"email_bing_hit",1);
   }
-  emails=[...new Set(emails.map(x=>String(x).toLowerCase().trim())
-    .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x)))].slice(0,5);
+  emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
+    .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
   if(!emails.length){
     const zeroCost=await zeroCostEmailFallback(lead);
     if(zeroCost.emails.length){
@@ -758,7 +773,7 @@ async function enrichBatch(){
         let retryLead={};try{retryLead=rawRetry?JSON.parse(rawRetry):{};}catch{}
         const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(isUsableLawEmail);
         const retryKeys=Array.isArray(retryLead.practice_keys)?retryLead.practice_keys:[];
-        await redis.sAdd(retryEmails.length&&!retryKeys.length?PRIORITY_PENDING_SET:PENDING_SET,key);
+        await redis.sAdd(retryEmails.length?PENDING_SET:PRIORITY_PENDING_SET,key);
         console.warn(JSON.stringify({event:"law_firm_enrich_retry",key,error:String(error?.message||error)}));
       }
     }
@@ -767,13 +782,15 @@ async function enrichBatch(){
   return done;
 }
 async function seed(cities){
-  const [queue,pendingV3,pendingSource]=await Promise.all([
+  const [queue,pendingEmail,pendingSource]=await Promise.all([
     redis.lLen(ACTIVE_QUEUE),
-    redis.sCard(PENDING_SET),
+    redis.sCard(PRIORITY_PENDING_SET),
     redis.sCard(SOURCE_PENDING_SET)
   ]);
   if(queue>=QUEUE_HIGH_WATER)return 0;
-  if(shouldPauseLawDiscovery({pendingEnrichment:pendingV3+pendingSource,limit:DISCOVERY_BACKLOG_LIMIT}))return 0;
+  // Only pause discovery when the email-missing/source backlog is genuinely saturated.
+  // Cosmetic practice/personalization work must never stop fresh lead discovery.
+  if(shouldPauseLawDiscovery({pendingEnrichment:pendingEmail+pendingSource,limit:DISCOVERY_BACKLOG_LIMIT}))return 0;
   const qualifiedCount=await redis.sCard(READY_SET);
   if(qualifiedCount>=TARGET_TOTAL)return 0;
   let seeded=0;
@@ -808,8 +825,11 @@ console.log(JSON.stringify({event:"law_firm_pipeline_started",cities:cities.leng
 while(true){
   try{
     const [seeded,enriched]=await Promise.all([seed(cities),enrichBatch()]);
-    const [queue,qualified,enrichedTotal,rejected,pending]=await Promise.all([redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),redis.sCard(PENDING_SET)]);
-    console.log(JSON.stringify({event:"law_firm_pipeline_cycle",seeded,enriched,queue,qualified,enrichedTotal,rejected,pending}));
+    const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource]=await Promise.all([
+      redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
+      redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(SOURCE_PENDING_SET)
+    ]);
+    console.log(JSON.stringify({event:"law_firm_pipeline_cycle",seeded,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource}));
   }catch(error){console.error("law_firm_pipeline_error",error?.stack||error?.message||error);}
   await sleep(LOOP_MS);
 }
