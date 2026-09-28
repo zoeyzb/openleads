@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
-const EMAIL_METHOD_VERSION="email-v10";
+const EMAIL_METHOD_VERSION="email-v11";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -354,23 +354,55 @@ function tokenAffinity(haystack="",token=""){
   const base=t.endsWith("s")&&t.length>4?t.slice(0,-1):t;
   return h.includes(t)||t.includes(h)||(base.length>=3&&(h.includes(base)||base.includes(h)));
 }
+
+const US_STATE_NAMES={
+  AL:"alabama",AK:"alaska",AZ:"arizona",AR:"arkansas",CA:"california",CO:"colorado",CT:"connecticut",DE:"delaware",FL:"florida",GA:"georgia",HI:"hawaii",ID:"idaho",IL:"illinois",IN:"indiana",IA:"iowa",KS:"kansas",KY:"kentucky",LA:"louisiana",ME:"maine",MD:"maryland",MA:"massachusetts",MI:"michigan",MN:"minnesota",MS:"mississippi",MO:"missouri",MT:"montana",NE:"nebraska",NV:"nevada",NH:"newhampshire",NJ:"newjersey",NM:"newmexico",NY:"newyork",NC:"northcarolina",ND:"northdakota",OH:"ohio",OK:"oklahoma",OR:"oregon",PA:"pennsylvania",RI:"rhodeisland",SC:"southcarolina",SD:"southdakota",TN:"tennessee",TX:"texas",UT:"utah",VT:"vermont",VA:"virginia",WA:"washington",WV:"westvirginia",WI:"wisconsin",WY:"wyoming"
+};
+const FOREIGN_CCTLD_RE=/\.(?:ca|uk|au|nz|ie|in|pk|za|de|fr|it|es|mx|br|sg|hk|jp|cn|ru)$/i;
+function emailDomainStateMismatch(email="",lead={}){
+  const domain=String(email).split("@")[1]?.toLowerCase().replace(/[^a-z0-9.]/g,"")||"";
+  const state=String(lead.region||lead.state||lead.state_code||"").trim().toUpperCase();
+  if(!domain||!state)return false;
+  const stem=domain.replace(/[^a-z0-9]/g,"");
+  const expected=US_STATE_NAMES[state]||"";
+  for(const [code,name] of Object.entries(US_STATE_NAMES)){
+    if(code===state)continue;
+    if(name.length>=5&&stem.includes(name))return true;
+  }
+  return false;
+}
+function emailDomainGeographySafe(email="",lead={}){
+  const domain=String(email).split("@")[1]?.toLowerCase()||"";
+  const state=String(lead.region||lead.state||lead.state_code||"").trim().toUpperCase();
+  if(!domain)return false;
+  if(state&&FOREIGN_CCTLD_RE.test(domain))return false;
+  if(emailDomainStateMismatch(email,lead))return false;
+  return true;
+}
 function emailLooksOwnedByLead(email="",lead={}){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
-  if(!domain||isThirdPartyEmailDomain(email)||FREE_MAIL_DOMAINS.has(domain))return false;
+  if(!domain||isThirdPartyEmailDomain(email)||FREE_MAIL_DOMAINS.has(domain)||!emailDomainGeographySafe(email,lead))return false;
   const stem=domain.split(".")[0].replace(/[^a-z0-9]/g,"");
-  const tokens=leadNameTokens(lead).map(x=>x.replace(/[^a-z0-9]/g,"")).filter(x=>x.length>=3);
-  if(tokens.some(t=>tokenAffinity(stem,t)))return true;
   const local=String(email).split("@")[0]?.toLowerCase().replace(/[^a-z0-9]/g,"")||"";
-  return tokens.some(t=>local.length>=3&&tokenAffinity(local,t));
+  const tokens=leadNameTokens(lead).map(x=>x.replace(/[^a-z0-9]/g,"")).filter(x=>x.length>=3);
+  const domainHits=tokens.filter(t=>tokenAffinity(stem,t)).length;
+  const localHits=tokens.filter(t=>local.length>=3&&tokenAffinity(local,t)).length;
+  const legalMarker=/law|legal|attorney|lawyer|firm|office|esq/.test(stem);
+  // Avoid generic corporate/surname domains: require either two business-name
+  // tokens, a law-specific domain marker, or independent local-part identity.
+  return domainHits>=2||(domainHits>=1&&legalMarker)||(domainHits>=1&&localHits>=1)||localHits>=1;
 }
 function emailIdentityStrong(email="",lead={}){
-  if(!isUsableLawEmail(email)||isThirdPartyEmailDomain(email))return false;
+  if(!isUsableLawEmail(email)||isThirdPartyEmailDomain(email)||!emailDomainGeographySafe(email,lead))return false;
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
   if(!FREE_MAIL_DOMAINS.has(domain))return emailLooksOwnedByLead(email,lead);
   const local=String(email).split("@")[0]?.toLowerCase().replace(/[^a-z0-9]/g,"")||"";
   const tokens=leadNameTokens(lead).map(x=>x.replace(/[^a-z0-9]/g,"")).filter(x=>x.length>=3);
-  const hits=tokens.filter(t=>tokenAffinity(local,t)).length;
-  return hits>=1&&(hits>=2||tokens.length<=2||/(law|esq|attorney)/.test(local));
+  const person=likelyAttorneyName(lead);
+  const personTokens=person?normalize(person).split(" ").map(x=>x.replace(/[^a-z0-9]/g,"")).filter(x=>x.length>=3):[];
+  const firmHits=tokens.filter(t=>tokenAffinity(local,t)).length;
+  const personHits=personTokens.filter(t=>tokenAffinity(local,t)).length;
+  return personHits>=1||(firmHits>=1&&(firmHits>=2||tokens.length<=2||/(law|esq|attorney)/.test(local)));
 }
 function exactIdentityNearEmail(context="",lead={}){
   const plain=normalize(context);
