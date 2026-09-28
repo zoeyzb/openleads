@@ -514,10 +514,9 @@ async function bingFallback(lead,query,pageBudget=6){
       if(item.status!=="fulfilled")continue;
       const result=item.value;
       const searchText=stripHtml(result.html).slice(0,10000);
-      const found=contextualEmails(result.html,lead);
-      emails.push(...found);
+      // Search snippets are discovery hints only. Never qualify an email from a
+      // Bing SERP itself; the address must be corroborated on a matched source page.
       texts.push(searchText);
-      if(found.length)sources.unshift(result.url); else sources.push(result.url);
       for(const link of bingResultLinks(result.html).sort((a,b)=>{
         const rank=u=>/govinfo\.gov|docs\.justia\.com|statebar|barassociation|bar\.org|supremecourt|disciplinaryboard|trellis|allbiz|chamberofcommerce|justia/i.test(u)?0:1;
         return rank(a)-rank(b);
@@ -526,12 +525,9 @@ async function bingFallback(lead,query,pageBudget=6){
         if(links.length>=pageBudget)break;
       }
     }
-    // An email hit alone is not enough for this campaign. We still need
-    // independent firm-size evidence so a lead can prove the 2-10 attorney gate.
-    // Fetch only the best two identity pages when an email is already present;
-    // otherwise use the normal page budget for email discovery.
-    const evidencePageBudget=emails.length?Math.min(2,pageBudget):pageBudget;
-    const pages=await Promise.allSettled(links.slice(0,evidencePageBudget).map(target=>fetchText(target,4500)));
+    // Fetch actual source pages for corroboration. Search-result snippets are
+    // never treated as publish-source evidence.
+    const pages=await Promise.allSettled(links.slice(0,pageBudget).map(target=>fetchText(target,4500)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
       if(item.status!=="fulfilled")continue;
@@ -1014,6 +1010,16 @@ function stateBarQueries(lead={},people=[]){
 }
 
 
+function isDirectPublishedEmailSource(source=""){
+  try{
+    const u=new URL(String(source||""));
+    const host=u.hostname.toLowerCase().replace(/^www\./,"");
+    if(!/^https?:$/.test(u.protocol))return false;
+    if(/(^|\.)(bing\.com|google\.com|duckduckgo\.com)$/.test(host))return false;
+    return true;
+  }catch{return false;}
+}
+
 async function enrichLead(key,lead){
   if(String(lead.search_profile||"")!=="law-firm"&&normalize(lead.industry)!=="law firm")return false;
   if(!isLawFirmLead(lead)){
@@ -1110,7 +1116,7 @@ async function enrichLead(key,lead){
   emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
   emails=await filterContactableEmails(emails,lead);
-  const emailSourceVerified=emails.length>0&&/^https?:\/\//i.test(source);
+  const emailSourceVerified=emails.length>0&&isDirectPublishedEmailSource(source);
   if(!emails.length||!emailSourceVerified){
     emails=[];
     emailMethod="none";
