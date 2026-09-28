@@ -75,19 +75,28 @@ export function shouldPauseLawDiscovery({pendingEnrichment=0,limit=1000}={}){
 
 export function lawResearchQueries(lead={}){
   const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
-  const city=String(lead.city||"").trim();
-  const region=String(lead.region||"").trim();
+  const city=String(lead.city||lead.locality||"").trim();
+  const region=String(lead.region||lead.state||lead.state_code||"").trim();
   const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
   if(!name)return [];
   const where=[city,region].filter(Boolean).join(" ");
-  const queries=[
+  const queries=[];
+  if(phone){
+    queries.push(
+      `"${phone}" "${name}"`,
+      `"${phone}" "${name}" email`
+    );
+  }
+  queries.push(
     `"${name}" ${where} email`.trim(),
-    `"${name}" ${where} attorney email`.trim(),
-    `"${name}" ${where} lawyer contact`.trim(),
-    `"${name}" ${region} bar attorney`.trim()
-  ];
-  if(phone)queries.unshift(`"${name}" "${phone}"`);
-  return [...new Set(queries)].slice(0,5);
+    `"${name}" ${where} attorney contact`.trim(),
+    `"${name}" ${where} site:allbiz.com`.trim(),
+    `"${name}" ${where} site:chamberofcommerce.com`.trim(),
+    `"${name}" ${region} site:justia.com`.trim(),
+    `"${name}" ${region} site:lawyers.com`.trim(),
+    `"${name}" ${region} state bar`.trim()
+  );
+  return [...new Set(queries)].slice(0,9);
 }
 
 export function isLawFirmLead(lead={}){
