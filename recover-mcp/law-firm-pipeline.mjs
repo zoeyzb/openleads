@@ -872,7 +872,7 @@ async function seed(cities){
     const job={id,batch_id:"us-law-firm-qualified-v5",industry:"LAW_FIRM",search_profile:"law-firm",practice_focus:focus.key,coverage_pass:coveragePass,location:area.location,
       partition_state:area.state,partition_city:area.city,source_population:area.population,target:18,min_score:45,
       require_phone:false,require_email:false,require_contact:false,require_no_website:true,include_no_website:true,
-      max_rounds:2,depth:4,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,
+      max_rounds:1,depth:4,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,
       qualified_count:0,stored_count:0,created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
       source:"law_firm_pipeline_v5"};
 
