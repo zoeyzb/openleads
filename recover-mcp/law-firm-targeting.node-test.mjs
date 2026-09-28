@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,shouldPauseLawDiscovery,lawResearchQueries} from "./law-firm-targeting.mjs";
+import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,shouldPauseLawDiscovery,lawResearchQueries,isUsableLawEmail} from "./law-firm-targeting.mjs";
 
 assert.equal(isLawFirmLead({category:"Personal injury attorney",name:"Smith & Doe Law"}),true);
 assert.equal(isLawFirmLead({category:"Criminal defense attorney",name:"Jones Defense Law"}),true);
@@ -52,3 +52,13 @@ const researchQueries=lawResearchQueries({name:"Smith Law",city:"Dallas",region:
 assert.ok(researchQueries.length>=2);
 assert.ok(researchQueries.some(q=>q.includes("email")));
 assert.ok(researchQueries.some(q=>q.includes("practice")));
+
+assert.equal(isUsableLawEmail("realfirm@gmail.com"),true);
+assert.equal(isUsableLawEmail("info@smithlaw.com"),true);
+assert.equal(isUsableLawEmail("error-lite+9c39@duckduckgo.com"),false);
+assert.equal(isUsableLawEmail("37798@attorneyyellowpages.com"),false);
+assert.equal(isUsableLawEmail("jane.doe@ballardlaw.com"),false);
+assert.equal(isUsableLawEmail("jdoe@potterlawoffices.com"),false);
+assert.equal(isUsableLawEmail("your@email.com"),false);
+assert.equal(isUsableLawEmail("flast@therogerslawgroup.com"),false);
+assert.equal(isUsableLawEmail("info@thesunfirm.complease"),false);
