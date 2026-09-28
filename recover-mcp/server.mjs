@@ -7,6 +7,7 @@ import * as z from "zod/v4";
 import { orchestrate as enrichEmail } from "email-enrich";
 import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
+import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead } from "./law-firm-targeting.mjs";
 import { startQualifiedGoogleSheetSync } from "./google-sheet-direct-sync.mjs";
 import { createSmsSheetBridge } from "./sms-sheet-bridge.mjs";
 import {
@@ -38,6 +39,7 @@ const KEELEAD_BASE_URL = (process.env.KEELEAD_BASE_URL || "").replace(/\/$/, "")
 const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 const ACQUISITION_REDIS_URL = process.env.ACQUISITION_REDIS_URL || "";
+const LAW_EXPORT_TOKEN = String(process.env.LAW_EXPORT_TOKEN || "");
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || "";
 const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER || "";
 const TELNYX_WEBHOOK_URL = (process.env.TELNYX_WEBHOOK_URL || "").trim();
@@ -3050,6 +3052,63 @@ const httpServer = createHttpServer((req, res) => {
     return;
   }
 
+
+
+  if (requestUrl.pathname === "/exports/law-leads.csv" && req.method === "GET") {
+    void (async () => {
+      const token=String(requestUrl.searchParams.get("token")||"");
+      if(!LAW_EXPORT_TOKEN || !secureEqual(token,LAW_EXPORT_TOKEN)){
+        res.writeHead(401,{"content-type":"application/json","cache-control":"no-store"});
+        res.end(JSON.stringify({error:"unauthorized"}));
+        return;
+      }
+      const redis=await getAcquisitionRedis();
+      const rows=[["Type","Firm Name","Email","Phone","City","State","Attorney Count","Firm Size","Rating","Reviews","Personalization","Suggested Opener","Maps URL","Priority","Status"]];
+      for await (const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
+        for(const entry of (Array.isArray(page)?page:[page])){
+          if(!entry?.value) continue;
+          let lead; try{lead=JSON.parse(entry.value)||{};}catch{continue;}
+          const isLaw=String(lead.search_profile||"")==="law-firm" || String(lead.industry||"").toUpperCase()==="LAW_FIRM";
+          if(!isLaw) continue;
+          const website=String(lead.website||"").trim();
+          const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email].map(x=>String(x||"").trim().toLowerCase()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+          const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
+          const evidenceKeys=lawFirmPracticeKeys(evidence);
+          const focus=String(lead.practice_focus||"").trim();
+          const practiceKeys=[...new Set([...evidenceKeys,...(focus?[focus]:[])])];
+          if(!qualifiesNoWebsiteLawLead({website,emails,practice_keys:practiceKeys})) continue;
+          const labels=practiceKeys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
+          const type=(labels.length?labels:lawFirmPracticeAreas(evidence)).map(x=>x.replace("personal injury","Personal Injury").replace("family/divorce","Family/Divorce").replace("criminal defense","Criminal Defense")).join(" + ");
+          const reviews=Number(lead.review_count||lead.reviews||0);
+          const rating=Number(lead.review_rating||lead.rating||0);
+          const city=String(lead.city||"").trim();
+          const name=String(lead.name||lead.title||"").trim();
+          let personal=String(lead.personalization_fact||"").trim();
+          if(!personal && reviews>=5 && rating>0) personal=`${name} has ${reviews} Google reviews at about ${rating.toFixed(1)} stars${city?` in ${city}`:""}`;
+          if(!personal && city) personal=`I came across ${name} while looking at ${type||"law"} firms in ${city}`;
+          const opener=String(lead.email_angle||"").trim() || (personal ? `${personal}. I couldn't find a website for the firm, so I thought I'd reach out.` : `I came across ${name} while researching ${type||"law"} firms and couldn't find a website for the firm.`);
+          rows.push([
+            type,name,emails[0]||"",String(lead.phone||""),city,String(lead.region||""),
+            String(lead.attorney_count_estimate||""),String(lead.firm_size_tier||""),
+            rating?rating:"",reviews||"",personal,opener,String(lead.google_maps_url||lead.maps_url||""),
+            Number(lead.lead_priority_score||0)||"", "New"
+          ]);
+        }
+      }
+      const esc=v=>{const s=String(v??"");return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+      const csv=rows.map(row=>row.map(esc).join(",")).join("\r\n");
+      res.writeHead(200,{
+        "content-type":"text/csv; charset=utf-8",
+        "content-disposition":'attachment; filename="law-qualified-leads.csv"',
+        "cache-control":"no-store"
+      });
+      res.end(csv);
+    })().catch(error=>{
+      res.writeHead(500,{"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({error:error?.message||"export_failed"}));
+    });
+    return;
+  }
 
 
   if (requestUrl.pathname === "/inbox/events" && req.method === "GET") {
