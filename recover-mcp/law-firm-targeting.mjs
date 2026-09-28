@@ -35,6 +35,10 @@ export function qualifiesNoWebsiteLawLead(lead={}){
   return !/^https?:\/\//i.test(website) && contacts.length>0 && practiceKeys.length>0;
 }
 
+export function shouldPauseLawDiscovery({pendingEnrichment=0,limit=1000}={}){
+  return Number(pendingEnrichment||0)>=Math.max(1,Number(limit||1000));
+}
+
 export function isLawFirmLead(lead={}){
   const category=normalize(lead.category||lead.industry||"");
   const text=normalize([category,lead.name,lead.title,lead.description,lead.descriptions].filter(Boolean).join(" "));
