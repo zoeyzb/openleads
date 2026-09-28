@@ -80,12 +80,23 @@ async function loadCities(){
   for(const line of lines){
     const row=parseCsvLine(line), city=String(row[idx.city]||"").trim(), state=String(row[idx.state]||"").trim().toUpperCase();
     if(!city||!/^[A-Z]{2}$/.test(state)||["PR","VI","GU","AS","MP"].includes(state))continue;
-    const population=Number(String(row[idx.population]||"0").replace(/[^0-9.-]/g,""))||0;
+    const population=Math.max(0,Number(String(row[idx.population]||"0").replace(/[^0-9.-]/g,""))||0);
+    const zip=String(row[idx.zip]||row[idx.zip_code]||row[idx.postal_code]||"").trim();
     const key=state+"|"+normalize(city);
-    const prev=byCity.get(key);
-    if(!prev||population>prev.population)byCity.set(key,{city,state,population,location:`${city}, ${state}`});
+    const prev=byCity.get(key)||{city,state,population:0,location:`${city}, ${state}`,zips:new Set()};
+    // Sum ZIP population once per ZIP. This is a better city-demand proxy than
+    // the old "largest ZIP wins" ranking and prioritizes real metros first.
+    const zipKey=zip||("row:"+key+":"+prev.zips.size);
+    if(!prev.zips.has(zipKey)){
+      prev.zips.add(zipKey);
+      prev.population+=population;
+    }
+    byCity.set(key,prev);
   }
-  return [...byCity.values()].sort((a,b)=>b.population-a.population).slice(0,MAX_CITIES);
+  return [...byCity.values()]
+    .map(({zips,...area})=>({...area,zip_count:zips.size}))
+    .sort((a,b)=>b.population-a.population||b.zip_count-a.zip_count||a.location.localeCompare(b.location))
+    .slice(0,MAX_CITIES);
 }
 async function fetchText(url,timeout=FETCH_TIMEOUT_MS){
   const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),timeout);
