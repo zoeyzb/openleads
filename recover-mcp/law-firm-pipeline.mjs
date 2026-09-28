@@ -155,22 +155,89 @@ function attorneyEstimate(html="",text=""){
   }
   return Math.min(100,estimate);
 }
+function duckResultLinks(html=""){
+  const out=[];
+  for(const m of String(html).matchAll(/href=["']([^"']+)["']/gi)){
+    let raw=String(m[1]||"").replace(/&amp;/g,"&");
+    try{
+      if(raw.startsWith("//")) raw="https:"+raw;
+      const u=new URL(raw,"https://html.duckduckgo.com");
+      if(/duckduckgo\.com$/i.test(u.hostname)){
+        const redirected=u.searchParams.get("uddg");
+        if(redirected) raw=decodeURIComponent(redirected);
+        else continue;
+      }
+      const target=new URL(raw);
+      if(!/^https?:$/.test(target.protocol))continue;
+      if(/duckduckgo\.com$/i.test(target.hostname))continue;
+      out.push(target.href);
+    }catch{}
+  }
+  return [...new Set(out)].slice(0,8);
+}
+function specificFactFromText(text="",lead={}){
+  const plain=String(text||"").replace(/\s+/g," ").trim();
+  const name=String(lead.name||"the firm").trim();
+  const patterns=[
+    {re:/\bformer\s+(?:county\s+|state\s+|federal\s+)?prosecutor\b/i,make:()=>`${name} highlights former-prosecutor experience`},
+    {re:/\bformer\s+public\s+defender\b/i,make:()=>`${name} highlights former public-defender experience`},
+    {re:/\bboard[- ]certified\b/i,make:()=>`${name} highlights a board-certified attorney credential`},
+    {re:/\b(?:founded|established)\s+(?:in\s+)?((?:19|20)\d{2})\b/i,make:m=>`${name} says it was established in ${m[1]}`},
+    {re:/\bserving\b.{0,80}?\bsince\s+((?:19|20)\d{2})\b/i,make:m=>`${name} says it has served clients since ${m[1]}`},
+    {re:/\b(\d{1,2})\+?\s+years?\s+(?:of\s+)?(?:combined\s+)?(?:legal\s+)?experience\b/i,make:m=>`${name} highlights ${m[1]}+ years of legal experience`}
+  ];
+  for(const p of patterns){
+    const m=plain.match(p.re);
+    if(m)return p.make(m);
+  }
+  return "";
+}
 async function duckFallback(lead){
   const queries=lawResearchQueries(lead);
-  if(!queries.length)return {emails:[],text:"",source:""};
+  if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
   const emails=[],texts=[],sources=[];
+  let attorneyCount=0,personalFact="",personalFactSource="",pageBudget=3;
+  const visited=new Set();
   for(const q of queries){
     try{
       const url="https://html.duckduckgo.com/html/?q="+encodeURIComponent(q);
       const result=await fetchText(url,6000);
+      const searchText=stripHtml(result.html).slice(0,9000);
       emails.push(...emailsFrom(result.html));
-      texts.push(stripHtml(result.html).slice(0,9000));
+      texts.push(searchText);
       sources.push(url);
+
+      for(const target of duckResultLinks(result.html)){
+        if(pageBudget<=0)break;
+        if(visited.has(target))continue;
+        visited.add(target);pageBudget--;
+        try{
+          const page=await fetchText(target,6000);
+          const pageText=stripHtml(page.html).slice(0,18000);
+          emails.push(...emailsFrom(page.html));
+          texts.push(pageText);
+          const estimate=attorneyEstimate(page.html,pageText);
+          if(estimate>attorneyCount)attorneyCount=estimate;
+          if(!personalFact){
+            const fact=specificFactFromText(pageText,lead);
+            if(fact){personalFact=fact;personalFactSource=page.final_url||target;}
+          }
+          if(emailsFrom(page.html).length && !sources.includes(page.final_url||target)) sources.unshift(page.final_url||target);
+        }catch{}
+      }
+
       const combined=texts.join(" ");
-      if(emails.length&&lawFirmPracticeKeys(combined).length)break;
+      if(emails.length&&lawFirmPracticeKeys(combined).length&&(personalFact||pageBudget<=0))break;
     }catch{}
   }
-  return {emails:[...new Set(emails)],text:texts.join(" ").slice(0,24000),source:sources[0]||""};
+  return {
+    emails:[...new Set(emails)],
+    text:texts.join(" ").slice(0,48000),
+    source:sources[0]||"",
+    attorneyCount,
+    personalFact,
+    personalFactSource
+  };
 }
 
 function websiteAudit({html="",text="",url="",practiceFocus="",elapsedMs=0}={}){
@@ -282,6 +349,7 @@ async function enrichLead(key,lead){
   emails.push(...fb.emails);
   combined+=" "+fb.text;
   source=fb.source||String(lead.google_maps_url||"Google Maps");
+  attorneyCount=Math.max(attorneyCount,Number(fb.attorneyCount||0));
   emails=[...new Set(emails.map(x=>String(x).toLowerCase().trim()).filter(isUsableLawEmail))].slice(0,5);
 
   const observedText=combined+" "+[lead.category,lead.name,lead.description,lead.descriptions].join(" ");
@@ -292,7 +360,10 @@ async function enrichLead(key,lead){
   const practices=[...new Set([...observedPractices,...(targetPractice?[targetPractice.label]:[])])];
   const practiceKeys=[...new Set([...observedKeys,...(focus?[focus]:[])])];
   const targetLabel=targetPractice?.label||practices[0]||"law";
-  const p=personalization({lead,practices:observedPractices,attorneyCount,source:source||String(lead.google_maps_url||"Google Maps"),targetLabel});
+  let p=personalization({lead,practices:observedPractices,attorneyCount,source:source||String(lead.google_maps_url||"Google Maps"),targetLabel});
+  if(fb.personalFact){
+    p={fact:fb.personalFact,source:fb.personalFactSource||source||String(lead.google_maps_url||"Google Maps"),quality:"specific"};
+  }
   const sizeTier=firmSizeTier(attorneyCount);
   const preferredSize=attorneyCount>=2&&attorneyCount<=10;
   const painPoint="No website";
