@@ -873,8 +873,18 @@ async function processAcquisition(id) {
   heartbeat.unref?.();
 
   console.log("Acquisition start", id);
-  const raw=await redis.get(jobKey(id));
+  let raw=await redis.get(jobKey(id));
+  if (!raw && ALLOWED_PROFILE==="law-firm") {
+    const legacyRaw=await redis.get(`recover:acquisition:job:${id}`);
+    if(legacyRaw){
+      raw=legacyRaw;
+      await redis.set(jobKey(id),legacyRaw,{EX:JOB_TTL});
+      await redis.del(`recover:acquisition:job:${id}`);
+      console.log(JSON.stringify({event:"law_job_key_recovered",acquisition_id:id}));
+    }
+  }
   if (!raw) {
+    console.log(JSON.stringify({event:"acquisition_job_missing",acquisition_id:id,profile:ALLOWED_PROFILE||""}));
     clearInterval(heartbeat);
     await redis.del(leaseKey(id));
     currentJobId = null;
