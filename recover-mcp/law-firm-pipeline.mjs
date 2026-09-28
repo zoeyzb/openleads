@@ -15,7 +15,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
-const EMAIL_METHOD_VERSION="email-v7";
+const EMAIL_METHOD_VERSION="email-v8";
 const LOOP_MS=Math.max(1500,Number(process.env.LAW_FIRM_LOOP_MS||5000));
 const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_FETCH_TIMEOUT_MS||7000)));
 const JOB_TTL=Math.max(86400,Number(process.env.ACQUISITION_TTL_SECONDS||604800));
@@ -699,7 +699,7 @@ function personalization({lead,practices,attorneyCount,source,targetLabel=""}){
   return {fact:"",source:"",quality:"none"};
 }
 const STATE_BAR_DOMAINS={
-  TX:"texasbar.com",FL:"floridabar.org",CA:"calbar.ca.gov",NY:"nycourts.gov",
+  TX:"texasbar.com",FL:"floridabar.org/directories/find-mbr",CA:"apps.calbar.ca.gov/attorney",NY:"nycourts.gov",
   NJ:"njcourts.gov",PA:"pabar.org",IL:"iardc.org",OH:"supremecourt.ohio.gov",
   GA:"gabar.org",NC:"ncbar.gov",SC:"scbar.org",VA:"vsb.org",WA:"wsba.org",
   OR:"osbar.org",AZ:"azbar.org",CO:"coloradosupremecourt.com",MI:"michbar.org",
@@ -708,6 +708,34 @@ const STATE_BAR_DOMAINS={
 function stateBarDomain(lead={}){
   const state=String(lead.region||lead.state||lead.state_code||"").trim().toUpperCase();
   return STATE_BAR_DOMAINS[state]||"";
+}
+function stateBarQueries(lead={},people=[]){
+  const state=String(lead.region||lead.state||lead.state_code||"").trim().toUpperCase();
+  const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
+  const person=people[0]||"";
+  const alternate=people[1]||"";
+  const out=[];
+  if(state==="FL"){
+    if(person)out.push(`site:floridabar.org/directories/find-mbr/profile "${person}"`);
+    if(alternate)out.push(`site:floridabar.org/directories/find-mbr/profile "${alternate}"`);
+    if(name)out.push(`site:floridabar.org/directories/find-mbr "${name}"`);
+  }else if(state==="CA"){
+    if(person)out.push(`site:apps.calbar.ca.gov/attorney "${person}"`);
+    if(alternate)out.push(`site:apps.calbar.ca.gov/attorney "${alternate}"`);
+    if(name)out.push(`site:apps.calbar.ca.gov/attorney "${name}"`);
+  }else if(state==="TX"){
+    if(person)out.push(`site:texasbar.com "Find A Lawyer" "${person}"`);
+    if(name)out.push(`site:texasbar.com "Find A Lawyer" "${name}"`);
+    if(person)out.push(`"${person}" Texas attorney email filetype:pdf`);
+  }else if(state==="NY"){
+    if(person)out.push(`site:nycourts.gov "${person}" attorney`);
+    if(name)out.push(`site:nycourts.gov "${name}" attorney`);
+  }else{
+    const domain=stateBarDomain(lead);
+    if(domain&&person)out.push(`site:${domain} "${person}" attorney`);
+    if(domain&&name)out.push(`site:${domain} "${name}"`);
+  }
+  return [...new Set(out)].slice(0,4);
 }
 
 async function enrichLead(key,lead){
@@ -745,6 +773,7 @@ async function enrichLead(key,lead){
     const alternate=people[1]||"";
     const barDomain=stateBarDomain(lead);
     const bingQueries=[
+      ...stateBarQueries(lead,people),
       ...(phone?[`"${phone}"`,`"${phone}" "${name}" email`]:[]),
       `"${name}" ${city} ${region} email`.trim(),
       `"${name}" filetype:pdf attorney email`.trim(),
