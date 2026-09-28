@@ -42,17 +42,20 @@ export function isUsableLawEmail(value=""){
   const [local,domain]=email.split("@");
   if(!local||!domain)return false;
   if([...BLOCKED_LAW_EMAIL_DOMAINS].some(d=>domain===d||domain.endsWith("."+d)))return false;
-  if(/^(?:error-lite(?:\+.*)?|jane\.?doe|janedoe|john\.?doe|johndoe|jdoe|your|test|example|firstname\.?lastname|first\.?last|flast|noreply|no-reply|donotreply)$/i.test(local))return false;
-  if(/(?:com|net|org)please$/i.test(domain))return false;
+  if(/^(?:error-lite(?:\+.*)?|jane\.?doe|janedoe|john\.?doe|johndoe|jdoe|your|test|example|firstname\.?lastname|first\.?last|flast|noreply|no-reply|donotreply|no-email|noemail)$/i.test(local))return false;
+  if(/\.(?:png|jpe?g|gif|webp|svg|local)$/i.test(domain))return false;
+  if(/(?:com|net|org)(?:please|www|first|last|the|email|contact)/i.test(domain))return false;
+  if(/(?:yoursite|yourdomain|placeholder|invalid)\./i.test(domain))return false;
   return true;
 }
 
 export function qualifiesNoWebsiteLawLead(lead={}){
   const website=String(lead.website||"").trim();
   const contacts=Array.isArray(lead.emails)?lead.emails:[lead.email].filter(Boolean);
-  // Practice is segmentation, not a hard qualification gate.
-  // The caller is responsible for confirming this is actually a law firm.
-  return !/^https?:\/\//i.test(website) && contacts.some(isUsableLawEmail);
+  const practiceKeys=Array.isArray(lead.practice_keys)?lead.practice_keys.filter(Boolean):[];
+  // Discovery may keep researching unclassified firms, but the qualified outreach
+  // sheet requires a classified target practice in addition to email + no website.
+  return !/^https?:\/\//i.test(website) && contacts.some(isUsableLawEmail) && practiceKeys.length>0;
 }
 
 export function shouldPauseLawDiscovery({pendingEnrichment=0,limit=1000}={}){
