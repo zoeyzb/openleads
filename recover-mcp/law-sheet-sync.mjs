@@ -115,6 +115,52 @@ async function collectRows(redis){
   out.sort((a,b)=>b.priority-a.priority||String(a.row[0]).localeCompare(String(b.row[0]))||String(a.row[1]).localeCompare(String(b.row[1])));
   return out;
 }
+async function collectWebsiteRefreshRows(redis){
+  const out=[];
+  const readyKeys=await redis.sMembers("recover:law-firm:website-refresh-ready:v1");
+  for(let offset=0;offset<readyKeys.length;offset+=250){
+    const keys=readyKeys.slice(offset,offset+250);
+    const values=await redis.hmGet("recover:law-firm:website-refresh:v1",keys);
+    for(let i=0;i<keys.length;i++){
+      if(!values[i])continue;
+      let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
+      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+        .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
+        .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
+      if(!emails.length)continue;
+      const audit=lead.website_audit||{};
+      const pains=Array.isArray(audit.pain_points)?audit.pain_points:[];
+      if(pains.length<2)continue;
+      const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
+      const practiceKeys=[...new Set([
+        ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
+        ...lawFirmPracticeKeys(evidence),
+        ...(clean(lead.practice_focus)?[clean(lead.practice_focus)]:[])
+      ])].filter(k=>LAW_PRACTICES.some(p=>p.key===k));
+      const baseType=typeLabel(practiceKeys,evidence);
+      const type=`Website Refresh · ${baseType}`;
+      const name=clean(lead.name||lead.title);
+      const {city,state}=parseLocation(lead);
+      const rating=Number(lead.review_rating||lead.rating||0);
+      const reviews=Number(lead.review_count||lead.reviews||0);
+      const personal=pains.slice(0,3).map(x=>clean(x.label)).filter(Boolean).join(" · ");
+      const source=clean(lead.law_email_source||lead.website||audit.audited_url);
+      const contextType=baseType==="Needs Classification"?"law":baseType;
+      const context=city?`${contextType} firms in ${city}`:`${contextType} firms`;
+      const primary=clean(audit.primary_pain_point||pains[0]?.label||"website conversion issue");
+      const opener=`I found ${name} while looking at ${context}. I noticed ${primary.charAt(0).toLowerCase()+primary.slice(1)} on the firm's site, so I wanted to reach out.`;
+      out.push({
+        priority:Number(lead.lead_priority_score||0)||0,
+        email:emails[0]||"",
+        row:[type,name,emails[0]||"",clean(lead.phone),city,state,personal,source,opener,
+          clean(lead.attorney_count_estimate),clean(lead.firm_size_tier),rating||"",reviews||"",clean(lead.google_maps_url||lead.maps_url),
+          Number(lead.lead_priority_score||0)||"","New"]
+      });
+    }
+  }
+  out.sort((a,b)=>b.priority-a.priority||String(a.row[1]).localeCompare(String(b.row[1])));
+  return out;
+}
 
 export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadsheetId="",enabled=false,intervalMs=120000}={}){
   if(!enabled||!spreadsheetId)return;
@@ -150,6 +196,50 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       return;
     }
     sheetId=target.properties.sheetId;
+  }
+  async function ensureAdditionalSheet(title){
+    const meta=await request("?fields=sheets.properties");
+    const target=(meta.sheets||[]).find(s=>s?.properties?.title===title);
+    if(target)return target.properties.sheetId;
+    const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title,rowCount:100,columnCount:16}}}]}});
+    return made.replies?.[0]?.addSheet?.properties?.sheetId;
+  }
+  async function previousStatusesFor(title){
+    try{
+      const range=encodeURIComponent(`'${title}'!A1:R5000`);
+      const json=await request(`/values/${range}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`);
+      const rows=json.values||[];
+      const headers=(rows[0]||[]).map(clean);
+      const emailIndex=headers.indexOf("Email"),statusIndex=headers.indexOf("Status");
+      const map=new Map();
+      if(emailIndex<0||statusIndex<0)return map;
+      for(const row of rows.slice(1)){
+        const email=clean(row[emailIndex]).toLowerCase(),status=clean(row[statusIndex]);
+        if(email&&status)map.set(email,status);
+      }
+      return map;
+    }catch{return new Map();}
+  }
+  async function writeRowsToTab(title,targetSheetId,leads){
+    const headers=["Type","Firm","Email","Phone","City","State","Personal Angle","Source","Opener","Attorneys","Firm Size","Rating","Reviews","Maps","Priority","Status"];
+    const values=[headers,...leads.map(x=>x.row)];
+    const endRow=Math.max(2,values.length),rowCount=Math.max(10,endRow+1);
+    await request(`/values/${encodeURIComponent(`'${title}'!A1:R${Math.max(5000,endRow)}`)}:clear`,{method:"POST",body:{}});
+    await request(`/values/${encodeURIComponent(`'${title}'!A1:P${endRow}`)}?valueInputOption=RAW`,{method:"PUT",body:{range:`'${title}'!A1:P${endRow}`,majorDimension:"ROWS",values}});
+    const widths=[125,175,185,112,100,55,190,145,235,65,90,58,58,145,58,85];
+    const requests=[
+      {updateSheetProperties:{properties:{sheetId:targetSheetId,gridProperties:{rowCount,columnCount:16,frozenRowCount:1}},fields:"gridProperties(rowCount,columnCount,frozenRowCount)"}},
+      {updateCells:{range:{sheetId:targetSheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:16},rows:[{values:Array.from({length:16},()=>({userEnteredFormat:{backgroundColor:{red:0.10,green:0.13,blue:0.18},textFormat:{foregroundColor:{red:1,green:1,blue:1},bold:true,fontSize:10},verticalAlignment:"MIDDLE",wrapStrategy:"WRAP"}}))}],fields:"userEnteredFormat"}},
+      {updateDimensionProperties:{range:{sheetId:targetSheetId,dimension:"ROWS",startIndex:0,endIndex:1},properties:{pixelSize:30},fields:"pixelSize"}},
+      {setDataValidation:{range:{sheetId:targetSheetId,startRowIndex:1,endRowIndex:rowCount,startColumnIndex:15,endColumnIndex:16},rule:{condition:{type:"ONE_OF_LIST",values:["New","Review","Ready","Contacted","Skip"].map(userEnteredValue=>({userEnteredValue}))},strict:false,showCustomUi:true}}},
+      {setBasicFilter:{filter:{range:{sheetId:targetSheetId,startRowIndex:0,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:16}}}}
+    ];
+    widths.forEach((pixelSize,i)=>requests.push({updateDimensionProperties:{range:{sheetId:targetSheetId,dimension:"COLUMNS",startIndex:i,endIndex:i+1},properties:{pixelSize},fields:"pixelSize"}}));
+    requests.push(
+      {updateDimensionProperties:{range:{sheetId:targetSheetId,dimension:"ROWS",startIndex:1,endIndex:rowCount},properties:{pixelSize:28},fields:"pixelSize"}},
+      {repeatCell:{range:{sheetId:targetSheetId,startRowIndex:1,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:16},cell:{userEnteredFormat:{verticalAlignment:"MIDDLE",wrapStrategy:"CLIP",textFormat:{fontSize:9}}},fields:"userEnteredFormat(verticalAlignment,wrapStrategy,textFormat.fontSize)"}}
+    );
+    await request(":batchUpdate",{method:"POST",body:{requests}});
   }
   async function previousStatuses(){
     try{
@@ -197,6 +287,14 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       );
       await request(":batchUpdate",{method:"POST",body:{requests}});
       console.log(JSON.stringify({event:"law_sheet_sync",rows:leads.length,spreadsheetId,tabName}));
+
+      const refreshTabName="Website Refresh Leads";
+      const refreshSheetId=await ensureAdditionalSheet(refreshTabName);
+      const refreshStatuses=await previousStatusesFor(refreshTabName);
+      const refreshLeads=await collectWebsiteRefreshRows(redis);
+      for(const item of refreshLeads){if(refreshStatuses.has(item.email))item.row[15]=refreshStatuses.get(item.email);}
+      await writeRowsToTab(refreshTabName,refreshSheetId,refreshLeads);
+      console.log(JSON.stringify({event:"law_website_refresh_sheet_sync",rows:refreshLeads.length,spreadsheetId,tabName:refreshTabName}));
     }catch(error){console.error("law_sheet_sync_error",error?.message||error);}
     finally{running=false;}
   }
