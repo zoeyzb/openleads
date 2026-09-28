@@ -155,7 +155,7 @@ async function zeroCostEmailFallback(lead={}){
       hints:{source_urls:[String(lead.google_maps_url||"")].filter(Boolean)}
     });
     const published=(result?.evidence?.found_public_emails||[])
-      .map(x=>String(x||"").trim().toLowerCase()).filter(isUsableLawEmail);
+      .map(x=>String(x||"").trim().toLowerCase()).filter(x=>isUsableLawEmail(x)&&emailLooksOwnedByLead(x,lead));
     const best=String(result?.best_email||"").trim().toLowerCase();
     const accepted=best&&published.includes(best)&&Number(result?.confidence||0)>=0.9?[best]:[];
     return {emails:accepted,source:String(result?.evidence?.sources_checked?.[0]||"")};
@@ -177,12 +177,32 @@ function pageMatchesLead(text="",lead={}){
   const hits=tokens.filter(x=>plain.includes(x)).length;
   return hits>=Math.min(2,tokens.length);
 }
+const FREE_MAIL_DOMAINS=new Set([
+  "gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","me.com","msn.com",
+  "proton.me","protonmail.com","live.com","comcast.net","att.net","bellsouth.net","verizon.net",
+  "sbcglobal.net","earthlink.net","cs.com"
+]);
+const THIRD_PARTY_EMAIL_DOMAINS=[
+  "reachattorneys.com","birdeye.com","avvo.com","findlaw.com","lawyers.com","justia.com",
+  "martindale.com","superlawyers.com","yellowpages.com","yelp.com","facebook.com","linkedin.com"
+];
+function emailLooksOwnedByLead(email="",lead={}){
+  const domain=String(email).split("@")[1]?.toLowerCase()||"";
+  if(!domain)return false;
+  if(FREE_MAIL_DOMAINS.has(domain))return true;
+  if(THIRD_PARTY_EMAIL_DOMAINS.some(d=>domain===d||domain.endsWith("."+d)))return false;
+  const stem=domain.split(".")[0].replace(/[^a-z0-9]/g,"");
+  const tokens=leadNameTokens(lead).map(x=>x.replace(/[^a-z0-9]/g,"")).filter(x=>x.length>=4);
+  if(tokens.some(t=>stem.includes(t)||t.includes(stem)))return true;
+  const local=String(email).split("@")[0]?.toLowerCase()||"";
+  return tokens.some(t=>local.includes(t));
+}
 function contextualEmails(text="",lead={}){
   const raw=String(text||""),out=[];
   const re=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
   for(const m of raw.matchAll(re)){
     const email=String(m[0]||"").toLowerCase().replace(/[),.;:]+$/,"");
-    if(!isUsableLawEmail(email))continue;
+    if(!isUsableLawEmail(email)||!emailLooksOwnedByLead(email,lead))continue;
     const start=Math.max(0,(m.index||0)-600),end=Math.min(raw.length,(m.index||0)+email.length+600);
     if(pageMatchesLead(raw.slice(start,end),lead))out.push(email);
   }
@@ -297,7 +317,7 @@ async function duckFallback(lead){
           const page=await fetchText(target,6000);
           const pageText=stripHtml(page.html).slice(0,22000);
           if(!pageMatchesLead(pageText,lead))continue;
-          const pageEmails=emailsFrom(page.html);
+          const pageEmails=emailsFrom(page.html).filter(email=>emailLooksOwnedByLead(email,lead));
           emails.push(...pageEmails);
           texts.push(pageText);
           const estimate=attorneyEstimate(page.html,pageText);
