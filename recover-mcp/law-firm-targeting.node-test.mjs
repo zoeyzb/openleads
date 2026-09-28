@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead} from "./law-firm-targeting.mjs";
+import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,shouldPauseLawDiscovery} from "./law-firm-targeting.mjs";
 
 assert.equal(isLawFirmLead({category:"Personal injury attorney",name:"Smith & Doe Law"}),true);
 assert.equal(isLawFirmLead({category:"Criminal defense attorney",name:"Jones Defense Law"}),true);
@@ -44,3 +44,6 @@ assert.equal(qualifiesNoWebsiteLawLead({
   emails:["hello@example.com"],
   practice_keys:[]
 }),false);
+
+assert.equal(shouldPauseLawDiscovery({pendingEnrichment:1500,limit:1000}),true);
+assert.equal(shouldPauseLawDiscovery({pendingEnrichment:999,limit:1000}),false);
