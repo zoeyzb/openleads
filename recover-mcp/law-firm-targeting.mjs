@@ -43,7 +43,8 @@ export function scoreLawFirmLead(lead={},options={}){
   const practices=lawFirmPracticeAreas(text);
   if(practices.length) add(25,"target practice");
   if(options.practice_focus&&matchesLawPractice(text,options.practice_focus)) add(10,"requested practice match");
-  if(lead.website) add(15,"owned website available for audit");
+  if(!lead.website) add(25,"no owned website — website-build opportunity");
+  else add(-10,"already has owned website");
   if(lead.phone) add(5,"phone available");
   const emails=Array.isArray(lead.emails)?lead.emails:[lead.email].filter(Boolean);
   if(emails.length) add(15,"email already available");
