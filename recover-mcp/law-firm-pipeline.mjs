@@ -11,7 +11,8 @@ const TARGET_TOTAL=Math.max(100,Number(process.env.LAW_FIRM_TARGET_TOTAL||25000)
 const MAX_CITIES=Math.max(50,Number(process.env.LAW_FIRM_MAX_CITIES||1200));
 const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_HIGH_WATER||24)));
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
-const ENRICH_BATCH=Math.max(1,Math.min(8,Number(process.env.LAW_FIRM_ENRICH_BATCH||3)));
+const ENRICH_BATCH=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_BATCH||6)));
+const ENRICH_CONCURRENCY=Math.max(1,Math.min(4,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||3)));
 const LOOP_MS=Math.max(5000,Number(process.env.LAW_FIRM_LOOP_MS||15000));
 const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_FETCH_TIMEOUT_MS||7000)));
 const JOB_TTL=Math.max(86400,Number(process.env.ACQUISITION_TTL_SECONDS||604800));
@@ -21,6 +22,7 @@ const SEEDED_SET="recover:law-firm:seeded:v2";
 const ENRICHED_SET="recover:law-firm:enriched:v2";
 const READY_SET="recover:law-firm:qualified:v2";
 const REJECTED_SET="recover:law-firm:rejected:v2";
+const PENDING_SET="recover:law-firm:enrich-pending:v2";
 const STATS="recover:law-firm:stats:v2";
 const PROFILE={industry:"LAW_FIRM",require_phone:false,require_email:false,require_contact:false,require_no_website:false,include_no_website:false,min_score:50};
 const PRACTICE_FOCI=TARGET_LAW_PRACTICES.map(x=>({key:x.key,label:x.label}));
@@ -227,7 +229,8 @@ async function enrichLead(key,lead){
 
   const website=String(lead.website||"").trim();
   if(!/^https?:\/\//i.test(website)){
-    await redis.sAdd(ENRICHED_SET,key,REJECTED_SET,key);
+    await redis.sAdd(ENRICHED_SET,key);
+    await redis.sAdd(REJECTED_SET,key);
     await redis.hIncrBy(STATS,"rejected_no_website",1);
     return true;
   }
@@ -292,15 +295,25 @@ async function enrichLead(key,lead){
   return true;
 }
 async function enrichBatch(){
-  let done=0;
-  for await(const page of redis.hScanIterator(LEAD_HASH,{COUNT:200})){
-    for(const entry of (Array.isArray(page)?page:[page])){
-      if(done>=ENRICH_BATCH)return done;
-      if(!entry?.field||entry.value===undefined)continue;
-      let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
-      if(await enrichLead(entry.field,lead))done++;
+  const popped=await redis.sPop(PENDING_SET,ENRICH_BATCH);
+  const keys=(Array.isArray(popped)?popped:[popped]).filter(Boolean);
+  if(!keys.length)return 0;
+  let index=0,done=0;
+  const run=async()=>{
+    while(index<keys.length){
+      const key=keys[index++];
+      try{
+        const raw=await redis.hGet(LEAD_HASH,key);
+        if(!raw)continue;
+        let lead;try{lead=JSON.parse(raw)||{};}catch{continue;}
+        if(await enrichLead(key,lead))done++;
+      }catch(error){
+        await redis.sAdd(PENDING_SET,key);
+        console.warn(JSON.stringify({event:"law_firm_enrich_retry",key,error:String(error?.message||error)}));
+      }
     }
-  }
+  };
+  await Promise.all(Array.from({length:Math.min(ENRICH_CONCURRENCY,keys.length)},()=>run()));
   return done;
 }
 async function seed(cities){
@@ -335,12 +348,12 @@ async function seed(cities){
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_load"}));
 const cities=await loadCities();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_loaded",cities:cities.length}));
-console.log(JSON.stringify({event:"law_firm_pipeline_started",cities:cities.length,practices:PRACTICE_FOCI.map(x=>x.key),target:TARGET_TOTAL,queueHighWater:QUEUE_HIGH_WATER,seedBatch:SEED_BATCH,enrichBatch:ENRICH_BATCH}));
+console.log(JSON.stringify({event:"law_firm_pipeline_started",cities:cities.length,practices:PRACTICE_FOCI.map(x=>x.key),target:TARGET_TOTAL,queueHighWater:QUEUE_HIGH_WATER,seedBatch:SEED_BATCH,enrichBatch:ENRICH_BATCH,enrichConcurrency:ENRICH_CONCURRENCY}));
 while(true){
   try{
     const [seeded,enriched]=await Promise.all([seed(cities),enrichBatch()]);
-    const [queue,qualified,enrichedTotal,rejected]=await Promise.all([redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET)]);
-    console.log(JSON.stringify({event:"law_firm_pipeline_cycle",seeded,enriched,queue,qualified,enrichedTotal,rejected}));
+    const [queue,qualified,enrichedTotal,rejected,pending]=await Promise.all([redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),redis.sCard(PENDING_SET)]);
+    console.log(JSON.stringify({event:"law_firm_pipeline_cycle",seeded,enriched,queue,qualified,enrichedTotal,rejected,pending}));
   }catch(error){console.error("law_firm_pipeline_error",error?.stack||error?.message||error);}
   await sleep(LOOP_MS);
 }
