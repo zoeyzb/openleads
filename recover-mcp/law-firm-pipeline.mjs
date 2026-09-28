@@ -1,6 +1,7 @@
 // deployment trigger: qualified law sheet cleanup 2026-09-28
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
+import { resolveMx } from "node:dns/promises";
 import { orchestrate as enrichProfessionalEmail } from "email-enrich";
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isLawFirmLead } from "./law-firm-targeting.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
@@ -16,6 +17,24 @@ const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||
 const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
 const EMAIL_METHOD_VERSION="email-v9";
+const MX_CACHE=new Map();
+async function hasMailExchange(email=""){
+  const domain=String(email).split("@")[1]?.toLowerCase()||"";
+  if(!domain)return false;
+  if(MX_CACHE.has(domain))return MX_CACHE.get(domain);
+  let ok=false;
+  try{
+    const mx=await resolveMx(domain);
+    ok=Array.isArray(mx)&&mx.some(x=>String(x.exchange||"").trim());
+  }catch{ok=false;}
+  MX_CACHE.set(domain,ok);
+  return ok;
+}
+async function filterContactableEmails(emails=[]){
+  const unique=[...new Set(emails.map(x=>String(x||"").trim().toLowerCase()).filter(Boolean))];
+  const checks=await Promise.all(unique.map(async email=>({email,ok:isUsableLawEmail(email)&&await hasMailExchange(email)})));
+  return checks.filter(x=>x.ok).map(x=>x.email);
+}
 const LOOP_MS=Math.max(1500,Number(process.env.LAW_FIRM_LOOP_MS||5000));
 const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_FETCH_TIMEOUT_MS||7000)));
 const JOB_TTL=Math.max(86400,Number(process.env.ACQUISITION_TTL_SECONDS||604800));
@@ -859,9 +878,11 @@ async function enrichLead(key,lead){
 
   emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
+  emails=await filterContactableEmails(emails);
   if(!emails.length){
     emailMethod="none";
     await redis.hIncrBy(STATS,"email_no_hit",1);
+    await redis.hIncrBy(STATS,"email_unqualified_or_unreachable",1);
   }
   if(!source)source=String(lead.google_maps_url||"Google Maps");
   const metadataText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
