@@ -131,6 +131,9 @@ function likelyAttorneyName(lead={}){
   if(!raw)return "";
   const patterns=[
     /law offices? of\s+([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4})/i,
+    /^attorney\s+([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4})/i,
+    /^([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4})\s+law offices?\b/i,
+    /^([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4})\s+attorney(?:\s+at\s+law)?\b/i,
     /(?:attorney|lawyer)(?:\s+at\s+law)?\s+([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4})/i,
     /^([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,3}),?\s+(?:esq\.?|attorney(?:\s+at\s+law)?)$/i,
     /^([A-Z][A-Za-z.'’-]+\s+[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+)?)$/i
@@ -363,7 +366,16 @@ function specificFactFromText(text="",lead={}){
   return "";
 }
 async function duckFallback(lead){
-  const queries=lawResearchQueries(lead);
+  const baseQueries=lawResearchQueries(lead);
+  const person=likelyAttorneyName(lead);
+  const region=String(lead.region||lead.state||lead.state_code||"").trim();
+  const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
+  const attorneyQueries=person?[
+    `"${person}" ${region} attorney email`.trim(),
+    `"${person}" ${region} state bar email`.trim(),
+    ...(phone?[`"${person}" "${phone}"`]:[])
+  ]:[];
+  const queries=[...new Set([...attorneyQueries,...baseQueries])];
   if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
   const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
