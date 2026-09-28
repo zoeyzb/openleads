@@ -5,6 +5,13 @@ const TOKEN_URL="https://oauth2.googleapis.com/token";
 const SHEETS_API="https://sheets.googleapis.com/v4/spreadsheets";
 const SCOPE="https://www.googleapis.com/auth/spreadsheets";
 const clean=v=>String(v??"").trim();
+const BLOCKED_CONTACT_DOMAINS=["reachattorneys.com","birdeye.com","avvo.com","findlaw.com","lawyers.com","justia.com","martindale.com","superlawyers.com","yellowpages.com","yelp.com"];
+function exportableLawEmail(value=""){
+  const email=clean(value).toLowerCase();
+  if(!isUsableLawEmail(email))return false;
+  const domain=email.split("@")[1]||"";
+  return !BLOCKED_CONTACT_DOMAINS.some(d=>domain===d||domain.endsWith("."+d));
+}
 const b64url=v=>Buffer.from(v).toString("base64url");
 
 function serviceAccount(raw=""){
@@ -53,7 +60,7 @@ async function collectRows(redis){
       const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
       if(!isLaw)continue;
       const website=clean(lead.website);
-      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email].map(x=>clean(x).toLowerCase()).filter(isUsableLawEmail);
+      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email].map(x=>clean(x).toLowerCase()).filter(exportableLawEmail);
       const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const practiceKeys=[...new Set([
         ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
