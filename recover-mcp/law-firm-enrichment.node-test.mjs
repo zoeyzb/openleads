@@ -23,7 +23,8 @@ function attorneyEstimate(html="",text=""){
   return Math.min(100,estimate);
 }
 assert.equal(attorneyEstimate('<a href="/attorney/jane-doe">Jane Doe</a><a href="/attorney/john-smith">John Smith</a>'),2);
-assert.equal(attorneyEstimate('',"Our team of 4 attorneys focuses on families."),4);
+assert.equal(attorneyEstimate('',"Our team of 10 attorneys handles injury cases."),10);
 assert.equal(attorneyEstimate('<h2>Jane Doe</h2><h2>John Smith</h2>',"Meet the team of attorneys"),2);
-assert.deepEqual(lawFirmPracticeAreas("Family law and estate planning"),["family law","estate planning"]);
+assert.deepEqual(lawFirmPracticeAreas("Family law divorce and child custody"),["family/divorce"]);
+assert.deepEqual(lawFirmPracticeAreas("DUI criminal defense"),["criminal defense"]);
 console.log("law firm enrichment tests passed");
