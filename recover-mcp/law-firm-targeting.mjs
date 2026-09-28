@@ -70,10 +70,12 @@ export function lawResearchQueries(lead={}){
   const where=[city,region].filter(Boolean).join(" ");
   const queries=[
     `"${name}" ${where} email`.trim(),
-    `"${name}" ${where} attorney practice`.trim()
+    `"${name}" ${where} attorney email`.trim(),
+    `"${name}" ${where} lawyer contact`.trim(),
+    `"${name}" ${region} bar attorney`.trim()
   ];
-  if(phone)queries.push(`"${name}" "${phone}" email`);
-  return [...new Set(queries)].slice(0,3);
+  if(phone)queries.unshift(`"${name}" "${phone}"`);
+  return [...new Set(queries)].slice(0,5);
 }
 
 export function isLawFirmLead(lead={}){
