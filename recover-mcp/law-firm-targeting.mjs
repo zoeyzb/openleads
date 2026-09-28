@@ -3,28 +3,40 @@ function normalize(value=""){return String(value||"").toLowerCase().replace(/[^a
 const LAW_SIGNAL=/\b(law firm|law office|law offices|attorney|attorneys|lawyer|lawyers|legal counsel)\b/;
 const NON_FIRM=/\b(bail bonds?|court reporter|process server|notary|paralegal service|legal document preparer|legal aid society|bar association|courthouse|district attorney|public defender|government office)\b/;
 
-export const TARGET_LAW_PRACTICES=[
-  {key:"personal_injury",label:"personal injury",re:/\b(personal injury|injury lawyer|injury attorney|accident lawyer|accident attorney|car accident|truck accident|wrongful death|slip and fall|premises liability)\b/},
-  {key:"family_divorce",label:"family/divorce",re:/\b(family law|family lawyer|family attorney|divorce|custody|child custody|child support|spousal support|alimony|dissolution of marriage)\b/},
-  {key:"criminal_defense",label:"criminal defense",re:/\b(criminal defense|criminal lawyer|criminal attorney|dui|dwi|drug crimes?|felony|misdemeanor|expungement|white collar crime|sex crimes?|traffic defense)\b/}
+export const LAW_PRACTICES=[
+  {key:"personal_injury",label:"personal injury",target:true,re:/\b(personal injury|injury lawyer|injury attorney|accident lawyer|accident attorney|car accident|truck accident|wrongful death|slip and fall|premises liability|medical malpractice)\b/},
+  {key:"family_divorce",label:"family/divorce",target:true,re:/\b(family law|family lawyer|family attorney|divorce|custody|child custody|child support|spousal support|alimony|dissolution of marriage)\b/},
+  {key:"criminal_defense",label:"criminal defense",target:true,re:/\b(criminal defense|criminal lawyer|criminal attorney|dui|dwi|drug crimes?|felony|misdemeanor|expungement|white collar crime|sex crimes?|traffic defense)\b/},
+  {key:"estate_probate",label:"estate/probate",re:/\b(estate planning|probate|wills? and trusts?|trusts? and estates?|elder law|guardianship)\b/},
+  {key:"bankruptcy",label:"bankruptcy",re:/\b(bankruptcy|chapter 7|chapter 11|chapter 13|debt relief)\b/},
+  {key:"immigration",label:"immigration",re:/\b(immigration|visa|green card|citizenship|deportation|asylum)\b/},
+  {key:"employment",label:"employment/labor",re:/\b(employment law|labor law|wrongful termination|workplace discrimination|wage and hour)\b/},
+  {key:"business",label:"business/corporate",re:/\b(business law|corporate law|corporate attorney|business attorney|mergers? and acquisitions?|commercial law)\b/},
+  {key:"real_estate",label:"real estate",re:/\b(real estate law|real estate attorney|property law|landlord tenant|land use|zoning)\b/},
+  {key:"workers_comp",label:"workers' compensation",re:/\b(workers'? compensation|workers'? comp|work injury)\b/},
+  {key:"disability",label:"disability",re:/\b(social security disability|ssdi|ssi disability|disability benefits)\b/},
+  {key:"tax",label:"tax",re:/\b(tax law|tax attorney|irs|tax controversy|tax litigation)\b/},
+  {key:"intellectual_property",label:"intellectual property",re:/\b(intellectual property|patent|trademark|copyright)\b/},
+  {key:"civil_litigation",label:"civil litigation",re:/\b(civil litigation|commercial litigation|general litigation|trial lawyer)\b/}
 ];
 
+export const TARGET_LAW_PRACTICES=LAW_PRACTICES.filter(x=>x.target);
 export const PREFERRED_LAW_PRACTICES=TARGET_LAW_PRACTICES.map(x=>x.label);
 
 export function lawFirmPracticeAreas(value=""){
   const text=normalize(value);
-  return TARGET_LAW_PRACTICES.filter(p=>p.re.test(text)).map(p=>p.label);
+  return LAW_PRACTICES.filter(p=>p.re.test(text)).map(p=>p.label);
 }
 
 export function lawFirmPracticeKeys(value=""){
   const text=normalize(value);
-  return TARGET_LAW_PRACTICES.filter(p=>p.re.test(text)).map(p=>p.key);
+  return LAW_PRACTICES.filter(p=>p.re.test(text)).map(p=>p.key);
 }
 
 export function matchesLawPractice(value="",focus=""){
   const normalized=normalize(focus).replace(/\s+/g,"_");
   if(!normalized) return lawFirmPracticeKeys(value).length>0;
-  const p=TARGET_LAW_PRACTICES.find(x=>x.key===normalized||normalize(x.label).replace(/\s+/g,"_")===normalized);
+  const p=LAW_PRACTICES.find(x=>x.key===normalized||normalize(x.label).replace(/\s+/g,"_")===normalized);
   return p ? p.re.test(normalize(value)) : false;
 }
 
