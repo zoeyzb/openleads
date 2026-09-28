@@ -15,7 +15,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_BATCH||6)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(8,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||4)));
-const EMAIL_METHOD_VERSION="email-v5";
+const EMAIL_METHOD_VERSION="email-v6";
 const LOOP_MS=Math.max(5000,Number(process.env.LAW_FIRM_LOOP_MS||15000));
 const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_FETCH_TIMEOUT_MS||7000)));
 const JOB_TTL=Math.max(86400,Number(process.env.ACQUISITION_TTL_SECONDS||604800));
@@ -255,6 +255,53 @@ function attorneyEstimate(html="",text=""){
   }
   return Math.min(100,estimate);
 }
+function bingResultLinks(html=""){
+  const out=[];
+  for(const m of String(html).matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)){
+    try{
+      const u=new URL(String(m[1]).replace(/&amp;/g,"&"));
+      if(/(^|\.)bing\.com$/i.test(u.hostname))continue;
+      if(!/^https?:$/.test(u.protocol))continue;
+      out.push(u.href);
+    }catch{}
+  }
+  return [...new Set(out)].slice(0,8);
+}
+async function bingFallback(lead,query,pageBudget=3){
+  const emails=[],texts=[],sources=[];
+  let attorneyCount=0,personalFact="",personalFactSource="";
+  try{
+    const url="https://www.bing.com/search?q="+encodeURIComponent(query);
+    const result=await fetchText(url,5000);
+    const searchText=stripHtml(result.html).slice(0,10000);
+    emails.push(...contextualEmails(result.html,lead));
+    texts.push(searchText);sources.push(url);
+    if(emails.length)return {emails,text:searchText,source:url,attorneyCount,personalFact,personalFactSource};
+
+    const links=bingResultLinks(result.html).sort((a,b)=>{
+      const rank=u=>/allbiz|chamberofcommerce|statebar|barassociation|bar\.org|justia|lawyers\.com|findlaw|avvo|trellis/i.test(u)?0:1;
+      return rank(a)-rank(b);
+    }).slice(0,pageBudget);
+    const pages=await Promise.allSettled(links.map(target=>fetchText(target,4500)));
+    for(let i=0;i<pages.length;i++){
+      const item=pages[i];
+      if(item.status!=="fulfilled")continue;
+      const page=item.value,target=links[i];
+      const pageText=stripHtml(page.html).slice(0,22000);
+      if(!pageMatchesLead(pageText,lead))continue;
+      const pageEmails=contextualEmails(page.html,lead);
+      emails.push(...pageEmails);texts.push(pageText);
+      const estimate=attorneyEstimate(page.html,pageText);
+      if(estimate>attorneyCount)attorneyCount=estimate;
+      if(!personalFact){
+        const fact=specificFactFromText(pageText,lead);
+        if(fact){personalFact=fact;personalFactSource=page.final_url||target;}
+      }
+      if(pageEmails.length)sources.unshift(page.final_url||target);
+    }
+  }catch{}
+  return {emails:[...new Set(emails)],text:texts.join(" ").slice(0,24000),source:sources[0]||"",attorneyCount,personalFact,personalFactSource};
+}
 function duckResultLinks(html=""){
   const out=[];
   for(const m of String(html).matchAll(/href=["']([^"']+)["']/gi)){
@@ -338,10 +385,11 @@ async function duckFallback(lead){
         const rank=u=>/avvo|lawyers\.com|findlaw|justia|martindale|superlawyers|statebar|barassociation|bar\.org/i.test(u)?0:1;
         return rank(a)-rank(b);
       });
+      let perQueryPages=0;
       for(const target of resultLinks){
-        if(pageBudget<=0)break;
+        if(pageBudget<=0||perQueryPages>=2)break;
         if(visited.has(target))continue;
-        visited.add(target);pageBudget--;
+        visited.add(target);pageBudget--;perQueryPages++;
         try{
           const page=await fetchText(target,6000);
           const pageText=stripHtml(page.html).slice(0,22000);
@@ -366,8 +414,7 @@ async function duckFallback(lead){
       }
       const snippetEstimate=attorneyEstimate("",combined);
       if(snippetEstimate>attorneyCount)attorneyCount=snippetEstimate;
-      if(emails.length&&lawFirmPracticeKeys(combined).length&&personalFact)break;
-      if(existingEmails.length&&personalFact)break;
+      if(emails.some(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x)))break;
     }catch{}
   }
   return {
@@ -486,6 +533,19 @@ async function enrichLead(key,lead){
   combined+=" "+fb.text;
   source=fb.source||String(lead.google_maps_url||"Google Maps");
   attorneyCount=Math.max(attorneyCount,Number(fb.attorneyCount||0));
+  if(!emails.some(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))){
+    const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
+    const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
+    const city=String(lead.city||"").trim(),region=String(lead.region||lead.state||"").trim();
+    const q=phone?`"${name}" "${phone}" email`:`"${name}" ${city} ${region} attorney email`;
+    const bf=await bingFallback(lead,q,3);
+    emails.push(...bf.emails);
+    combined+=" "+bf.text;
+    if(bf.source)source=bf.source;
+    attorneyCount=Math.max(attorneyCount,Number(bf.attorneyCount||0));
+    if(!fb.personalFact&&bf.personalFact){fb.personalFact=bf.personalFact;fb.personalFactSource=bf.personalFactSource;}
+    if(bf.emails.length)await redis.hIncrBy(STATS,"email_bing_hit",1);
+  }
   emails=[...new Set(emails.map(x=>String(x).toLowerCase().trim())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x)))].slice(0,5);
   if(!emails.length){
@@ -593,7 +653,7 @@ async function bootstrapExistingQualified(){
         }
         if(!website&&!emails.length&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
           await redis.sRem(ENRICHED_SET,entry.field);
-          queuedForEnrichment+=Number(await redis.sAdd(PENDING_SET,entry.field)||0);
+          queuedForEnrichment+=Number(await redis.sAdd(PRIORITY_PENDING_SET,entry.field)||0);
         }else if(!website&&emails.length&&!practiceKeys.length){
           await redis.sRem(ENRICHED_SET,entry.field);
           queuedForEnrichment+=Number(await redis.sAdd(PENDING_SET,entry.field)||0);
@@ -603,16 +663,12 @@ async function bootstrapExistingQualified(){
 
       if(wasQualified){
         alreadyQualified++;
-        const quality=String(lead.personalization_quality||"").trim().toLowerCase();
-        const personal=String(lead.personalization_fact||"").trim();
-        const needsRefresh=String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION
-          || quality!=="specific"
-          || !practiceKeys.length
-          || /^I noticed .*Google reviews/i.test(personal)
-          || /^Google:/i.test(personal);
+        // Email-known leads are already usable. Only missing practice classification
+        // gets a low-priority refresh; personalization never blocks qualification.
+        const needsRefresh=!practiceKeys.length;
         if(needsRefresh){
           await redis.sRem(ENRICHED_SET,entry.field);
-          queuedForEnrichment+=Number(await redis.sAdd(PRIORITY_PENDING_SET,entry.field)||0);
+          queuedForEnrichment+=Number(await redis.sAdd(PENDING_SET,entry.field)||0);
         }
         continue;
       }
