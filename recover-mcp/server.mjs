@@ -3054,6 +3054,59 @@ const httpServer = createHttpServer((req, res) => {
 
 
 
+  if (requestUrl.pathname === "/exports/law-leads-summary.json" && req.method === "GET") {
+    void (async () => {
+      const token=String(requestUrl.searchParams.get("token")||"");
+      if(!LAW_EXPORT_TOKEN || !secureEqual(token,LAW_EXPORT_TOKEN)){
+        res.writeHead(401,{"content-type":"application/json","cache-control":"no-store"});
+        res.end(JSON.stringify({error:"unauthorized"}));
+        return;
+      }
+      const redis=await getAcquisitionRedis();
+      let lawCandidates=0,noWebsite=0,noWebsiteEmail=0,knownTarget=0,exportable=0;
+      const byPractice={personal_injury:0,family_divorce:0,criminal_defense:0,unknown:0};
+      for await (const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
+        for(const entry of (Array.isArray(page)?page:[page])){
+          if(!entry?.value)continue;
+          let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
+          const isLaw=String(lead.search_profile||"")==="law-firm"||String(lead.industry||"").toUpperCase()==="LAW_FIRM";
+          if(!isLaw)continue;
+          lawCandidates++;
+          const website=String(lead.website||"").trim();
+          if(/^https?:\/\//i.test(website))continue;
+          noWebsite++;
+          const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+            .map(x=>String(x||"").trim().toLowerCase())
+            .filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+          if(!emails.length)continue;
+          noWebsiteEmail++;
+          const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
+          const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
+          const focus=String(lead.practice_focus||"").trim();
+          const keys=[...new Set([...storedKeys,...lawFirmPracticeKeys(evidence),...(focus?[focus]:[])])]
+            .filter(k=>["personal_injury","family_divorce","criminal_defense"].includes(k));
+          if(keys.length){
+            knownTarget++;
+            exportable++;
+            for(const k of keys)byPractice[k]=(byPractice[k]||0)+1;
+          }else byPractice.unknown++;
+        }
+      }
+      const [qualifiedV3,priorityPending,pendingV3,pendingV2]=await Promise.all([
+        redis.sCard("recover:law-firm:qualified:v3"),
+        redis.sCard("recover:law-firm:enrich-priority:v3"),
+        redis.sCard("recover:law-firm:enrich-pending:v3"),
+        redis.sCard("recover:law-firm:enrich-pending:v2")
+      ]);
+      res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({lawCandidates,noWebsite,noWebsiteEmail,knownTarget,exportable,byPractice,qualifiedV3,priorityPending,pendingV3,pendingV2}));
+    })().catch(error=>{
+      res.writeHead(500,{"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({error:error?.message||"summary_failed"}));
+    });
+    return;
+  }
+
   if (requestUrl.pathname === "/exports/law-leads.csv" && req.method === "GET") {
     void (async () => {
       const token=String(requestUrl.searchParams.get("token")||"");
