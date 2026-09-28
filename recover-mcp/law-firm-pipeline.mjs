@@ -1,6 +1,6 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
-import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery } from "./law-firm-targeting.mjs";
+import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries } from "./law-firm-targeting.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||"";
@@ -23,6 +23,7 @@ const ENRICHED_SET="recover:law-firm:enriched:v3";
 const READY_SET="recover:law-firm:qualified:v3";
 const REJECTED_SET="recover:law-firm:rejected:v3";
 const PENDING_SET="recover:law-firm:enrich-pending:v3";
+const PRIORITY_PENDING_SET="recover:law-firm:enrich-priority:v3";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const DISCOVERY_BACKLOG_LIMIT=Math.max(100,Number(process.env.LAW_FIRM_DISCOVERY_BACKLOG_LIMIT||1000));
 const STATS="recover:law-firm:stats:v3";
@@ -155,17 +156,21 @@ function attorneyEstimate(html="",text=""){
   return Math.min(100,estimate);
 }
 async function duckFallback(lead){
-  const website=String(lead.website||"").trim();
-  const host=hostOf(website);
-  const q=host
-    ? `site:${host} "${String(lead.name||"").replace(/"/g,"")}" email contact`
-    : `"${String(lead.name||"").replace(/"/g,"")}" ${lead.city||""} ${lead.region||""} email`.trim();
-  if(!q)return {emails:[],text:"",source:""};
-  try{
-    const url="https://html.duckduckgo.com/html/?q="+encodeURIComponent(q);
-    const result=await fetchText(url,6000);
-    return {emails:emailsFrom(result.html),text:stripHtml(result.html).slice(0,12000),source:url};
-  }catch{return {emails:[],text:"",source:""};}
+  const queries=lawResearchQueries(lead);
+  if(!queries.length)return {emails:[],text:"",source:""};
+  const emails=[],texts=[],sources=[];
+  for(const q of queries){
+    try{
+      const url="https://html.duckduckgo.com/html/?q="+encodeURIComponent(q);
+      const result=await fetchText(url,6000);
+      emails.push(...emailsFrom(result.html));
+      texts.push(stripHtml(result.html).slice(0,9000));
+      sources.push(url);
+      const combined=texts.join(" ");
+      if(emails.length&&lawFirmPracticeKeys(combined).length)break;
+    }catch{}
+  }
+  return {emails:[...new Set(emails)],text:texts.join(" ").slice(0,24000),source:sources[0]||""};
 }
 
 function websiteAudit({html="",text="",url="",practiceFocus="",elapsedMs=0}={}){
@@ -354,7 +359,12 @@ async function bootstrapExistingQualified(){
       const focus=String(lead.practice_focus||"").trim();
       const practiceKeys=[...new Set([...storedKeys,...observedKeys,...(focus?[focus]:[])])];
 
-      if(!qualifiesNoWebsiteLawLead({website,emails,practice_keys:practiceKeys}))continue;
+      if(!qualifiesNoWebsiteLawLead({website,emails,practice_keys:practiceKeys})){
+        if(!website&&emails.length&&!practiceKeys.length){
+          queuedForEnrichment+=Number(await redis.sAdd(PRIORITY_PENDING_SET,entry.field)||0);
+        }
+        continue;
+      }
 
       const wasQualified=await redis.sIsMember(READY_SET,entry.field);
       if(wasQualified){alreadyQualified++;continue;}
@@ -413,8 +423,12 @@ async function bootstrapExistingQualified(){
 }
 
 async function enrichBatch(){
-  const popped=await redis.sPop(PENDING_SET,ENRICH_BATCH);
-  const keys=(Array.isArray(popped)?popped:[popped]).filter(Boolean);
+  const priorityPopped=await redis.sPop(PRIORITY_PENDING_SET,ENRICH_BATCH);
+  const priorityKeys=(Array.isArray(priorityPopped)?priorityPopped:[priorityPopped]).filter(Boolean);
+  const remaining=Math.max(0,ENRICH_BATCH-priorityKeys.length);
+  const regularPopped=remaining?await redis.sPop(PENDING_SET,remaining):[];
+  const regularKeys=(Array.isArray(regularPopped)?regularPopped:[regularPopped]).filter(Boolean);
+  const keys=[...new Set([...priorityKeys,...regularKeys])];
   if(!keys.length)return 0;
   let index=0,done=0;
   const run=async()=>{
@@ -426,7 +440,11 @@ async function enrichBatch(){
         let lead;try{lead=JSON.parse(raw)||{};}catch{continue;}
         if(await enrichLead(key,lead))done++;
       }catch(error){
-        await redis.sAdd(PENDING_SET,key);
+        const rawRetry=await redis.hGet(LEAD_HASH,key);
+        let retryLead={};try{retryLead=rawRetry?JSON.parse(rawRetry):{};}catch{}
+        const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(Boolean);
+        const retryKeys=Array.isArray(retryLead.practice_keys)?retryLead.practice_keys:[];
+        await redis.sAdd(retryEmails.length&&!retryKeys.length?PRIORITY_PENDING_SET:PENDING_SET,key);
         console.warn(JSON.stringify({event:"law_firm_enrich_retry",key,error:String(error?.message||error)}));
       }
     }
