@@ -468,13 +468,20 @@ async function enrichLead(key,lead){
     }
   }
 
-  const observedText=combined+" "+[lead.category,lead.name,lead.description,lead.descriptions].join(" ");
-  const observedPractices=lawFirmPracticeAreas(observedText);
-  const observedKeys=lawFirmPracticeKeys(observedText);
-  const focus=String(lead.practice_focus||observedKeys[0]||"").trim();
+  const metadataText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
+  const metadataKeys=lawFirmPracticeKeys(metadataText);
+  const researchKeys=lawFirmPracticeKeys(combined);
+  const focus=String(lead.practice_focus||metadataKeys[0]||researchKeys[0]||"").trim();
   const targetPractice=LAW_PRACTICES.find(x=>x.key===focus);
-  const practices=[...new Set([...observedPractices,...(targetPractice?[targetPractice.label]:[])])];
-  const practiceKeys=[...new Set([...observedKeys,...(focus?[focus]:[])])];
+  // Keep Type credible and compact. Discovery focus/direct business evidence outrank
+  // broad search-result text, which can mention unrelated legal specialties.
+  const practiceKeys=[...new Set([
+    ...(focus?[focus]:[]),
+    ...metadataKeys,
+    ...researchKeys
+  ])].filter(k=>LAW_PRACTICES.some(p=>p.key===k)).slice(0,3);
+  const practices=practiceKeys.map(k=>LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
+  const observedPractices=practices;
   const targetLabel=targetPractice?.label||practices[0]||"law";
   let p=personalization({lead,practices:observedPractices,attorneyCount,source:source||String(lead.google_maps_url||"Google Maps"),targetLabel});
   if(fb.personalFact){
