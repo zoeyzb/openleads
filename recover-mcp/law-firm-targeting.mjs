@@ -68,12 +68,23 @@ export function isUsableLawEmail(value=""){
   return true;
 }
 
+export function isPreferredLawFirmSize(value=0){
+  const n=Number(value||0);
+  return Number.isFinite(n)&&n>=2&&n<=10;
+}
+
 export function qualifiesNoWebsiteLawLead(lead={}){
   const website=String(lead.website||"").trim();
   const contacts=Array.isArray(lead.emails)?lead.emails:[lead.email].filter(Boolean);
-  // Practice classification improves targeting and stays visible in the sheet,
-  // but it is enrichment rather than a reason to discard a no-site lead with a usable email.
-  return !/^https?:\/\//i.test(website) && contacts.some(isUsableLawEmail);
+  const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+  const sourceVerified=lead.email_source_verified===true;
+  // Ready means the exact sales cohort: no owned website, confirmed 2-10 attorney
+  // firm, and a source-backed usable email. Practice classification is metadata,
+  // not a substitute for contactability.
+  return !/^https?:\/\//i.test(website) &&
+    isPreferredLawFirmSize(attorneyCount) &&
+    sourceVerified &&
+    contacts.some(isUsableLawEmail);
 }
 
 export function shouldPauseLawDiscovery({pendingEnrichment=0,limit=1000}={}){
