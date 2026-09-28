@@ -637,19 +637,26 @@ const LAW_FIRM_QUERIES={
   workers_comp:["workers compensation lawyer","workers comp attorney","work injury lawyer","workers compensation law office","workplace injury attorney"],
   disability:["social security disability lawyer","SSDI attorney","disability benefits lawyer","SSI lawyer","disability law office"],
   civil_litigation:["civil litigation lawyer","trial lawyer","litigation attorney","civil lawyer","litigation law firm"],
-  general:["law office","attorney at law","small law firm","solo attorney","law offices","law firm"]
+  general:["law office","attorney at law","solo attorney","small law firm","law offices","general practice attorney","law firm"]
 };
 const queryVariants=(industry,location,practiceFocus="")=>{
   if (/\blaw\s*firm\b|\battorney\b|\blawyer\b/.test(normalizeText(industry))){
     const key=normalizeText(practiceFocus).replace(/\s+/g,"_");
     const base=LAW_FIRM_QUERIES[key]||LAW_FIRM_QUERIES.general;
+    // No-site firms are underrepresented in practice-keyword/SEO searches.
+    // Lead with a generic small-firm query, varied deterministically by
+    // practice focus so later nationwide waves do not repeat the same query.
+    const seed=[...String(key||"general")].reduce((n,ch)=>n+ch.charCodeAt(0),0);
+    const general=LAW_FIRM_QUERIES.general;
+    const g0=general[seed%Math.min(5,general.length)]||general[0];
+    const g1=general[(seed+2)%Math.min(6,general.length)]||general[1]||general[0];
     const mixed=[
+      g0,
       base[0],
-      LAW_FIRM_QUERIES.general[0],
+      g1,
       base[1]||base[0],
-      LAW_FIRM_QUERIES.general[1],
-      base[2]||base[0],
-      LAW_FIRM_QUERIES.general[2]
+      general[0],
+      base[2]||base[0]
     ].filter(Boolean);
     return [...new Set(mixed)].map(q=>`${q} in ${location}`);
   }
