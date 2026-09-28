@@ -367,22 +367,36 @@ function bingResultLinks(html=""){
   }
   return [...new Set(out)].slice(0,8);
 }
-async function bingFallback(lead,query,pageBudget=3){
+async function bingFallback(lead,query,pageBudget=6){
   const emails=[],texts=[],sources=[];
   let attorneyCount=0,personalFact="",personalFactSource="";
+  const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,4);
   try{
-    const url="https://www.bing.com/search?q="+encodeURIComponent(query);
-    const result=await fetchText(url,5000);
-    const searchText=stripHtml(result.html).slice(0,10000);
-    emails.push(...contextualEmails(result.html,lead));
-    texts.push(searchText);sources.push(url);
-    if(emails.length)return {emails,text:searchText,source:url,attorneyCount,personalFact,personalFactSource};
+    const searchResults=await Promise.allSettled(queries.map(async q=>{
+      const url="https://www.bing.com/search?q="+encodeURIComponent(q);
+      const result=await fetchText(url,5000);
+      return {q,url,...result};
+    }));
+    const links=[];
+    for(const item of searchResults){
+      if(item.status!=="fulfilled")continue;
+      const result=item.value;
+      const searchText=stripHtml(result.html).slice(0,10000);
+      const found=contextualEmails(result.html,lead);
+      emails.push(...found);
+      texts.push(searchText);
+      if(found.length)sources.unshift(result.url); else sources.push(result.url);
+      for(const link of bingResultLinks(result.html).sort((a,b)=>{
+        const rank=u=>/govinfo\.gov|docs\.justia\.com|statebar|barassociation|bar\.org|supremecourt|disciplinaryboard|trellis|allbiz|chamberofcommerce|justia/i.test(u)?0:1;
+        return rank(a)-rank(b);
+      })){
+        if(!links.includes(link))links.push(link);
+        if(links.length>=pageBudget)break;
+      }
+    }
+    if(emails.length)return {emails:[...new Set(emails)],text:texts.join(" ").slice(0,24000),source:sources[0]||"",attorneyCount,personalFact,personalFactSource};
 
-    const links=bingResultLinks(result.html).sort((a,b)=>{
-      const rank=u=>/allbiz|chamberofcommerce|statebar|barassociation|bar\.org|justia|lawyers\.com|findlaw|avvo|trellis/i.test(u)?0:1;
-      return rank(a)-rank(b);
-    }).slice(0,pageBudget);
-    const pages=await Promise.allSettled(links.map(target=>fetchText(target,4500)));
+    const pages=await Promise.allSettled(links.slice(0,pageBudget).map(target=>fetchText(target,4500)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
       if(item.status!=="fulfilled")continue;
@@ -696,9 +710,20 @@ async function enrichLead(key,lead){
     const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
     const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
     const city=String(lead.city||"").trim(),region=String(lead.region||lead.state||"").trim();
-    const q=phone?`"${name}" "${phone}" email`:`"${name}" ${city} ${region} attorney email`;
+    const people=attorneyNameVariants(lead);
+    const person=people[0]||"";
+    const alternate=people[1]||"";
+    const bingQueries=[
+      `"${name}" ${city} ${region} email`.trim(),
+      ...(person?[
+        `"${person}" ${region} state bar email`.trim(),
+        `"${person}" email site:govinfo.gov`
+      ]:[]),
+      ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[]),
+      ...(phone?[`"${phone}" "${name}" email`]:[])
+    ];
     const [bingResult,zeroResult]=await Promise.allSettled([
-      bingFallback(lead,q,4),
+      bingFallback(lead,bingQueries,6),
       zeroCostEmailFallback(lead)
     ]);
 
