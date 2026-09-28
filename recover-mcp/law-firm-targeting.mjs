@@ -1,7 +1,7 @@
 function normalize(value=""){return String(value||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
 
 const LAW_SIGNAL=/\b(law firm|law office|law offices|attorney|attorneys|lawyer|lawyers|legal counsel)\b/;
-const NON_FIRM=/\b(bail bonds?|court reporter|process server|notary|paralegal service|legal document preparer|legal aid society|bar association|courthouse|district attorney|public defender|government office)\b/;
+const NON_FIRM=/\b(bail bonds?|court reporter|process server|notary|paralegal service|legal document preparer|legal aid society|bar association|courthouse|district attorney|public defender|government office|police department|sheriff(?:'s)? office|law enforcement|realty|realtors?|real estate brokerage|property management|title company|mortgage broker|insurance agency|tax preparation)\b/;
 
 export const LAW_PRACTICES=[
   {key:"personal_injury",label:"personal injury",target:true,re:/\b(personal injury|injury lawyer|injury attorney|accident lawyer|accident attorney|car accident|truck accident|wrongful death|slip and fall|premises liability|medical malpractice)\b/},
