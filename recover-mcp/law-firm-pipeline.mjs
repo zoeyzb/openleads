@@ -15,7 +15,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
-const EMAIL_METHOD_VERSION="email-v8";
+const EMAIL_METHOD_VERSION="email-v9";
 const LOOP_MS=Math.max(1500,Number(process.env.LAW_FIRM_LOOP_MS||5000));
 const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_FETCH_TIMEOUT_MS||7000)));
 const JOB_TTL=Math.max(86400,Number(process.env.ACQUISITION_TTL_SECONDS||604800));
@@ -241,7 +241,7 @@ async function zeroCostEmailFallback(lead={}){
     });
     const published=(result?.evidence?.found_public_emails||[])
       .map(x=>String(x||"").trim().toLowerCase())
-      .filter(x=>isUsableLawEmail(x)&&emailLooksOwnedByLead(x,lead));
+      .filter(x=>isUsableLawEmail(x)&&!FREE_MAIL_DOMAINS.has(String(x).split("@")[1]||"")&&emailLooksOwnedByLead(x,lead));
     const best=String(result?.best_email||"").trim().toLowerCase();
     const accepted=best&&published.includes(best)&&Number(result?.confidence||0)>=0.9?[best]:[];
     return {emails:accepted,source:String(result?.evidence?.sources_checked?.[0]||""),name_variant:personName};
@@ -295,13 +295,21 @@ function isThirdPartyEmailDomain(email=""){
 }
 function emailLooksOwnedByLead(email="",lead={}){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
-  if(!domain||isThirdPartyEmailDomain(email))return false;
-  if(FREE_MAIL_DOMAINS.has(domain))return true;
+  if(!domain||isThirdPartyEmailDomain(email)||FREE_MAIL_DOMAINS.has(domain))return false;
   const stem=domain.split(".")[0].replace(/[^a-z0-9]/g,"");
   const tokens=leadNameTokens(lead).map(x=>x.replace(/[^a-z0-9]/g,"")).filter(x=>x.length>=4);
   if(tokens.some(t=>stem.includes(t)||t.includes(stem)))return true;
-  const local=String(email).split("@")[0]?.toLowerCase()||"";
-  return tokens.some(t=>local.includes(t));
+  const local=String(email).split("@")[0]?.toLowerCase().replace(/[^a-z0-9]/g,"")||"";
+  return tokens.some(t=>local.length>=4&&(local.includes(t)||t.includes(local)));
+}
+function exactIdentityNearEmail(context="",lead={}){
+  const plain=normalize(context);
+  const person=likelyAttorneyName(lead);
+  const personTokens=person?normalize(person).split(" ").filter(x=>x.length>=3):[];
+  const leadTokens=leadNameTokens(lead).filter(x=>x.length>=4);
+  const personHits=personTokens.length>=2&&personTokens.filter(t=>plain.includes(t)).length>=2;
+  const firmHits=leadTokens.length>=2&&leadTokens.filter(t=>plain.includes(t)).length>=Math.min(2,leadTokens.length);
+  return personHits||firmHits;
 }
 function contextHasExactPhone(text="",lead={}){
   const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
@@ -322,18 +330,21 @@ function contextualEmails(text="",lead={}){
     const context=raw.slice(start,end);
     const nearbyIdentity=pageMatchesLead(context,lead);
     const nearbyPhone=contextHasExactPhone(context,lead);
-    if(nearbyIdentity&&(emailLooksOwnedByLead(m.email,lead)||nearbyPhone)){
+    const domain=String(m.email).split("@")[1]?.toLowerCase()||"";
+    const freeMail=FREE_MAIL_DOMAINS.has(domain);
+    const exactNearby=exactIdentityNearEmail(context,lead);
+    if(nearbyPhone&&nearbyIdentity){
       out.push(m.email);continue;
     }
-    // Bar/court/public profile pages often render identity, phone and email in
-    // separate sections. Exact whole-page phone + identity is strong enough
-    // when the page only exposes a small number of usable addresses.
-    if(fullPageMatch&&fullPhoneMatch&&uniqueAll.length<=4){
+    if(!freeMail&&nearbyIdentity&&emailLooksOwnedByLead(m.email,lead)){
       out.push(m.email);continue;
     }
-    // If the entire page is clearly the attorney/firm profile, allow a free
-    // professional mailbox or firm/name-affine domain even without adjacency.
-    if(fullPageMatch&&uniqueAll.length<=3&&(FREE_MAIL_DOMAINS.has(m.email.split("@")[1]||"")||emailLooksOwnedByLead(m.email,lead))){
+    if(freeMail&&exactNearby&&(nearbyPhone||fullPhoneMatch)){
+      out.push(m.email);continue;
+    }
+    // For split-layout bar/court profiles, require exact whole-page phone AND
+    // either firm-domain affinity or an exact attorney/firm identity match.
+    if(fullPageMatch&&fullPhoneMatch&&uniqueAll.length<=3&&(!freeMail?emailLooksOwnedByLead(m.email,lead):exactIdentityNearEmail(raw,lead))){
       out.push(m.email);
     }
   }
