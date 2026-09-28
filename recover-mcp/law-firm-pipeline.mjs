@@ -698,6 +698,18 @@ function personalization({lead,practices,attorneyCount,source,targetLabel=""}){
   }
   return {fact:"",source:"",quality:"none"};
 }
+const STATE_BAR_DOMAINS={
+  TX:"texasbar.com",FL:"floridabar.org",CA:"calbar.ca.gov",NY:"nycourts.gov",
+  NJ:"njcourts.gov",PA:"pabar.org",IL:"iardc.org",OH:"supremecourt.ohio.gov",
+  GA:"gabar.org",NC:"ncbar.gov",SC:"scbar.org",VA:"vsb.org",WA:"wsba.org",
+  OR:"osbar.org",AZ:"azbar.org",CO:"coloradosupremecourt.com",MI:"michbar.org",
+  MN:"mnbars.org",MO:"mobar.org",TN:"tbpr.org",MA:"massbbo.org",MD:"mdcourts.gov"
+};
+function stateBarDomain(lead={}){
+  const state=String(lead.region||lead.state||lead.state_code||"").trim().toUpperCase();
+  return STATE_BAR_DOMAINS[state]||"";
+}
+
 async function enrichLead(key,lead){
   if(String(lead.search_profile||"")!=="law-firm"&&normalize(lead.industry)!=="law firm")return false;
   if(!isLawFirmLead(lead)){
@@ -731,12 +743,14 @@ async function enrichLead(key,lead){
     const people=attorneyNameVariants(lead);
     const person=people[0]||"";
     const alternate=people[1]||"";
+    const barDomain=stateBarDomain(lead);
     const bingQueries=[
       ...(phone?[`"${phone}"`,`"${phone}" "${name}" email`]:[]),
       `"${name}" ${city} ${region} email`.trim(),
       `"${name}" filetype:pdf attorney email`.trim(),
       ...(person?[
-        `"${person}" ${region} state bar email`.trim(),
+        ...(barDomain?[`site:${barDomain} "${person}"`]:[]),
+        `"${person}" ${region} state bar`.trim(),
         `"${person}" attorney email filetype:pdf`.trim(),
         `"${person}" "gmail.com"`.trim(),
         `"${person}" "yahoo.com"`.trim(),
@@ -744,6 +758,7 @@ async function enrichLead(key,lead){
         `"${person}" "outlook.com"`.trim()
       ]:[]),
       ...(alternate?[
+        ...(barDomain?[`site:${barDomain} "${alternate}"`]:[]),
         `"${alternate}" ${region} attorney email`.trim(),
         `"${alternate}" "gmail.com"`.trim(),
         `"${alternate}" "yahoo.com"`.trim()
@@ -842,7 +857,7 @@ async function enrichLead(key,lead){
     target_area:String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"").trim(),
     email_angle:emailAngle,lead_priority_score:priority,qualified_lead:qualified,
     law_email_enrich_version:EMAIL_METHOD_VERSION,
-    law_email_method:emailMethod,
+    law_email_method:emailMethod,law_bar_domain:stateBarDomain(lead),
     law_firm_enriched_at:new Date().toISOString()};
 
   await redis.hSet(LEAD_HASH,key,JSON.stringify(enriched));
