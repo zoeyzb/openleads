@@ -578,7 +578,7 @@ async function bootstrapExistingQualified(){
       const website=String(lead.website||"").trim();
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>String(x||"").trim().toLowerCase())
-        .filter(x=>isUsableLawEmail(x)&&emailLooksOwnedByLead(x,lead));
+        .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
       const evidenceText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const observedKeys=lawFirmPracticeKeys(evidenceText);
       const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
