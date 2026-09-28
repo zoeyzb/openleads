@@ -3092,14 +3092,16 @@ const httpServer = createHttpServer((req, res) => {
           }else byPractice.unknown++;
         }
       }
-      const [qualifiedV3,priorityPending,pendingV3,pendingV2]=await Promise.all([
+      const [qualifiedV3,priorityPending,pendingV3,pendingV2,redisSourceDiagRaw]=await Promise.all([
         redis.sCard("recover:law-firm:qualified:v3"),
         redis.sCard("recover:law-firm:enrich-priority:v3"),
         redis.sCard("recover:law-firm:enrich-pending:v3"),
-        redis.sCard("recover:law-firm:enrich-pending:v2")
+        redis.sCard("recover:law-firm:enrich-pending:v2"),
+        redis.get("recover:diag:law-redis-source")
       ]);
+      let redisSourceDiag=null;try{redisSourceDiag=redisSourceDiagRaw?JSON.parse(redisSourceDiagRaw):null;}catch{}
       res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});
-      res.end(JSON.stringify({lawCandidates,noWebsite,noWebsiteEmail,knownTarget,exportable,byPractice,qualifiedV3,priorityPending,pendingV3,pendingV2}));
+      res.end(JSON.stringify({lawCandidates,noWebsite,noWebsiteEmail,knownTarget,exportable,byPractice,qualifiedV3,priorityPending,pendingV3,pendingV2,redisSourceDiag}));
     })().catch(error=>{
       res.writeHead(500,{"content-type":"application/json","cache-control":"no-store"});
       res.end(JSON.stringify({error:error?.message||"summary_failed"}));
