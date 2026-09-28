@@ -1191,7 +1191,13 @@ async function cleanupWebsiteRefreshReady(){
   for(let i=0;i<keys.length;i++){
     if(!values[i])continue;
     let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
-    rows.push({key:keys[i],lead,priority:Number(lead.lead_priority_score||0)});
+    const email=String((Array.isArray(lead.emails)?lead.emails[0]:lead.email)||"").toLowerCase();
+    const pains=Array.isArray(lead.website_audit?.pain_points)?lead.website_audit.pain_points:[];
+    if(!isLawFirmLead(lead)||!isUsableLawEmail(email)||pains.length<2){
+      rows.push({key:keys[i],lead,priority:-999,invalid:true});
+      continue;
+    }
+    rows.push({key:keys[i],lead,priority:Number(lead.lead_priority_score||0),invalid:false});
   }
   rows.sort((a,b)=>b.priority-a.priority);
   const emails=new Set(),domains=new Set(),remove=[];
@@ -1200,7 +1206,7 @@ async function cleanupWebsiteRefreshReady(){
   for(const row of rows){
     const email=String((Array.isArray(row.lead.emails)?row.lead.emails[0]:row.lead.email)||"").toLowerCase();
     const domain=hostOf(row.lead.website||"");
-    if((email&&emails.has(email))||(domain&&domains.has(domain))){
+    if(row.invalid||(email&&emails.has(email))||(domain&&domains.has(domain))){
       remove.push(row.key);continue;
     }
     if(email){emails.add(email);await redis.hSet(WEBSITE_REFRESH_EMAIL_INDEX,email,row.key);}
@@ -1221,7 +1227,13 @@ async function bootstrapExistingQualified(){
       if(!entry?.field||entry.value===undefined)continue;
       let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
       const isLaw=(String(lead.search_profile||"")==="law-firm"||normalize(lead.industry)==="law firm")&&isLawFirmLead(lead);
-      if(!isLaw)continue;
+      if(!isLaw){
+        if(await redis.sIsMember(READY_SET,entry.field)){
+          await redis.sRem(READY_SET,entry.field);
+          qualifiedRemoved++;
+        }
+        continue;
+      }
       scanned++;
 
       const website=String(lead.website||"").trim();
