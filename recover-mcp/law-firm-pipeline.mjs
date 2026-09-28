@@ -567,13 +567,21 @@ async function bootstrapExistingQualified(){
   return {scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,queuedForEnrichment};
 }
 
+async function popSetBatch(setKey,count){
+  const out=[];
+  for(let i=0;i<count;i++){
+    const popped=await redis.sPop(setKey);
+    const values=(Array.isArray(popped)?popped:[popped]).filter(Boolean);
+    if(!values.length)break;
+    out.push(...values);
+  }
+  return [...new Set(out)].slice(0,count);
+}
 async function enrichBatch(){
-  const priorityPopped=await redis.sPop(PRIORITY_PENDING_SET,ENRICH_BATCH);
-  const priorityKeys=(Array.isArray(priorityPopped)?priorityPopped:[priorityPopped]).filter(Boolean);
+  const priorityKeys=await popSetBatch(PRIORITY_PENDING_SET,ENRICH_BATCH);
   const remaining=Math.max(0,ENRICH_BATCH-priorityKeys.length);
-  const regularPopped=remaining?await redis.sPop(PENDING_SET,remaining):[];
-  const regularKeys=(Array.isArray(regularPopped)?regularPopped:[regularPopped]).filter(Boolean);
-  const keys=[...new Set([...priorityKeys,...regularKeys])];
+  const regularKeys=remaining?await popSetBatch(PENDING_SET,remaining):[];
+  const keys=[...new Set([...priorityKeys,...regularKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
   let index=0,done=0;
   const run=async()=>{
