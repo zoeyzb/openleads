@@ -28,6 +28,13 @@ export function matchesLawPractice(value="",focus=""){
   return p ? p.re.test(normalize(value)) : false;
 }
 
+export function qualifiesNoWebsiteLawLead(lead={}){
+  const website=String(lead.website||"").trim();
+  const contacts=Array.isArray(lead.emails)?lead.emails:[lead.email].filter(Boolean);
+  const practiceKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
+  return !/^https?:\/\//i.test(website) && contacts.length>0 && practiceKeys.length>0;
+}
+
 export function isLawFirmLead(lead={}){
   const category=normalize(lead.category||lead.industry||"");
   const text=normalize([category,lead.name,lead.title,lead.description,lead.descriptions].filter(Boolean).join(" "));
