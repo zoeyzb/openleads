@@ -21,7 +21,7 @@ const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_
 const JOB_TTL=Math.max(86400,Number(process.env.ACQUISITION_TTL_SECONDS||604800));
 const ACTIVE_QUEUE="recover:acquisition:queue:law-firm";
 const LEAD_HASH="recover:leadstore:qualified";
-const SEEDED_SET="recover:law-firm:seeded:v4";
+const SEEDED_SET="recover:law-firm:seeded:v5";
 const ENRICHED_SET="recover:law-firm:enriched:v3";
 const READY_SET="recover:law-firm:qualified:v3";
 const REJECTED_SET="recover:law-firm:rejected:v3";
@@ -835,12 +835,12 @@ async function seed(cities){
       const areaKey=area.state+"|"+normalize(area.city)+"|"+focus.key;
       if(await redis.sIsMember(SEEDED_SET,areaKey))continue;
       const id=randomUUID(),now=new Date().toISOString();
-      const job={id,batch_id:"us-law-firm-qualified-v3",industry:"LAW_FIRM",search_profile:"law-firm",practice_focus:focus.key,coverage_pass:"email-v7",location:area.location,
-        partition_state:area.state,partition_city:area.city,source_population:area.population,target:16,min_score:50,
+      const job={id,batch_id:"us-law-firm-qualified-v4",industry:"LAW_FIRM",search_profile:"law-firm",practice_focus:focus.key,coverage_pass:"email-v8",location:area.location,
+        partition_state:area.state,partition_city:area.city,source_population:area.population,target:24,min_score:45,
         require_phone:false,require_email:false,require_contact:false,require_no_website:true,include_no_website:true,
-        max_rounds:1,depth:3,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,
-        qualified_count:0,stored_count:0,maps_jobs:[],source:"law_firm_pipeline_v3",created_at:now,updated_at:now};
-      const claim=await claimCoverage(redis,job,{source:"law_firm_pipeline_v3",practice_focus:focus.key});
+        max_rounds:4,depth:4,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,
+        qualified_count:0,stored_count:0,maps_jobs:[],source:"law_firm_pipeline_v4",created_at:now,updated_at:now};
+      const claim=await claimCoverage(redis,job,{source:"law_firm_pipeline_v4",practice_focus:focus.key});
       if(!claim.claimed){await redis.sAdd(SEEDED_SET,areaKey);continue;}
       await redis.set(`recover:acq:${id}`,JSON.stringify(job),{EX:JOB_TTL});
       await redis.sAdd("recover:acq:index",id);await redis.lPush(ACTIVE_QUEUE,id);await redis.sAdd(SEEDED_SET,areaKey);
