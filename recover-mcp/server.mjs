@@ -3131,9 +3131,9 @@ const httpServer = createHttpServer((req, res) => {
           const focus=String(lead.practice_focus||"").trim();
           const keys=[...new Set([...storedKeys,...lawFirmPracticeKeys(evidence),...(focus?[focus]:[])])]
             .filter(k=>["personal_injury","family_divorce","criminal_defense"].includes(k));
+          exportable++;
           if(keys.length){
             knownTarget++;
-            exportable++;
             for(const k of keys)byPractice[k]=(byPractice[k]||0)+1;
           }else byPractice.unknown++;
         }
@@ -3208,7 +3208,7 @@ const httpServer = createHttpServer((req, res) => {
           const labels=practiceKeys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
           const type=(labels.length?labels:lawFirmPracticeAreas(evidence))
             .map(x=>x.replace("personal injury","Personal Injury").replace("family/divorce","Family/Divorce").replace("criminal defense","Criminal Defense"))
-            .join(" + ");
+            .join(" + ") || "Other / General Law";
           const reviews=Number(lead.review_count||lead.reviews||0);
           const rating=Number(lead.review_rating||lead.rating||0);
           const {city,state}=parseLocation(lead);
