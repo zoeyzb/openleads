@@ -4,7 +4,7 @@ import { matchesRequestedLocation, mergeLeadRecords, upsertQualifiedLeads } from
 import { geoBiasForJob } from './geo-coverage.mjs';
 import { markCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead, isCoreHomeServiceIndustry, isOwnedBusinessWebsite } from "./home-service-targeting.mjs";
-import { isLawFirmLead, scoreLawFirmLead } from "./law-firm-targeting.mjs";
+import { isLawFirmLead, scoreLawFirmLead, matchesLawPractice } from "./law-firm-targeting.mjs";
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -277,6 +277,10 @@ function qualificationFunnel(records=[],job={}){
   const counts={raw:records.length,location:Math.max(0,records.length-candidates.length),industry:0,owned_website:0,phone:0,email:0,contact:0,include_website:0,score:0,accepted:0};
   for(const lead of candidates){
     if(!matchesRequestedIndustry(lead,job.industry)){counts.industry++;continue;}
+    if(job.practice_focus){
+      const practiceText=normalizeText([lead.category,lead.industry,lead.title||lead.name,lead.descriptions,lead.description].filter(Boolean).join(" "));
+      if(!matchesLawPractice(practiceText,job.practice_focus)){counts.industry++;continue;}
+    }
     if(job.require_no_website&&isOwnedBusinessWebsite(lead.website)){counts.owned_website++;continue;}
     if(job.require_phone&&!lead.phone){counts.phone++;continue;}
     if(job.require_email&&!normalizeEmails(lead.emails||lead.email||"").length){counts.email++;continue;}
@@ -289,7 +293,7 @@ function qualificationFunnel(records=[],job={}){
 }
 
 function scoreLead(lead,job={}) {
-  if(String(job?.search_profile||"")==="law-firm" || /\blaw\s*firm\b/.test(normalizeText(job?.industry||""))) return scoreLawFirmLead(lead);
+  if(String(job?.search_profile||"")==="law-firm" || /\blaw\s*firm\b/.test(normalizeText(job?.industry||""))) return scoreLawFirmLead(lead,{practice_focus:job?.practice_focus||""});
   let score=0; const reasons=[]; const add=(p,r)=>{score+=p;reasons.push({points:p,reason:r});};
   const category=normalizeText(lead.category||lead.industry||"");
   if (/hvac|heating|air conditioning|plumb|roof|electric/.test(category)) add(15,"target local-service category");
@@ -511,6 +515,7 @@ async function persistPermanentQualified(redis, job, leads) {
       acquisition_location:job.location||"",
       industry:job.industry||"",
       search_profile:job.search_profile||"",
+      practice_focus:job.practice_focus||"",
       campaign_scope:campaignLeadSetKey(job),
       persisted_at:new Date().toISOString()
     }));
@@ -613,14 +618,18 @@ const HOME_COMFORT_QUERIES=[
   "drain contractor",
   "sewer contractor"
 ];
-const LAW_FIRM_QUERIES=[
-  "law office","boutique law firm","small law firm","law offices",
-  "personal injury law office","family law office","estate planning law office","probate law office",
-  "employment law firm","business law office","real estate law office","civil litigation attorney",
-  "workers compensation attorney","elder law attorney","law firm"
-];
-const queryVariants=(industry,location)=>{
-  if (/\blaw\s*firm\b|\battorney\b|\blawyer\b/.test(normalizeText(industry))) return LAW_FIRM_QUERIES.map(q=>`${q} in ${location}`);
+const LAW_FIRM_QUERIES={
+  personal_injury:["personal injury lawyer","personal injury law firm","car accident lawyer","injury attorney","accident law office"],
+  family_divorce:["divorce lawyer","family law attorney","divorce law firm","child custody lawyer","family law office"],
+  criminal_defense:["criminal defense lawyer","criminal defense attorney","criminal law firm","DUI lawyer","criminal defense law office"],
+  general:["law office","boutique law firm","small law firm","law offices","law firm"]
+};
+const queryVariants=(industry,location,practiceFocus="")=>{
+  if (/\blaw\s*firm\b|\battorney\b|\blawyer\b/.test(normalizeText(industry))){
+    const key=normalizeText(practiceFocus).replace(/\s+/g,"_");
+    const base=LAW_FIRM_QUERIES[key]||LAW_FIRM_QUERIES.general;
+    return [...new Set([...base,...LAW_FIRM_QUERIES.general.slice(0,2)])].map(q=>`${q} in ${location}`);
+  }
   if (isHomeComfortTarget(industry)) return HOME_COMFORT_QUERIES.map(q=>`${q} in ${location}`);
   return [
     `${industry} in ${location}`,
@@ -897,7 +906,7 @@ async function processAcquisition(id) {
   let stagnantRounds=0;
 
   try {
-    let variants=queryVariants(job.industry,job.location);
+    let variants=queryVariants(job.industry,job.location,job.practice_focus||"");
     const requestedFamily=normalizeText(job.query_family||"");
     if (isFastHomeServiceJob(job) && requestedFamily) {
       const exact=variants.find(query=>queryFamily(query)===requestedFamily);
@@ -1133,6 +1142,7 @@ async function processAcquisition(id) {
 
       leads=locationCandidateSet(leads,job)
         .filter(lead=>matchesRequestedIndustry(lead,job.industry))
+        .filter(lead=>!job.practice_focus||matchesLawPractice(normalizeText([lead.category,lead.industry,lead.title||lead.name,lead.descriptions,lead.description].filter(Boolean).join(" ")),job.practice_focus))
         .filter(lead=>!job.require_no_website||!isOwnedBusinessWebsite(lead.website))
         .filter(lead=>!job.require_phone||!!lead.phone)
         .filter(lead=>!job.require_email||normalizeEmails(lead.emails||lead.email||"").length>0)
@@ -1197,6 +1207,7 @@ async function processAcquisition(id) {
 
     let leads=locationCandidateSet(allRaw,job)
       .filter(lead=>matchesRequestedIndustry(lead,job.industry))
+      .filter(lead=>!job.practice_focus||matchesLawPractice(normalizeText([lead.category,lead.industry,lead.title||lead.name,lead.descriptions,lead.description].filter(Boolean).join(" ")),job.practice_focus))
       .map(lead=>({...lead,qualification:scoreLead(lead,job)}))
       .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
       .filter(lead=>!job.require_phone||!!lead.phone)
