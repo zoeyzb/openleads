@@ -52,10 +52,9 @@ export function isUsableLawEmail(value=""){
 export function qualifiesNoWebsiteLawLead(lead={}){
   const website=String(lead.website||"").trim();
   const contacts=Array.isArray(lead.emails)?lead.emails:[lead.email].filter(Boolean);
-  const practiceKeys=Array.isArray(lead.practice_keys)?lead.practice_keys.filter(Boolean):[];
-  // Discovery may keep researching unclassified firms, but the qualified outreach
-  // sheet requires a classified target practice in addition to email + no website.
-  return !/^https?:\/\//i.test(website) && contacts.some(isUsableLawEmail) && practiceKeys.length>0;
+  // Practice classification improves targeting and stays visible in the sheet,
+  // but it is enrichment rather than a reason to discard a no-site lead with a usable email.
+  return !/^https?:\/\//i.test(website) && contacts.some(isUsableLawEmail);
 }
 
 export function shouldPauseLawDiscovery({pendingEnrichment=0,limit=1000}={}){
