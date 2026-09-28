@@ -175,10 +175,10 @@ function attorneyNameVariants(lead={}){
   return [...new Set(values.map(x=>x.replace(/\s+/g," ").trim()).filter(x=>x.split(/\s+/).length>=2))].slice(0,3);
 }
 async function zeroCostEmailFallback(lead={}){
-  const personName=attorneyNameVariants(lead)[0]||"";
-  if(!personName)return {emails:[],source:""};
-  try{
-    const result=await enrichProfessionalEmail("recover-law-email-v4",{
+  const names=attorneyNameVariants(lead).slice(0,3);
+  if(!names.length)return {emails:[],source:"",name_variant:""};
+  const attempts=await Promise.allSettled(names.map(async personName=>{
+    const result=await enrichProfessionalEmail("recover-law-email-v5",{
       person_name:personName,
       company_name:String(lead.name||lead.title||personName),
       mode:"fast",
@@ -187,13 +187,16 @@ async function zeroCostEmailFallback(lead={}){
       hints:{source_urls:[String(lead.google_maps_url||"")].filter(Boolean)}
     });
     const published=(result?.evidence?.found_public_emails||[])
-      .map(x=>String(x||"").trim().toLowerCase()).filter(x=>isUsableLawEmail(x)&&emailLooksOwnedByLead(x,lead));
+      .map(x=>String(x||"").trim().toLowerCase())
+      .filter(x=>isUsableLawEmail(x)&&emailLooksOwnedByLead(x,lead));
     const best=String(result?.best_email||"").trim().toLowerCase();
     const accepted=best&&published.includes(best)&&Number(result?.confidence||0)>=0.9?[best]:[];
-    return {emails:accepted,source:String(result?.evidence?.sources_checked?.[0]||"")};
-  }catch{
-    return {emails:[],source:""};
+    return {emails:accepted,source:String(result?.evidence?.sources_checked?.[0]||""),name_variant:personName};
+  }));
+  for(const attempt of attempts){
+    if(attempt.status==="fulfilled"&&attempt.value.emails.length)return attempt.value;
   }
+  return {emails:[],source:"",name_variant:""};
 }
 function leadNameTokens(lead={}){
   const stop=new Set(["law","laws","firm","firms","office","offices","attorney","attorneys","lawyer","lawyers","llc","pllc","pc","pa","group","associates","the","and"]);
@@ -617,8 +620,14 @@ async function enrichLead(key,lead){
   }
 
   let emails=[...(Array.isArray(lead.emails)?lead.emails:[])], combined="",source="",attorneyCount=0;
+  let emailMethod=emails.some(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))?"existing":"none";
+  if(emailMethod==="existing")await redis.hIncrBy(STATS,"email_existing_hit",1);
   const fb=await duckFallback({...lead,website:""});
   emails.push(...fb.emails);
+  if(emailMethod==="none"&&fb.emails.length){
+    emailMethod="duck";
+    await redis.hIncrBy(STATS,"email_duck_hit",1);
+  }
   combined+=" "+fb.text;
   source=fb.source||String(lead.google_maps_url||"Google Maps");
   attorneyCount=Math.max(attorneyCount,Number(fb.attorneyCount||0));
@@ -633,7 +642,10 @@ async function enrichLead(key,lead){
     if(bf.source)source=bf.source;
     attorneyCount=Math.max(attorneyCount,Number(bf.attorneyCount||0));
     if(!fb.personalFact&&bf.personalFact){fb.personalFact=bf.personalFact;fb.personalFactSource=bf.personalFactSource;}
-    if(bf.emails.length)await redis.hIncrBy(STATS,"email_bing_hit",1);
+    if(bf.emails.length){
+      if(emailMethod==="none")emailMethod="bing";
+      await redis.hIncrBy(STATS,"email_bing_hit",1);
+    }
   }
   emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
@@ -642,8 +654,13 @@ async function enrichLead(key,lead){
     if(zeroCost.emails.length){
       emails=[...new Set([...emails,...zeroCost.emails])].slice(0,5);
       source=zeroCost.source||source;
+      if(emailMethod==="none")emailMethod="zero_cost";
       await redis.hIncrBy(STATS,"email_zero_cost_hit",1);
     }
+  }
+  if(!emails.length){
+    emailMethod="none";
+    await redis.hIncrBy(STATS,"email_no_hit",1);
   }
 
   const metadataText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
@@ -689,6 +706,7 @@ async function enrichLead(key,lead){
     target_area:String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"").trim(),
     email_angle:emailAngle,lead_priority_score:priority,qualified_lead:qualified,
     law_email_enrich_version:EMAIL_METHOD_VERSION,
+    law_email_method:emailMethod,
     law_firm_enriched_at:new Date().toISOString()};
 
   await redis.hSet(LEAD_HASH,key,JSON.stringify(enriched));
