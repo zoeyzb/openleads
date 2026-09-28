@@ -438,7 +438,7 @@ function bingResultLinks(html=""){
 async function bingFallback(lead,query,pageBudget=6){
   const emails=[],texts=[],sources=[];
   let attorneyCount=0,personalFact="",personalFactSource="";
-  const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,10);
+  const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,6);
   try{
     const searchResults=await Promise.allSettled(queries.map(async q=>{
       const url="https://www.bing.com/search?q="+encodeURIComponent(q);
@@ -832,29 +832,19 @@ async function enrichLead(key,lead){
     const alternate=people[1]||"";
     const barDomain=stateBarDomain(lead);
     const bingQueries=[
-      ...stateBarQueries(lead,people),
-      ...(phone?[`"${phone}"`,`"${phone}" "${name}" email`]:[]),
-      `"${name}" ${city} ${region} email`.trim(),
-      `"${name}" filetype:pdf attorney email`.trim(),
+      ...stateBarQueries(lead,people).slice(0,2),
+      ...(phone?[`"${phone}" "${name}" email`,`"${phone}" attorney email`]:[]),
       ...(person?[
-        ...(barDomain?[`site:${barDomain} "${person}"`]:[]),
-        `"${person}" ${region} state bar`.trim(),
-        `"${person}" attorney email filetype:pdf`.trim(),
-        `"${person}" "gmail.com"`.trim(),
-        `"${person}" "yahoo.com"`.trim(),
-        `"${person}" "aol.com"`.trim(),
-        `"${person}" "outlook.com"`.trim()
+        `"${person}" ${region} state bar email`.trim(),
+        `"${person}" attorney email filetype:pdf`.trim()
       ]:[]),
-      ...(alternate?[
-        ...(barDomain?[`site:${barDomain} "${alternate}"`]:[]),
-        `"${alternate}" ${region} attorney email`.trim(),
-        `"${alternate}" "gmail.com"`.trim(),
-        `"${alternate}" "yahoo.com"`.trim()
-      ]:[])
+      `"${name}" ${city} ${region} email`.trim(),
+      ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ];
+    const useDeepIdentity=emailRecoveryPriority(lead)>=4;
     const [bingResult,zeroResult]=await Promise.allSettled([
-      bingFallback(lead,bingQueries,6),
-      zeroCostEmailFallback(lead)
+      bingFallback(lead,bingQueries,5),
+      useDeepIdentity?zeroCostEmailFallback(lead):Promise.resolve({emails:[],source:"",name_variant:""})
     ]);
 
     if(bingResult.status==="fulfilled"){
@@ -882,7 +872,7 @@ async function enrichLead(key,lead){
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
 
   let fb={emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
-  if(!emails.length){
+  if(!emails.length&&emailRecoveryPriority(lead)>=5){
     fb=await duckFallback({...lead,website:""});
     emails.push(...fb.emails);
     combined+=" "+fb.text;
