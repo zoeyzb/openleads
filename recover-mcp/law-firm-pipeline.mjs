@@ -1,6 +1,6 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
-import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead } from "./law-firm-targeting.mjs";
+import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery } from "./law-firm-targeting.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||"";
@@ -23,6 +23,8 @@ const ENRICHED_SET="recover:law-firm:enriched:v3";
 const READY_SET="recover:law-firm:qualified:v3";
 const REJECTED_SET="recover:law-firm:rejected:v3";
 const PENDING_SET="recover:law-firm:enrich-pending:v3";
+const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
+const DISCOVERY_BACKLOG_LIMIT=Math.max(100,Number(process.env.LAW_FIRM_DISCOVERY_BACKLOG_LIMIT||1000));
 const STATS="recover:law-firm:stats:v3";
 const PROFILE={industry:"LAW_FIRM",require_phone:false,require_email:false,require_contact:false,require_no_website:true,include_no_website:true,min_score:45};
 const PRACTICE_FOCI=TARGET_LAW_PRACTICES.map(x=>({key:x.key,label:x.label}));
@@ -433,8 +435,13 @@ async function enrichBatch(){
   return done;
 }
 async function seed(cities){
-  const queue=await redis.lLen(ACTIVE_QUEUE);
+  const [queue,pendingV3,pendingSource]=await Promise.all([
+    redis.lLen(ACTIVE_QUEUE),
+    redis.sCard(PENDING_SET),
+    redis.sCard(SOURCE_PENDING_SET)
+  ]);
   if(queue>=QUEUE_HIGH_WATER)return 0;
+  if(shouldPauseLawDiscovery({pendingEnrichment:pendingV3+pendingSource,limit:DISCOVERY_BACKLOG_LIMIT}))return 0;
   const qualifiedCount=await redis.sCard(READY_SET);
   if(qualifiedCount>=TARGET_TOTAL)return 0;
   let seeded=0;
@@ -465,7 +472,7 @@ await bootstrapExistingQualified();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_load"}));
 const cities=await loadCities();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_loaded",cities:cities.length}));
-console.log(JSON.stringify({event:"law_firm_pipeline_started",cities:cities.length,practices:PRACTICE_FOCI.map(x=>x.key),target:TARGET_TOTAL,queueHighWater:QUEUE_HIGH_WATER,seedBatch:SEED_BATCH,enrichBatch:ENRICH_BATCH,enrichConcurrency:ENRICH_CONCURRENCY}));
+console.log(JSON.stringify({event:"law_firm_pipeline_started",cities:cities.length,practices:PRACTICE_FOCI.map(x=>x.key),target:TARGET_TOTAL,queueHighWater:QUEUE_HIGH_WATER,seedBatch:SEED_BATCH,enrichBatch:ENRICH_BATCH,enrichConcurrency:ENRICH_CONCURRENCY,discoveryBacklogLimit:DISCOVERY_BACKLOG_LIMIT}));
 while(true){
   try{
     const [seeded,enriched]=await Promise.all([seed(cities),enrichBatch()]);
