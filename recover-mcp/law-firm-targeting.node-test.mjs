@@ -1,11 +1,21 @@
 import assert from "node:assert/strict";
-import {isLawFirmLead,isCriminalLawFirm,scoreLawFirmLead} from "./law-firm-targeting.mjs";
+import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice} from "./law-firm-targeting.mjs";
 
 assert.equal(isLawFirmLead({category:"Personal injury attorney",name:"Smith & Doe Law"}),true);
-assert.equal(isLawFirmLead({category:"Criminal justice attorney",name:"Jones Defense Law"}),false);
-assert.equal(isCriminalLawFirm({category:"DUI attorney"}),true);
+assert.equal(isLawFirmLead({category:"Criminal defense attorney",name:"Jones Defense Law"}),true);
+assert.equal(isLawFirmLead({category:"Divorce attorney",name:"Miller Family Law"}),true);
 assert.equal(isLawFirmLead({category:"Bail bonds service",name:"Fast Bail"}),false);
-const scored=scoreLawFirmLead({category:"Estate planning attorney",name:"Miller Law Firm",phone:"3125551212",website:"https://millerlaw.com",review_count:40,rating:4.8});
+
+assert.deepEqual(lawFirmPracticeAreas("Personal injury car accident law firm"),["personal injury"]);
+assert.deepEqual(lawFirmPracticeAreas("Divorce and child custody attorney"),["family/divorce"]);
+assert.deepEqual(lawFirmPracticeAreas("DUI and criminal defense lawyer"),["criminal defense"]);
+assert.equal(matchesLawPractice("DUI criminal defense lawyer","criminal_defense"),true);
+assert.equal(matchesLawPractice("Estate planning attorney","personal_injury"),false);
+
+const scored=scoreLawFirmLead(
+  {category:"Personal injury attorney",name:"Miller Law Firm",phone:"3125551212",website:"https://millerlaw.com",review_count:40,rating:4.8},
+  {practice_focus:"personal_injury"}
+);
 assert.ok(scored.score>=70);
-assert.ok(scored.practice_areas.includes("estate planning"));
+assert.ok(scored.practice_areas.includes("personal injury"));
 console.log("law-firm-targeting tests passed");
