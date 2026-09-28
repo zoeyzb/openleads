@@ -398,13 +398,27 @@ function specificFactFromText(text="",lead={}){
 async function duckFallback(lead){
   const baseQueries=lawResearchQueries(lead);
   const people=attorneyNameVariants(lead);
+  const primaryPerson=people[0]||"";
+  const alternatePerson=people[1]||"";
   const region=String(lead.region||lead.state||lead.state_code||"").trim();
   const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
-  const attorneyQueries=people.flatMap(person=>[
-    `"${person}" ${region} attorney email`.trim(),
-    `"${person}" ${region} state bar email`.trim(),
-    ...(phone?[`"${person}" "${phone}"`]:[])
-  ]);
+  // High-yield first wave: identity + bar + public court/legal records.
+  const attorneyQueries=[
+    ...(primaryPerson?[
+      `"${primaryPerson}" ${region} attorney email`.trim(),
+      `"${primaryPerson}" ${region} state bar email`.trim(),
+      `"${primaryPerson}" email site:govinfo.gov`,
+      `"${primaryPerson}" email site:docs.justia.com`
+    ]:[]),
+    ...(alternatePerson?[
+      `"${alternatePerson}" ${region} attorney email`.trim(),
+      `"${alternatePerson}" ${region} state bar email`.trim()
+    ]:[]),
+    ...(phone&&primaryPerson?[
+      `"${primaryPerson}" "${phone}" email`,
+      `"${phone}" attorney email`
+    ]:[])
+  ];
   const queries=[...new Set([...attorneyQueries,...baseQueries])];
   if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
   const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
@@ -472,7 +486,7 @@ async function duckFallback(lead){
         sources.unshift(result.url);
       }
       const links=duckResultLinks(result.html).sort((a,b)=>{
-        const rank=u=>/statebar|barassociation|bar\.org|allbiz|chamberofcommerce|justia|lawyers\.com|findlaw|avvo|martindale|superlawyers/i.test(u)?0:1;
+        const rank=u=>/govinfo\.gov|docs\.justia\.com|statebar|barassociation|bar\.org|supremecourt|disciplinaryboard|allbiz|chamberofcommerce|justia/i.test(u)?0:1;
         return rank(a)-rank(b);
       });
       for(const link of links){
@@ -958,11 +972,16 @@ async function enrichmentLoop(){
   while(true){
     try{
       const enriched=await enrichBatch();
-      const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource]=await Promise.all([
+      const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource,emailStats]=await Promise.all([
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
-        redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(SOURCE_PENDING_SET)
+        redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
+        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit"])
       ]);
-      console.log(JSON.stringify({event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource}));
+      console.log(JSON.stringify({
+        event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource,
+        emailExisting:Number(emailStats?.[0]||0),emailDuck:Number(emailStats?.[1]||0),emailBing:Number(emailStats?.[2]||0),
+        emailZeroCost:Number(emailStats?.[3]||0),emailNoHit:Number(emailStats?.[4]||0)
+      }));
     }catch(error){console.error("law_firm_enrich_loop_error",error?.stack||error?.message||error);}
     await sleep(LOOP_MS);
   }
