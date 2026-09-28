@@ -7,17 +7,17 @@ export const LAW_PRACTICES=[
   {key:"personal_injury",label:"personal injury",target:true,re:/\b(personal injury|injury lawyer|injury attorney|accident lawyer|accident attorney|car accident|truck accident|wrongful death|slip and fall|premises liability|medical malpractice)\b/},
   {key:"family_divorce",label:"family/divorce",target:true,re:/\b(family law|family lawyer|family attorney|divorce|custody|child custody|child support|spousal support|alimony|dissolution of marriage)\b/},
   {key:"criminal_defense",label:"criminal defense",target:true,re:/\b(criminal defense|criminal lawyer|criminal attorney|dui|dwi|drug crimes?|felony|misdemeanor|expungement|white collar crime|sex crimes?|traffic defense)\b/},
-  {key:"estate_probate",label:"estate/probate",re:/\b(estate planning|probate|wills? and trusts?|trusts? and estates?|elder law|guardianship)\b/},
-  {key:"bankruptcy",label:"bankruptcy",re:/\b(bankruptcy|chapter 7|chapter 11|chapter 13|debt relief)\b/},
-  {key:"immigration",label:"immigration",re:/\b(immigration|visa|green card|citizenship|deportation|asylum)\b/},
-  {key:"employment",label:"employment/labor",re:/\b(employment law|labor law|wrongful termination|workplace discrimination|wage and hour)\b/},
+  {key:"estate_probate",label:"estate/probate",target:true,re:/\b(estate planning|probate|wills? and trusts?|trusts? and estates?|elder law|guardianship)\b/},
+  {key:"bankruptcy",label:"bankruptcy",target:true,re:/\b(bankruptcy|chapter 7|chapter 11|chapter 13|debt relief)\b/},
+  {key:"immigration",label:"immigration",target:true,re:/\b(immigration|visa|green card|citizenship|deportation|asylum)\b/},
+  {key:"employment",label:"employment/labor",target:true,re:/\b(employment law|labor law|wrongful termination|workplace discrimination|wage and hour)\b/},
   {key:"business",label:"business/corporate",re:/\b(business law|corporate law|corporate attorney|business attorney|mergers? and acquisitions?|commercial law)\b/},
-  {key:"real_estate",label:"real estate",re:/\b(real estate law|real estate attorney|property law|landlord tenant|land use|zoning)\b/},
-  {key:"workers_comp",label:"workers' compensation",re:/\b(workers'? compensation|workers'? comp|work injury)\b/},
-  {key:"disability",label:"disability",re:/\b(social security disability|ssdi|ssi disability|disability benefits)\b/},
+  {key:"real_estate",label:"real estate",target:true,re:/\b(real estate law|real estate attorney|property law|landlord tenant|land use|zoning)\b/},
+  {key:"workers_comp",label:"workers' compensation",target:true,re:/\b(workers'? compensation|workers'? comp|work injury)\b/},
+  {key:"disability",label:"disability",target:true,re:/\b(social security disability|ssdi|ssi disability|disability benefits)\b/},
   {key:"tax",label:"tax",re:/\b(tax law|tax attorney|irs|tax controversy|tax litigation)\b/},
   {key:"intellectual_property",label:"intellectual property",re:/\b(intellectual property|patent|trademark|copyright)\b/},
-  {key:"civil_litigation",label:"civil litigation",re:/\b(civil litigation|commercial litigation|general litigation|trial lawyer)\b/}
+  {key:"civil_litigation",label:"civil litigation",target:true,re:/\b(civil litigation|commercial litigation|general litigation|trial lawyer)\b/}
 ];
 
 export const TARGET_LAW_PRACTICES=LAW_PRACTICES.filter(x=>x.target);
