@@ -181,8 +181,13 @@ function specificFactFromText(text="",lead={}){
   const name=String(lead.name||"the firm").trim();
   const patterns=[
     {re:/\bformer\s+(?:county\s+|state\s+|federal\s+)?prosecutor\b/i,make:()=>`${name} highlights former-prosecutor experience`},
+    {re:/\b(?:served|worked)\s+as\s+(?:a\s+)?(?:county\s+|state\s+|federal\s+)?prosecutor\b/i,make:()=>`${name} highlights prosecutor experience`},
     {re:/\bformer\s+public\s+defender\b/i,make:()=>`${name} highlights former public-defender experience`},
     {re:/\bboard[- ]certified\b/i,make:()=>`${name} highlights a board-certified attorney credential`},
+    {re:/\bsuper\s+lawyers?\b/i,make:()=>`${name} highlights Super Lawyers recognition`},
+    {re:/\bav\s+preeminent\b/i,make:()=>`${name} highlights an AV Preeminent rating`},
+    {re:/\bbest\s+lawyers?\b/i,make:()=>`${name} highlights Best Lawyers recognition`},
+    {re:/\bmillion\s+dollar\s+advocates?\b/i,make:()=>`${name} highlights Million Dollar Advocates membership`},
     {re:/\b(?:founded|established)\s+(?:in\s+)?((?:19|20)\d{2})\b/i,make:m=>`${name} says it was established in ${m[1]}`},
     {re:/\bserving\b.{0,80}?\bsince\s+((?:19|20)\d{2})\b/i,make:m=>`${name} says it has served clients since ${m[1]}`},
     {re:/\b(\d{1,2})\+?\s+years?\s+(?:of\s+)?(?:combined\s+)?(?:legal\s+)?experience\b/i,make:m=>`${name} highlights ${m[1]}+ years of legal experience`}
@@ -443,7 +448,16 @@ async function bootstrapExistingQualified(){
         continue;
       }
 
-      if(wasQualified){alreadyQualified++;continue;}
+      if(wasQualified){
+        alreadyQualified++;
+        const quality=String(lead.personalization_quality||"").trim().toLowerCase();
+        const needsRefresh=quality!=="specific"||!practiceKeys.length;
+        if(needsRefresh){
+          await redis.sRem(ENRICHED_SET,entry.field);
+          queuedForEnrichment+=Number(await redis.sAdd(PRIORITY_PENDING_SET,entry.field)||0);
+        }
+        continue;
+      }
 
       const practices=[...new Set(practiceKeys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean))];
       const targetLabel=practices[0]||"law";
