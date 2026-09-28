@@ -1267,10 +1267,12 @@ async function bootstrapExistingQualified(){
         if(!effectiveWebsite&&!emails.length&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
           await redis.sRem(ENRICHED_SET,entry.field);
           const retrySet=emailRecoveryPriority(lead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET;
-          queuedForEnrichment+=Number(await redis.sAdd(retrySet,entry.field)||0);
+          await moveToEmailQueue(entry.field,retrySet);
+          queuedForEnrichment++;
         }else if(!effectiveWebsite&&emails.length&&!practiceKeys.length){
           await redis.sRem(ENRICHED_SET,entry.field);
-          queuedForEnrichment+=Number(await redis.sAdd(PENDING_SET,entry.field)||0);
+          await moveToEmailQueue(entry.field,PENDING_SET);
+          queuedForEnrichment++;
         }
         continue;
       }
@@ -1282,7 +1284,8 @@ async function bootstrapExistingQualified(){
         const needsRefresh=!practiceKeys.length;
         if(needsRefresh){
           await redis.sRem(ENRICHED_SET,entry.field);
-          queuedForEnrichment+=Number(await redis.sAdd(PENDING_SET,entry.field)||0);
+          await moveToEmailQueue(entry.field,PENDING_SET);
+          queuedForEnrichment++;
         }
         continue;
       }
@@ -1352,6 +1355,39 @@ async function popSetBatch(setKey,count){
   }
   return [...new Set(out)].slice(0,count);
 }
+async function moveToEmailQueue(key,targetSet){
+  await Promise.all([
+    redis.sRem(SOURCE_PENDING_SET,key),
+    redis.sRem(RECOVERABLE_PENDING_SET,key),
+    redis.sRem(PRIORITY_PENDING_SET,key),
+    redis.sRem(PENDING_SET,key)
+  ]);
+  if(targetSet)await redis.sAdd(targetSet,key);
+}
+async function normalizeEmailQueues(){
+  const [fresh,recoverable,priority]=await Promise.all([
+    redis.sMembers(SOURCE_PENDING_SET),
+    redis.sMembers(RECOVERABLE_PENDING_SET),
+    redis.sMembers(PRIORITY_PENDING_SET)
+  ]);
+  if(fresh.length){
+    await Promise.all(fresh.map(k=>Promise.all([
+      redis.sRem(RECOVERABLE_PENDING_SET,k),
+      redis.sRem(PRIORITY_PENDING_SET,k),
+      redis.sRem(PENDING_SET,k)
+    ])));
+  }
+  if(recoverable.length){
+    await Promise.all(recoverable.map(k=>Promise.all([
+      redis.sRem(PRIORITY_PENDING_SET,k),
+      redis.sRem(PENDING_SET,k)
+    ])));
+  }
+  if(priority.length){
+    await Promise.all(priority.map(k=>redis.sRem(PENDING_SET,k)));
+  }
+  console.log(JSON.stringify({event:"law_email_queue_normalized",fresh:fresh.length,recoverable:recoverable.length,priority:priority.length}));
+}
 async function enrichBatch(){
   // Fresh discoveries should be attempted immediately; they generally have the
   // highest marginal yield and should not wait behind thousands of historical misses.
@@ -1364,6 +1400,12 @@ async function enrichBatch(){
   const regularKeys=remaining?await popSetBatch(PENDING_SET,remaining):[];
   const keys=[...new Set([...freshKeys,...recoverableKeys,...priorityKeys,...regularKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
+  await Promise.all(keys.map(k=>Promise.all([
+    redis.sRem(SOURCE_PENDING_SET,k),
+    redis.sRem(RECOVERABLE_PENDING_SET,k),
+    redis.sRem(PRIORITY_PENDING_SET,k),
+    redis.sRem(PENDING_SET,k)
+  ])));
   let index=0,done=0;
   const run=async()=>{
     while(index<keys.length){
@@ -1379,7 +1421,7 @@ async function enrichBatch(){
         const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(isUsableLawEmail);
         const retryKeys=Array.isArray(retryLead.practice_keys)?retryLead.practice_keys:[];
         const retrySet=retryEmails.length?PENDING_SET:(emailRecoveryPriority(retryLead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET);
-        await redis.sAdd(retrySet,key);
+        await moveToEmailQueue(key,retrySet);
         console.warn(JSON.stringify({event:"law_firm_enrich_retry",key,error:String(error?.message||error)}));
       }
     }
@@ -1448,6 +1490,7 @@ async function seed(cities){
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"bootstrap_existing"}));
 await bootstrapExistingQualified();
 await cleanupWebsiteRefreshReady();
+await normalizeEmailQueues();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_load"}));
 const cities=await loadCities();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_loaded",cities:cities.length}));
