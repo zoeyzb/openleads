@@ -1,6 +1,6 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
-import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES } from "./law-firm-targeting.mjs";
+import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead } from "./law-firm-targeting.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||"";
@@ -210,29 +210,53 @@ function firmSizeTier(attorneyCount=0){
   return "large_21_plus";
 }
 
-function priorityScore({attorneyCount=0,reviewCount=0,hasEmail=false,painCount=0}={}){
+function priorityScore({attorneyCount=0,reviewCount=0,hasEmail=false,painCount=0,personalizationQuality="none"}={}){
   let score=0;
   if(attorneyCount>=2&&attorneyCount<=10) score+=30;
   else if(attorneyCount===1) score+=20;
   else if(attorneyCount>10&&attorneyCount<=20) score+=15;
   else if(!attorneyCount) score+=10;
   if(hasEmail) score+=30;
-  if(painCount) score+=25;
-  if(Number(reviewCount)>=10) score+=10;
-  if(Number(reviewCount)>=50) score+=5;
+  if(painCount) score+=20;
+  if(personalizationQuality==="specific") score+=15;
+  else if(personalizationQuality==="basic") score+=5;
+  if(Number(reviewCount)>=10) score+=5;
   return Math.min(100,score);
 }
-function personalization({lead,text,practices,attorneyCount,source}){
+function personalization({lead,practices,attorneyCount,source,targetLabel=""}){
   const city=String(lead.city||"").trim();
-  const safeSource=String(source||lead.website||lead.google_maps_url||"").trim();
-  if(practices.length&&city) return {fact:`Your firm highlights ${practices[0]} work in ${city}`,source:safeSource};
-  if(practices.length) return {fact:`Your firm highlights ${practices[0]} as a practice area`,source:safeSource};
-  if(attorneyCount>=2&&attorneyCount<=5) return {fact:`Your firm appears to have a focused team of about ${attorneyCount} attorneys`,source:safeSource};
-  if(attorneyCount>5&&attorneyCount<=15) return {fact:`Your firm appears to have a team of about ${attorneyCount} attorneys`,source:safeSource};
-  const reviews=Number(lead.review_count||0),rating=Number(lead.review_rating||0);
-  if(reviews>=5&&rating>0) return {fact:`I noticed your firm has ${reviews} Google reviews at about ${rating.toFixed(1)} stars`,source:String(lead.google_maps_url||"Google Maps")};
-  if(city) return {fact:`I came across your firm while researching law firms in ${city}`,source:String(lead.google_maps_url||"Google Maps")};
-  return {fact:"",source:""};
+  const name=String(lead.name||"your firm").trim();
+  const safeSource=String(source||lead.google_maps_url||"Google Maps").trim();
+  const reviews=Number(lead.review_count||lead.reviews||0);
+  const rating=Number(lead.review_rating||lead.rating||0);
+
+  if(reviews>=5&&rating>0){
+    return {
+      fact:`I noticed ${name} has ${reviews} Google reviews at about ${rating.toFixed(1)} stars${city?` in ${city}`:""}`,
+      source:String(lead.google_maps_url||safeSource),
+      quality:"specific"
+    };
+  }
+  if(attorneyCount>=2&&attorneyCount<=10){
+    return {
+      fact:`I saw that ${name} appears to have a focused team of about ${attorneyCount} attorneys${city?` in ${city}`:""}`,
+      source:safeSource,
+      quality:"specific"
+    };
+  }
+  if(practices.length&&city){
+    return {fact:`I came across ${name} while researching ${practices[0]} firms in ${city}`,source:safeSource,quality:"basic"};
+  }
+  if(targetLabel&&city){
+    return {fact:`I came across ${name} while looking at ${targetLabel} firms in ${city}`,source:String(lead.google_maps_url||safeSource),quality:"basic"};
+  }
+  if(targetLabel){
+    return {fact:`I came across ${name} while researching ${targetLabel} firms`,source:String(lead.google_maps_url||safeSource),quality:"basic"};
+  }
+  if(city){
+    return {fact:`I came across ${name} while researching law firms in ${city}`,source:String(lead.google_maps_url||safeSource),quality:"basic"};
+  }
+  return {fact:"",source:"",quality:"none"};
 }
 async function enrichLead(key,lead){
   if(String(lead.search_profile||"")!=="law-firm"&&normalize(lead.industry)!=="law firm")return false;
@@ -253,25 +277,34 @@ async function enrichLead(key,lead){
   source=fb.source||String(lead.google_maps_url||"Google Maps");
   emails=[...new Set(emails.map(x=>String(x).toLowerCase().trim()).filter(Boolean))].slice(0,5);
 
-  const practiceText=combined+" "+[lead.category,lead.name,lead.practice_focus,lead.description,lead.descriptions].join(" ");
-  const practices=lawFirmPracticeAreas(practiceText);
-  const practiceKeys=lawFirmPracticeKeys(practiceText);
-  const focus=String(lead.practice_focus||practiceKeys[0]||"").trim();
-  const p=personalization({lead,text:combined,practices,attorneyCount,source:source||String(lead.google_maps_url||"Google Maps")});
+  const observedText=combined+" "+[lead.category,lead.name,lead.description,lead.descriptions].join(" ");
+  const observedPractices=lawFirmPracticeAreas(observedText);
+  const observedKeys=lawFirmPracticeKeys(observedText);
+  const focus=String(lead.practice_focus||observedKeys[0]||"").trim();
+  const targetPractice=TARGET_LAW_PRACTICES.find(x=>x.key===focus);
+  const practices=[...new Set([...observedPractices,...(targetPractice?[targetPractice.label]:[])])];
+  const practiceKeys=[...new Set([...observedKeys,...(focus?[focus]:[])])];
+  const targetLabel=targetPractice?.label||practices[0]||"law";
+  const p=personalization({lead,practices:observedPractices,attorneyCount,source:source||String(lead.google_maps_url||"Google Maps"),targetLabel});
   const sizeTier=firmSizeTier(attorneyCount);
   const preferredSize=attorneyCount>=2&&attorneyCount<=10;
-  const hasTargetPractice=practiceKeys.length>0;
-  const painPoint="No owned website found";
-  const qualified=Boolean(hasTargetPractice&&emails.length&&p.fact&&!website);
-  const priority=priorityScore({attorneyCount,reviewCount:lead.review_count,hasEmail:emails.length>0,painCount:1});
+  const painPoint="No website";
+  const qualified=qualifiesNoWebsiteLawLead({website,emails,practice_keys:practiceKeys});
+  const priority=priorityScore({
+    attorneyCount,
+    reviewCount:lead.review_count,
+    hasEmail:emails.length>0,
+    painCount:1,
+    personalizationQuality:p.quality
+  });
   const emailAngle=qualified
-    ? `${p.fact}. I couldn't find an owned website for the firm.`
+    ? `${p.fact||`I came across ${lead.name||"your firm"} while researching ${targetLabel} firms`}. I couldn't find a website for the firm, so I thought I'd reach out.`
     : "";
 
   const enriched={...lead,emails,attorney_count_estimate:attorneyCount||null,preferred_firm_size:preferredSize,
     firm_size_tier:sizeTier,practice_areas:practices,practice_keys:practiceKeys,
-    personalization_fact:p.fact,personalization_source:p.source,
-    website_opportunity:"website_build",website_audit:null,primary_pain_point:painPoint,
+    lead_type:practices.join(" + "),personalization_fact:p.fact,personalization_source:p.source,
+    personalization_quality:p.quality,website_opportunity:"website_build",website_audit:null,primary_pain_point:painPoint,
     target_area:String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"").trim(),
     email_angle:emailAngle,lead_priority_score:priority,qualified_lead:qualified,
     law_firm_enriched_at:new Date().toISOString()};
@@ -293,11 +326,10 @@ async function enrichLead(key,lead){
   }else{
     await redis.sRem(READY_SET,key);await redis.sAdd(REJECTED_SET,key);
     if(!emails.length) await redis.hIncrBy(STATS,"rejected_no_email",1);
-    else if(!hasTargetPractice) await redis.hIncrBy(STATS,"rejected_wrong_practice",1);
+    else if(!practiceKeys.length) await redis.hIncrBy(STATS,"rejected_wrong_practice",1);
     else if(website) await redis.hIncrBy(STATS,"rejected_has_website",1);
-    else await redis.hIncrBy(STATS,"rejected_no_personalization",1);
   }
-  console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:emails.length,attorneyCount:attorneyCount||null,sizeTier,practice:practices[0]||"",painPoint:audit.primary_pain_point,qualified,priority}));
+  console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:emails.length,attorneyCount:attorneyCount||null,sizeTier,practice:practices[0]||"",painPoint,qualified,priority,personalizationQuality:p.quality}));
   return true;
 }
 async function enrichBatch(){
