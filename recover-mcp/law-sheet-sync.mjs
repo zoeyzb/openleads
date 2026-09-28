@@ -42,7 +42,7 @@ function typeLabel(keys=[],evidence=""){
   const labels=keys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
   return (labels.length?labels:lawFirmPracticeAreas(evidence))
     .map(x=>x.replace("personal injury","Personal Injury").replace("family/divorce","Family/Divorce").replace("criminal defense","Criminal Defense"))
-    .join(" + ") || "Other / General Law";
+    .join(" + ");
 }
 async function collectRows(redis){
   const out=[];
@@ -80,7 +80,7 @@ async function collectRows(redis){
       out.push({
         priority:Number(lead.lead_priority_score||0)||0,
         email:emails[0]||"",
-        row:[type,name,emails[0]||"",clean(lead.phone),city,state,"No website","No website",personal,source,opener,
+        row:[type,name,emails[0]||"",clean(lead.phone),city,state,personal,source,opener,
           clean(lead.attorney_count_estimate),clean(lead.firm_size_tier),rating||"",reviews||"",clean(lead.google_maps_url||lead.maps_url),
           Number(lead.lead_priority_score||0)||"","New"]
       });
@@ -119,7 +119,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       return;
     }
     if(!target){
-      const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title:tabName,rowCount:100,columnCount:18}}}]}});
+      const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title:tabName,rowCount:100,columnCount:16}}}]}});
       sheetId=made.replies?.[0]?.addSheet?.properties?.sheetId;
       return;
     }
@@ -127,10 +127,19 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
   }
   async function previousStatuses(){
     try{
-      const range=encodeURIComponent(`'${tabName}'!C2:R5000`);
+      const range=encodeURIComponent(`'${tabName}'!A1:R5000`);
       const json=await request(`/values/${range}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`);
+      const rows=json.values||[];
+      const headers=(rows[0]||[]).map(clean);
+      const emailIndex=headers.indexOf("Email");
+      const statusIndex=headers.indexOf("Status");
       const map=new Map();
-      for(const row of json.values||[]){const email=clean(row[0]).toLowerCase();const status=clean(row[15]);if(email&&status)map.set(email,status);}
+      if(emailIndex<0||statusIndex<0)return map;
+      for(const row of rows.slice(1)){
+        const email=clean(row[emailIndex]).toLowerCase();
+        const status=clean(row[statusIndex]);
+        if(email&&status)map.set(email,status);
+      }
       return map;
     }catch{return new Map();}
   }
@@ -141,22 +150,22 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       const statuses=await previousStatuses();
       const redis=await getRedis();
       const leads=await collectRows(redis);
-      for(const item of leads){if(statuses.has(item.email))item.row[17]=statuses.get(item.email);}
-      const headers=["Type","Firm Name","Email","Phone","City","State","Website","Pain Point","Personal Fact","Personal Fact Source","Suggested Opener","Attorney Count","Firm Size","Rating","Reviews","Google Maps","Priority","Status"];
+      for(const item of leads){if(statuses.has(item.email))item.row[15]=statuses.get(item.email);}
+      const headers=["Type","Firm Name","Email","Phone","City","State","Personalization","Research Source","Suggested Opener","Attorney Count","Firm Size","Rating","Reviews","Google Maps","Priority","Status"];
       const values=[headers,...leads.map(x=>x.row)];
-      const endRow=Math.max(2,values.length),rowCount=Math.max(30,endRow+3);
+      const endRow=Math.max(2,values.length),rowCount=Math.max(10,endRow+1);
       await request(`/values/${encodeURIComponent(`'${tabName}'!A1:R${Math.max(5000,endRow)}`)}:clear`,{method:"POST",body:{}});
-      await request(`/values/${encodeURIComponent(`'${tabName}'!A1:R${endRow}`)}?valueInputOption=RAW`,{method:"PUT",body:{range:`'${tabName}'!A1:R${endRow}`,majorDimension:"ROWS",values}});
-      const widths=[120,210,220,130,120,70,100,110,300,260,360,95,115,75,75,220,75,100];
+      await request(`/values/${encodeURIComponent(`'${tabName}'!A1:P${endRow}`)}?valueInputOption=RAW`,{method:"PUT",body:{range:`'${tabName}'!A1:P${endRow}`,majorDimension:"ROWS",values}});
+      const widths=[155,210,220,130,120,70,320,260,360,95,115,75,75,220,75,100];
       const requests=[
-        {updateSheetProperties:{properties:{sheetId,gridProperties:{rowCount,columnCount:18,frozenRowCount:1}},fields:"gridProperties(rowCount,columnCount,frozenRowCount)"}},
-        {updateCells:{range:{sheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:18},rows:[{values:Array.from({length:18},()=>({userEnteredFormat:{backgroundColor:{red:0.10,green:0.13,blue:0.18},textFormat:{foregroundColor:{red:1,green:1,blue:1},bold:true,fontSize:10},verticalAlignment:"MIDDLE",wrapStrategy:"WRAP"}}))}],fields:"userEnteredFormat"}},
+        {updateSheetProperties:{properties:{sheetId,gridProperties:{rowCount,columnCount:16,frozenRowCount:1}},fields:"gridProperties(rowCount,columnCount,frozenRowCount)"}},
+        {updateCells:{range:{sheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:16},rows:[{values:Array.from({length:16},()=>({userEnteredFormat:{backgroundColor:{red:0.10,green:0.13,blue:0.18},textFormat:{foregroundColor:{red:1,green:1,blue:1},bold:true,fontSize:10},verticalAlignment:"MIDDLE",wrapStrategy:"WRAP"}}))}],fields:"userEnteredFormat"}},
         {updateDimensionProperties:{range:{sheetId,dimension:"ROWS",startIndex:0,endIndex:1},properties:{pixelSize:34},fields:"pixelSize"}},
-        {setDataValidation:{range:{sheetId,startRowIndex:1,endRowIndex:rowCount,startColumnIndex:17,endColumnIndex:18},rule:{condition:{type:"ONE_OF_LIST",values:["New","Review","Ready","Contacted","Skip"].map(userEnteredValue=>({userEnteredValue}))},strict:false,showCustomUi:true}}},
-        {setBasicFilter:{filter:{range:{sheetId,startRowIndex:0,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:18}}}}
+        {setDataValidation:{range:{sheetId,startRowIndex:1,endRowIndex:rowCount,startColumnIndex:15,endColumnIndex:16},rule:{condition:{type:"ONE_OF_LIST",values:["New","Review","Ready","Contacted","Skip"].map(userEnteredValue=>({userEnteredValue}))},strict:false,showCustomUi:true}}},
+        {setBasicFilter:{filter:{range:{sheetId,startRowIndex:0,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:16}}}}
       ];
       widths.forEach((pixelSize,i)=>requests.push({updateDimensionProperties:{range:{sheetId,dimension:"COLUMNS",startIndex:i,endIndex:i+1},properties:{pixelSize},fields:"pixelSize"}}));
-      requests.push({repeatCell:{range:{sheetId,startRowIndex:1,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:18},cell:{userEnteredFormat:{verticalAlignment:"TOP",wrapStrategy:"WRAP"}},fields:"userEnteredFormat(verticalAlignment,wrapStrategy)"}});
+      requests.push({repeatCell:{range:{sheetId,startRowIndex:1,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:16},cell:{userEnteredFormat:{verticalAlignment:"TOP",wrapStrategy:"WRAP"}},fields:"userEnteredFormat(verticalAlignment,wrapStrategy)"}});
       await request(":batchUpdate",{method:"POST",body:{requests}});
       console.log(JSON.stringify({event:"law_sheet_sync",rows:leads.length,spreadsheetId,tabName}));
     }catch(error){console.error("law_sheet_sync_error",error?.message||error);}
