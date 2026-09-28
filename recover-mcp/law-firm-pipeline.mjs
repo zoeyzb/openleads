@@ -24,7 +24,7 @@ const READY_SET="recover:law-firm:qualified:v2";
 const REJECTED_SET="recover:law-firm:rejected:v2";
 const PENDING_SET="recover:law-firm:enrich-pending:v2";
 const STATS="recover:law-firm:stats:v2";
-const PROFILE={industry:"LAW_FIRM",require_phone:false,require_email:false,require_contact:false,require_no_website:false,include_no_website:false,min_score:50};
+const PROFILE={industry:"LAW_FIRM",require_phone:false,require_email:false,require_contact:false,require_no_website:true,include_no_website:true,min_score:45};
 const PRACTICE_FOCI=TARGET_LAW_PRACTICES.map(x=>({key:x.key,label:x.label}));
 const SCOPE_SET=campaignLeadSetKey(PROFILE);
 
@@ -239,54 +239,39 @@ async function enrichLead(key,lead){
   if(await redis.sIsMember(ENRICHED_SET,key))return false;
 
   const website=String(lead.website||"").trim();
-  if(!/^https?:\/\//i.test(website)){
+  if(/^https?:\/\//i.test(website)){
     await redis.sAdd(ENRICHED_SET,key);
     await redis.sAdd(REJECTED_SET,key);
-    await redis.hIncrBy(STATS,"rejected_no_website",1);
+    await redis.hIncrBy(STATS,"rejected_has_website",1);
     return true;
   }
 
   let emails=[...(Array.isArray(lead.emails)?lead.emails:[])], combined="",source="",attorneyCount=0;
-  let homeHtml="",homeText="",homeElapsed=0,homeUrl=website;
-  try{
-    const home=await fetchText(website);
-    homeHtml=home.html; homeText=stripHtml(home.html); homeElapsed=home.elapsed_ms; homeUrl=home.final_url||website;
-    combined+=" "+homeText; source=homeUrl;
-    attorneyCount=Math.max(attorneyCount,attorneyEstimate(home.html,homeText));
-    for(const url of linksFrom(homeUrl,home.html).slice(0,3)){
-      try{
-        const page=await fetchText(url); const pageText=stripHtml(page.html);
-        combined+=" "+pageText; emails.push(...emailsFrom(page.html));
-        attorneyCount=Math.max(attorneyCount,attorneyEstimate(page.html,pageText));
-      }catch{}
-    }
-    emails.push(...emailsFrom(home.html));
-  }catch{}
-
-  if(!emails.length){
-    const fb=await duckFallback({...lead,website:homeUrl||website}); emails.push(...fb.emails); combined+=" "+fb.text;
-  }
+  const fb=await duckFallback({...lead,website:""});
+  emails.push(...fb.emails);
+  combined+=" "+fb.text;
+  source=fb.source||String(lead.google_maps_url||"Google Maps");
   emails=[...new Set(emails.map(x=>String(x).toLowerCase().trim()).filter(Boolean))].slice(0,5);
 
-  const practiceText=combined+" "+[lead.category,lead.name,lead.practice_focus].join(" ");
+  const practiceText=combined+" "+[lead.category,lead.name,lead.practice_focus,lead.description,lead.descriptions].join(" ");
   const practices=lawFirmPracticeAreas(practiceText);
   const practiceKeys=lawFirmPracticeKeys(practiceText);
   const focus=String(lead.practice_focus||practiceKeys[0]||"").trim();
-  const audit=websiteAudit({html:homeHtml,text:homeText,url:homeUrl||website,practiceFocus:focus,elapsedMs:homeElapsed});
-  const p=personalization({lead,text:combined,practices,attorneyCount,source:source||homeUrl||website});
+  const p=personalization({lead,text:combined,practices,attorneyCount,source:source||String(lead.google_maps_url||"Google Maps")});
   const sizeTier=firmSizeTier(attorneyCount);
   const preferredSize=attorneyCount>=2&&attorneyCount<=10;
   const hasTargetPractice=practiceKeys.length>0;
-  const qualified=Boolean(hasTargetPractice&&emails.length&&p.fact&&audit.primary_pain_point);
-  const priority=priorityScore({attorneyCount,reviewCount:lead.review_count,hasEmail:emails.length>0,painCount:audit.pain_points.length});
+  const painPoint="No owned website found";
+  const qualified=Boolean(hasTargetPractice&&emails.length&&p.fact&&!website);
+  const priority=priorityScore({attorneyCount,reviewCount:lead.review_count,hasEmail:emails.length>0,painCount:1});
   const emailAngle=qualified
-    ? `${p.fact}. Website opportunity: ${audit.primary_pain_point}`
+    ? `${p.fact}. I couldn't find an owned website for the firm.`
     : "";
 
   const enriched={...lead,emails,attorney_count_estimate:attorneyCount||null,preferred_firm_size:preferredSize,
     firm_size_tier:sizeTier,practice_areas:practices,practice_keys:practiceKeys,
     personalization_fact:p.fact,personalization_source:p.source,
-    website_opportunity:"has_website",website_audit:audit,primary_pain_point:audit.primary_pain_point,
+    website_opportunity:"website_build",website_audit:null,primary_pain_point:painPoint,
     target_area:String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"").trim(),
     email_angle:emailAngle,lead_priority_score:priority,qualified_lead:qualified,
     law_firm_enriched_at:new Date().toISOString()};
@@ -309,7 +294,7 @@ async function enrichLead(key,lead){
     await redis.sRem(READY_SET,key);await redis.sAdd(REJECTED_SET,key);
     if(!emails.length) await redis.hIncrBy(STATS,"rejected_no_email",1);
     else if(!hasTargetPractice) await redis.hIncrBy(STATS,"rejected_wrong_practice",1);
-    else if(!audit.primary_pain_point) await redis.hIncrBy(STATS,"rejected_no_pain_point",1);
+    else if(website) await redis.hIncrBy(STATS,"rejected_has_website",1);
     else await redis.hIncrBy(STATS,"rejected_no_personalization",1);
   }
   console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:emails.length,attorneyCount:attorneyCount||null,sizeTier,practice:practices[0]||"",painPoint:audit.primary_pain_point,qualified,priority}));
@@ -351,7 +336,7 @@ async function seed(cities){
       const id=randomUUID(),now=new Date().toISOString();
       const job={id,batch_id:"us-law-firm-qualified-v2",industry:"LAW_FIRM",search_profile:"law-firm",practice_focus:focus.key,location:area.location,
         partition_state:area.state,partition_city:area.city,source_population:area.population,target:16,min_score:50,
-        require_phone:false,require_email:false,require_contact:false,require_no_website:false,include_no_website:false,
+        require_phone:false,require_email:false,require_contact:false,require_no_website:true,include_no_website:true,
         max_rounds:1,depth:3,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,
         qualified_count:0,stored_count:0,maps_jobs:[],source:"law_firm_pipeline_v2",created_at:now,updated_at:now};
       const claim=await claimCoverage(redis,job,{source:"law_firm_pipeline_v2",practice_focus:focus.key});
