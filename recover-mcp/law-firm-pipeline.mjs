@@ -388,7 +388,7 @@ function bingResultLinks(html=""){
 async function bingFallback(lead,query,pageBudget=6){
   const emails=[],texts=[],sources=[];
   let attorneyCount=0,personalFact="",personalFactSource="";
-  const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,6);
+  const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,10);
   try{
     const searchResults=await Promise.allSettled(queries.map(async q=>{
       const url="https://www.bing.com/search?q="+encodeURIComponent(q);
@@ -737,9 +737,17 @@ async function enrichLead(key,lead){
       `"${name}" filetype:pdf attorney email`.trim(),
       ...(person?[
         `"${person}" ${region} state bar email`.trim(),
-        `"${person}" attorney email filetype:pdf`.trim()
+        `"${person}" attorney email filetype:pdf`.trim(),
+        `"${person}" "gmail.com"`.trim(),
+        `"${person}" "yahoo.com"`.trim(),
+        `"${person}" "aol.com"`.trim(),
+        `"${person}" "outlook.com"`.trim()
       ]:[]),
-      ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
+      ...(alternate?[
+        `"${alternate}" ${region} attorney email`.trim(),
+        `"${alternate}" "gmail.com"`.trim(),
+        `"${alternate}" "yahoo.com"`.trim()
+      ]:[])
     ];
     const [bingResult,zeroResult]=await Promise.allSettled([
       bingFallback(lead,bingQueries,6),
