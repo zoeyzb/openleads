@@ -75,7 +75,8 @@ async function collectRows(redis){
         personal=`${name} has ${reviews} Google reviews at about ${rating.toFixed(1)} stars${city?` in ${city}`:""}`;
         source=clean(lead.google_maps_url||lead.maps_url);
       }
-      const context=city?`${type||"law"} firms in ${city}`:`${type||"law"} firms`;
+      const contextType=type==="Needs Classification"?"law":(type||"law");
+      const context=city?`${contextType} firms in ${city}`:`${contextType} firms`;
       const opener=personal
         ? `I found ${name} while looking at ${context}. ${personal.replace(/^I noticed\s+/i,"")}. I couldn't find a firm website, so I wanted to reach out.`
         : `I found ${name} while looking at ${context}, but I couldn't find a firm website, so I wanted to reach out.`;
