@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
-const EMAIL_METHOD_VERSION="email-v12-strict";
+const EMAIL_METHOD_VERSION="email-v13-conversion";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -526,9 +526,12 @@ async function bingFallback(lead,query,pageBudget=6){
         if(links.length>=pageBudget)break;
       }
     }
-    if(emails.length)return {emails:[...new Set(emails)],text:texts.join(" ").slice(0,24000),source:sources[0]||"",attorneyCount,personalFact,personalFactSource};
-
-    const pages=await Promise.allSettled(links.slice(0,pageBudget).map(target=>fetchText(target,4500)));
+    // An email hit alone is not enough for this campaign. We still need
+    // independent firm-size evidence so a lead can prove the 2-10 attorney gate.
+    // Fetch only the best two identity pages when an email is already present;
+    // otherwise use the normal page budget for email discovery.
+    const evidencePageBudget=emails.length?Math.min(2,pageBudget):pageBudget;
+    const pages=await Promise.allSettled(links.slice(0,evidencePageBudget).map(target=>fetchText(target,4500)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
       if(item.status!=="fulfilled")continue;
@@ -1286,10 +1289,14 @@ async function bootstrapExistingQualified(){
           qualifiedRemoved++;
         }
         if(!effectiveWebsite&&(!emails.length||!sourceBacked||attorneyCount===0)&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
-          await redis.sRem(ENRICHED_SET,entry.field);
-          const retrySet=emailRecoveryPriority(lead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET;
-          await moveToEmailQueue(entry.field,retrySet);
-          queuedForEnrichment++;
+          // Do not turn every old miss into active work after a version bump.
+          // Only high-signal records (named attorney + phone + bar/city evidence)
+          // earn a bounded background retry; fresh discoveries use SOURCE_PENDING_SET.
+          if(emailRecoveryPriority(lead)>=5){
+            await redis.sRem(ENRICHED_SET,entry.field);
+            await moveToEmailQueue(entry.field,RECOVERABLE_PENDING_SET);
+            queuedForEnrichment++;
+          }
         }else if(!effectiveWebsite&&emails.length&&!practiceKeys.length){
           await redis.sRem(ENRICHED_SET,entry.field);
           await moveToEmailQueue(entry.field,PENDING_SET);
@@ -1411,16 +1418,19 @@ async function normalizeEmailQueues(){
   console.log(JSON.stringify({event:"law_email_queue_normalized",fresh:fresh.length,recoverable:recoverable.length,priority:priority.length}));
 }
 async function enrichBatch(){
-  // Fresh discoveries should be attempted immediately; they generally have the
-  // highest marginal yield and should not wait behind thousands of historical misses.
+  // Revenue-path scheduling: fresh discoveries first, then high-recovery
+  // candidates. Old misses are allowed a small background slice only.
+  const historicalCap=Math.max(1,Math.min(8,Math.floor(ENRICH_BATCH*0.15)));
   const freshKeys=await popSetBatch(SOURCE_PENDING_SET,ENRICH_BATCH);
   const afterFresh=Math.max(0,ENRICH_BATCH-freshKeys.length);
-  const recoverableKeys=afterFresh?await popSetBatch(RECOVERABLE_PENDING_SET,afterFresh):[];
-  const afterRecoverable=Math.max(0,afterFresh-recoverableKeys.length);
-  const priorityKeys=afterRecoverable?await popSetBatch(PRIORITY_PENDING_SET,afterRecoverable):[];
-  const remaining=Math.max(0,ENRICH_BATCH-freshKeys.length-recoverableKeys.length-priorityKeys.length);
-  const regularKeys=remaining?await popSetBatch(PENDING_SET,remaining):[];
-  const keys=[...new Set([...freshKeys,...recoverableKeys,...priorityKeys,...regularKeys])].slice(0,ENRICH_BATCH);
+  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,afterFresh):[];
+  const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
+  const regularKeys=afterPriority?await popSetBatch(PENDING_SET,afterPriority):[];
+  const afterRegular=Math.max(0,afterPriority-regularKeys.length);
+  const recoverableKeys=afterRegular
+    ? await popSetBatch(RECOVERABLE_PENDING_SET,Math.min(historicalCap,afterRegular))
+    : [];
+  const keys=[...new Set([...freshKeys,...priorityKeys,...regularKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
   await Promise.all(keys.map(k=>Promise.all([
     redis.sRem(SOURCE_PENDING_SET,k),
