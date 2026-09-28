@@ -309,14 +309,32 @@ function contextHasExactPhone(text="",lead={}){
 function contextualEmails(text="",lead={}){
   const raw=String(text||""),out=[];
   const re=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
-  for(const m of raw.matchAll(re)){
-    const email=String(m[0]||"").toLowerCase().replace(/[),.;:]+$/,"");
-    if(!isUsableLawEmail(email)||isThirdPartyEmailDomain(email))continue;
-    const start=Math.max(0,(m.index||0)-900),end=Math.min(raw.length,(m.index||0)+email.length+900);
+  const all=[...raw.matchAll(re)]
+    .map(m=>({email:String(m[0]||"").toLowerCase().replace(/[),.;:]+$/,""),index:m.index||0}))
+    .filter(x=>isUsableLawEmail(x.email)&&!isThirdPartyEmailDomain(x.email));
+  const uniqueAll=[...new Set(all.map(x=>x.email))];
+  const fullPageMatch=pageMatchesLead(raw,lead);
+  const fullPhoneMatch=contextHasExactPhone(raw,lead);
+
+  for(const m of all){
+    const start=Math.max(0,m.index-900),end=Math.min(raw.length,m.index+m.email.length+900);
     const context=raw.slice(start,end);
-    if(!pageMatchesLead(context,lead))continue;
-    // Accept either domain/name affinity OR exact phone evidence on the same page/snippet.
-    if(emailLooksOwnedByLead(email,lead)||contextHasExactPhone(context,lead))out.push(email);
+    const nearbyIdentity=pageMatchesLead(context,lead);
+    const nearbyPhone=contextHasExactPhone(context,lead);
+    if(nearbyIdentity&&(emailLooksOwnedByLead(m.email,lead)||nearbyPhone)){
+      out.push(m.email);continue;
+    }
+    // Bar/court/public profile pages often render identity, phone and email in
+    // separate sections. Exact whole-page phone + identity is strong enough
+    // when the page only exposes a small number of usable addresses.
+    if(fullPageMatch&&fullPhoneMatch&&uniqueAll.length<=4){
+      out.push(m.email);continue;
+    }
+    // If the entire page is clearly the attorney/firm profile, allow a free
+    // professional mailbox or firm/name-affine domain even without adjacency.
+    if(fullPageMatch&&uniqueAll.length<=3&&(FREE_MAIL_DOMAINS.has(m.email.split("@")[1]||"")||emailLooksOwnedByLead(m.email,lead))){
+      out.push(m.email);
+    }
   }
   return [...new Set(out)].slice(0,8);
 }
@@ -370,7 +388,7 @@ function bingResultLinks(html=""){
 async function bingFallback(lead,query,pageBudget=6){
   const emails=[],texts=[],sources=[];
   let attorneyCount=0,personalFact="",personalFactSource="";
-  const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,4);
+  const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,6);
   try{
     const searchResults=await Promise.allSettled(queries.map(async q=>{
       const url="https://www.bing.com/search?q="+encodeURIComponent(q);
@@ -714,13 +732,14 @@ async function enrichLead(key,lead){
     const person=people[0]||"";
     const alternate=people[1]||"";
     const bingQueries=[
+      ...(phone?[`"${phone}"`,`"${phone}" "${name}" email`]:[]),
       `"${name}" ${city} ${region} email`.trim(),
+      `"${name}" filetype:pdf attorney email`.trim(),
       ...(person?[
         `"${person}" ${region} state bar email`.trim(),
-        `"${person}" email site:govinfo.gov`
+        `"${person}" attorney email filetype:pdf`.trim()
       ]:[]),
-      ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[]),
-      ...(phone?[`"${phone}" "${name}" email`]:[])
+      ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ];
     const [bingResult,zeroResult]=await Promise.allSettled([
       bingFallback(lead,bingQueries,6),
