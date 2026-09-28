@@ -822,8 +822,15 @@ async function websiteAuditBatch(){
         let lead;try{lead=JSON.parse(raw)||{};}catch{continue;}
         if(await auditWebsiteRefreshLead(key,lead))done++;
       }catch(error){
-        await redis.sAdd(WEBSITE_AUDIT_PENDING_SET,key);
-        console.warn(JSON.stringify({event:"law_website_audit_retry",key,error:String(error?.message||error)}));
+        const message=String(error?.message||error);
+        if(/\bhttp\s+(?:401|403|404|410)\b/i.test(message)){
+          await redis.sAdd(WEBSITE_REFRESH_REJECTED_SET,key);
+          await redis.hIncrBy(STATS,"website_refresh_blocked_http",1);
+          console.warn(JSON.stringify({event:"law_website_audit_blocked",key,error:message}));
+        }else{
+          await redis.sAdd(WEBSITE_AUDIT_PENDING_SET,key);
+          console.warn(JSON.stringify({event:"law_website_audit_retry",key,error:message}));
+        }
       }
     }
   };
