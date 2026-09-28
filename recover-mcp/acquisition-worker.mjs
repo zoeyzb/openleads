@@ -873,6 +873,19 @@ async function processAcquisition(id) {
     return;
   }
   const job=JSON.parse(raw);
+  if (String(job.search_profile||"")==="law-firm" && /^email-v(?:[1-7])$/i.test(String(job.coverage_pass||""))) {
+    job.status="partial_complete";
+    job.phase="complete";
+    job.reason="superseded_by_email_v8";
+    job.completed_at=new Date().toISOString();
+    await saveJob(job);
+    await markCoverage(redis,job,"exhausted",{reason:"superseded_by_email_v8"});
+    console.log(JSON.stringify({event:"law_job_superseded",acquisition_id:id,coverage_pass:job.coverage_pass}));
+    clearInterval(heartbeat);
+    await redis.del(leaseKey(id));
+    currentJobId=null;
+    return;
+  }
   if (String(job.search_profile||"")==="core-home-service") {
     // Normalize legacy queued nationwide jobs to the email-first contact policy.
     // A lead can qualify with email or phone; phone is no longer mandatory.
