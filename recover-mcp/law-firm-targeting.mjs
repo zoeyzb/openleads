@@ -28,6 +28,25 @@ export function matchesLawPractice(value="",focus=""){
   return p ? p.re.test(normalize(value)) : false;
 }
 
+const BLOCKED_LAW_EMAIL_DOMAINS=new Set([
+  "duckduckgo.com",
+  "attorneyyellowpages.com",
+  "example.com",
+  "example.org",
+  "example.net"
+]);
+
+export function isUsableLawEmail(value=""){
+  const email=String(value||"").trim().toLowerCase();
+  if(!/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,24}$/.test(email))return false;
+  const [local,domain]=email.split("@");
+  if(!local||!domain)return false;
+  if([...BLOCKED_LAW_EMAIL_DOMAINS].some(d=>domain===d||domain.endsWith("."+d)))return false;
+  if(/^(?:error-lite(?:\+.*)?|jane\.?doe|janedoe|john\.?doe|johndoe|jdoe|your|test|example|firstname\.?lastname|first\.?last|flast|noreply|no-reply|donotreply)$/i.test(local))return false;
+  if(/(?:com|net|org)please$/i.test(domain))return false;
+  return true;
+}
+
 export function qualifiesNoWebsiteLawLead(lead={}){
   const website=String(lead.website||"").trim();
   const contacts=Array.isArray(lead.emails)?lead.emails:[lead.email].filter(Boolean);
