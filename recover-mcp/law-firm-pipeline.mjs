@@ -880,7 +880,7 @@ async function seed(cities){
     await redis.sAdd(SEEDED_SET,areaKey);
     if(!claim.claimed)continue;
 
-    await redis.set(`recover:acquisition:job:${id}`,JSON.stringify(job),{EX:JOB_TTL});
+    await redis.set(`recover:acq:${id}`,JSON.stringify(job),{EX:JOB_TTL});
     await redis.sAdd("recover:acq:index",id);
     await redis.lPush(ACTIVE_QUEUE,id);
     added++;
