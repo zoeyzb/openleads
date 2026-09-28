@@ -544,6 +544,37 @@ async function persistPermanentQualified(redis, job, leads) {
   }
   return {unique:identities.length,newAdded,duplicates:existingCount,historicalSheetDuplicates};
 }
+async function persistLawWebsiteCandidates(redis,job,records=[]){
+  if(String(job.search_profile||"")!=="law-firm"||!Array.isArray(records)||!records.length)return {seen:0,queued:0};
+  const candidates=locationCandidateSet(records,job)
+    .filter(lead=>matchesRequestedIndustry(lead,job.industry))
+    .filter(lead=>isLawFirmLead(lead))
+    .filter(lead=>isOwnedBusinessWebsite(lead.website))
+    .slice(0,60);
+  if(!candidates.length)return {seen:0,queued:0};
+  const entries=[],keys=[];
+  for(const lead of candidates){
+    const compact=compactLead(lead);
+    const key=permanentLeadIdentity(compact);
+    if(!key)continue;
+    keys.push(key);
+    entries.push(key,JSON.stringify({
+      ...compact,
+      acquisition_id:job.id,
+      acquisition_location:job.location||"",
+      industry:"LAW_FIRM",
+      search_profile:"law-firm",
+      practice_focus:job.practice_focus||"",
+      website_opportunity:"website_refresh",
+      website_candidate_at:new Date().toISOString()
+    }));
+  }
+  if(entries.length)await redis.hSet("recover:law-firm:website-candidates:v1",entries);
+  let queued=0;
+  if(keys.length)queued=Number(await redis.sAdd("recover:law-firm:website-audit-pending:v1",keys)||0);
+  if(keys.length)console.log(JSON.stringify({event:"law_website_candidates",acquisition_id:job.id,seen:keys.length,queued}));
+  return {seen:keys.length,queued};
+}
 function mapsStatus(job) {
   return String(job?.status||job?.Status||job?.state||job?.State||job?.job?.status||job?.job?.Status||"").toLowerCase();
 }
@@ -1117,6 +1148,11 @@ async function processAcquisition(id) {
 
       job.raw_count=roundRows.length+(job.raw_count||0);
       job.unique_count=allRaw.length;
+
+      if(String(job.search_profile||"")==="law-firm"){
+        try{await persistLawWebsiteCandidates(redis,job,roundRows);}
+        catch(error){console.warn(JSON.stringify({event:"law_website_candidate_error",acquisition_id:id,error:String(error?.message||error)}));}
+      }
 
       let leads;
       if (job.require_no_website) {
