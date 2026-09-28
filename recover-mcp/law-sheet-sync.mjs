@@ -74,7 +74,15 @@ async function collectRows(redis){
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
         .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
-      if(!emails.length)continue;
+      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+      const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
+      const noOwnedWebsite=!/^https?:\/\//i.test(clean(lead.website||lead.website_url));
+      if(!qualifiesNoWebsiteLawLead({
+        website:noOwnedWebsite?"":clean(lead.website||lead.website_url),
+        emails,
+        attorney_count_estimate:attorneyCount,
+        email_source_verified:sourceVerified
+      }))continue;
 
       const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const practiceKeys=[...new Set([
@@ -288,13 +296,8 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       await request(":batchUpdate",{method:"POST",body:{requests}});
       console.log(JSON.stringify({event:"law_sheet_sync",rows:leads.length,spreadsheetId,tabName}));
 
-      const refreshTabName="Website Refresh Leads";
-      const refreshSheetId=await ensureAdditionalSheet(refreshTabName);
-      const refreshStatuses=await previousStatusesFor(refreshTabName);
-      const refreshLeads=await collectWebsiteRefreshRows(redis);
-      for(const item of refreshLeads){if(refreshStatuses.has(item.email))item.row[15]=refreshStatuses.get(item.email);}
-      await writeRowsToTab(refreshTabName,refreshSheetId,refreshLeads);
-      console.log(JSON.stringify({event:"law_website_refresh_sheet_sync",rows:refreshLeads.length,spreadsheetId,tabName:refreshTabName}));
+      // This campaign is strictly no-owned-website law firms only.
+      // Website-refresh inventory is intentionally excluded from the outreach sheet.
     }catch(error){console.error("law_sheet_sync_error",error?.message||error);}
     finally{running=false;}
   }
