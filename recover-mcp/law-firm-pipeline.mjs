@@ -984,9 +984,11 @@ async function bootstrapExistingQualified(){
       scanned++;
 
       const website=String(lead.website||"").trim();
-      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+      const identityEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>String(x||"").trim().toLowerCase())
         .filter(x=>emailIdentityStrong(x,lead));
+      const emailChecks=await Promise.all(identityEmails.map(async email=>({email,ok:await hasMailExchange(email)})));
+      const emails=emailChecks.filter(x=>x.ok).map(x=>x.email);
       const evidenceText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const observedKeys=lawFirmPracticeKeys(evidenceText);
       const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
