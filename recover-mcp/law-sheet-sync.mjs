@@ -201,7 +201,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
     const meta=await request("?fields=sheets.properties");
     const target=(meta.sheets||[]).find(s=>s?.properties?.title===title);
     if(target)return target.properties.sheetId;
-    const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title,rowCount:100,columnCount:16}}}]}});
+    const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title,gridProperties:{rowCount:100,columnCount:16}}}}]}});
     return made.replies?.[0]?.addSheet?.properties?.sheetId;
   }
   async function previousStatusesFor(title){
