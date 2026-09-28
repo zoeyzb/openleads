@@ -39,6 +39,21 @@ export function shouldPauseLawDiscovery({pendingEnrichment=0,limit=1000}={}){
   return Number(pendingEnrichment||0)>=Math.max(1,Number(limit||1000));
 }
 
+export function lawResearchQueries(lead={}){
+  const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
+  const city=String(lead.city||"").trim();
+  const region=String(lead.region||"").trim();
+  const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
+  if(!name)return [];
+  const where=[city,region].filter(Boolean).join(" ");
+  const queries=[
+    `"${name}" ${where} email`.trim(),
+    `"${name}" ${where} attorney practice`.trim()
+  ];
+  if(phone)queries.push(`"${name}" "${phone}" email`);
+  return [...new Set(queries)].slice(0,3);
+}
+
 export function isLawFirmLead(lead={}){
   const category=normalize(lead.category||lead.industry||"");
   const text=normalize([category,lead.name,lead.title,lead.description,lead.descriptions].filter(Boolean).join(" "));
