@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,shouldPauseLawDiscovery} from "./law-firm-targeting.mjs";
+import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,shouldPauseLawDiscovery,lawResearchQueries} from "./law-firm-targeting.mjs";
 
 assert.equal(isLawFirmLead({category:"Personal injury attorney",name:"Smith & Doe Law"}),true);
 assert.equal(isLawFirmLead({category:"Criminal defense attorney",name:"Jones Defense Law"}),true);
@@ -47,3 +47,8 @@ assert.equal(qualifiesNoWebsiteLawLead({
 
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:1500,limit:1000}),true);
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:999,limit:1000}),false);
+
+const researchQueries=lawResearchQueries({name:"Smith Law",city:"Dallas",region:"TX",phone:"2145551212"});
+assert.ok(researchQueries.length>=2);
+assert.ok(researchQueries.some(q=>q.includes("email")));
+assert.ok(researchQueries.some(q=>q.includes("practice")));
