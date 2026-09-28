@@ -15,15 +15,15 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
-const EMAIL_METHOD_VERSION="email-v6";
+const EMAIL_METHOD_VERSION="email-v7";
 const LOOP_MS=Math.max(1500,Number(process.env.LAW_FIRM_LOOP_MS||5000));
 const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_FETCH_TIMEOUT_MS||7000)));
 const JOB_TTL=Math.max(86400,Number(process.env.ACQUISITION_TTL_SECONDS||604800));
 const ACTIVE_QUEUE="recover:acquisition:queue:law-firm";
 const LEAD_HASH="recover:leadstore:qualified";
 const SEEDED_SET="recover:law-firm:seeded:v6";
-const SEED_CURSOR_KEY="recover:law-firm:seed-cursor:v6";
-const SEED_WAVE_KEY="recover:law-firm:seed-wave:v6";
+const SEED_CURSOR_KEY="recover:law-firm:seed-cursor:v7";
+const SEED_WAVE_KEY="recover:law-firm:seed-wave:v7";
 const ENRICHED_SET="recover:law-firm:enriched:v3";
 const READY_SET="recover:law-firm:qualified:v3";
 const REJECTED_SET="recover:law-firm:rejected:v3";
@@ -686,49 +686,67 @@ async function enrichLead(key,lead){
   }
 
   let emails=[...(Array.isArray(lead.emails)?lead.emails:[])], combined="",source="",attorneyCount=0;
+  let personalFact="",personalFactSource="";
   let emailMethod=emails.some(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))?"existing":"none";
   if(emailMethod==="existing")await redis.hIncrBy(STATS,"email_existing_hit",1);
-  const fb=await duckFallback({...lead,website:""});
-  emails.push(...fb.emails);
-  if(emailMethod==="none"&&fb.emails.length){
-    emailMethod="duck";
-    await redis.hIncrBy(STATS,"email_duck_hit",1);
-  }
-  combined+=" "+fb.text;
-  source=fb.source||String(lead.google_maps_url||"Google Maps");
-  attorneyCount=Math.max(attorneyCount,Number(fb.attorneyCount||0));
-  if(!emails.some(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))){
+
+  // The measured Duck lane produced zero hits. Run the two productive lanes
+  // first and in parallel; only pay the Duck/page-fetch cost when both fail.
+  if(emailMethod==="none"){
     const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
     const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
     const city=String(lead.city||"").trim(),region=String(lead.region||lead.state||"").trim();
     const q=phone?`"${name}" "${phone}" email`:`"${name}" ${city} ${region} attorney email`;
-    const bf=await bingFallback(lead,q,3);
-    emails.push(...bf.emails);
-    combined+=" "+bf.text;
-    if(bf.source)source=bf.source;
-    attorneyCount=Math.max(attorneyCount,Number(bf.attorneyCount||0));
-    if(!fb.personalFact&&bf.personalFact){fb.personalFact=bf.personalFact;fb.personalFactSource=bf.personalFactSource;}
-    if(bf.emails.length){
-      if(emailMethod==="none")emailMethod="bing";
-      await redis.hIncrBy(STATS,"email_bing_hit",1);
+    const [bingResult,zeroResult]=await Promise.allSettled([
+      bingFallback(lead,q,4),
+      zeroCostEmailFallback(lead)
+    ]);
+
+    if(bingResult.status==="fulfilled"){
+      const bf=bingResult.value;
+      emails.push(...bf.emails);
+      combined+=" "+bf.text;
+      if(bf.source)source=bf.source;
+      attorneyCount=Math.max(attorneyCount,Number(bf.attorneyCount||0));
+      if(bf.personalFact){personalFact=bf.personalFact;personalFactSource=bf.personalFactSource||bf.source||"";}
+      if(bf.emails.length){
+        emailMethod="bing";
+        await redis.hIncrBy(STATS,"email_bing_hit",1);
+      }
     }
-  }
-  emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
-    .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
-  if(!emails.length){
-    const zeroCost=await zeroCostEmailFallback(lead);
-    if(zeroCost.emails.length){
-      emails=[...new Set([...emails,...zeroCost.emails])].slice(0,5);
-      source=zeroCost.source||source;
+    if(zeroResult.status==="fulfilled"&&zeroResult.value.emails.length){
+      const zeroCost=zeroResult.value;
+      emails.push(...zeroCost.emails);
+      if(!source)source=zeroCost.source||"";
       if(emailMethod==="none")emailMethod="zero_cost";
       await redis.hIncrBy(STATS,"email_zero_cost_hit",1);
     }
   }
+
+  emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
+    .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
+
+  let fb={emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
+  if(!emails.length){
+    fb=await duckFallback({...lead,website:""});
+    emails.push(...fb.emails);
+    combined+=" "+fb.text;
+    if(fb.source)source=fb.source;
+    attorneyCount=Math.max(attorneyCount,Number(fb.attorneyCount||0));
+    if(fb.personalFact){personalFact=fb.personalFact;personalFactSource=fb.personalFactSource||fb.source||"";}
+    if(fb.emails.length){
+      emailMethod="duck";
+      await redis.hIncrBy(STATS,"email_duck_hit",1);
+    }
+  }
+
+  emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
+    .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
   if(!emails.length){
     emailMethod="none";
     await redis.hIncrBy(STATS,"email_no_hit",1);
   }
-
+  if(!source)source=String(lead.google_maps_url||"Google Maps");
   const metadataText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
   const metadataKeys=lawFirmPracticeKeys(metadataText);
   const researchKeys=lawFirmPracticeKeys(combined);
@@ -745,8 +763,8 @@ async function enrichLead(key,lead){
   const observedPractices=practices;
   const targetLabel=targetPractice?.label||practices[0]||"law";
   let p=personalization({lead,practices:observedPractices,attorneyCount,source:source||String(lead.google_maps_url||"Google Maps"),targetLabel});
-  if(fb.personalFact){
-    p={fact:fb.personalFact,source:fb.personalFactSource||source||String(lead.google_maps_url||"Google Maps"),quality:"specific"};
+  if(personalFact){
+    p={fact:personalFact,source:personalFactSource||source||String(lead.google_maps_url||"Google Maps"),quality:"specific"};
   }
   const sizeTier=firmSizeTier(attorneyCount);
   const preferredSize=attorneyCount>=2&&attorneyCount<=10;
@@ -795,7 +813,7 @@ async function enrichLead(key,lead){
     else if(!practiceKeys.length) await redis.hIncrBy(STATS,"rejected_wrong_practice",1);
     else if(website) await redis.hIncrBy(STATS,"rejected_has_website",1);
   }
-  console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:emails.length,attorneyCount:attorneyCount||null,sizeTier,practice:practices[0]||"",painPoint,qualified,priority,personalizationQuality:p.quality}));
+  console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:emails.length,emailMethod,attorneyCount:attorneyCount||null,sizeTier,practice:practices[0]||"",painPoint,qualified,priority,personalizationQuality:p.quality}));
   return true;
 }
 async function bootstrapExistingQualified(){
