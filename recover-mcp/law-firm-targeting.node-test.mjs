@@ -13,7 +13,7 @@ assert.equal(matchesLawPractice("DUI criminal defense lawyer","criminal_defense"
 assert.equal(matchesLawPractice("Estate planning attorney","personal_injury"),false);
 
 const scored=scoreLawFirmLead(
-  {category:"Personal injury attorney",name:"Miller Law Firm",phone:"3125551212",website:"https://millerlaw.com",review_count:40,rating:4.8},
+  {category:"Personal injury attorney",name:"Miller Law Firm",phone:"3125551212",website:"",review_count:40,rating:4.8},
   {practice_focus:"personal_injury"}
 );
 assert.ok(scored.score>=70);
