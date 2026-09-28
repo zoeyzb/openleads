@@ -277,7 +277,7 @@ function qualificationFunnel(records=[],job={}){
   const counts={raw:records.length,location:Math.max(0,records.length-candidates.length),industry:0,owned_website:0,phone:0,email:0,contact:0,include_website:0,score:0,accepted:0};
   for(const lead of candidates){
     if(!matchesRequestedIndustry(lead,job.industry)){counts.industry++;continue;}
-    if(job.practice_focus){
+    if(job.practice_focus && String(job.search_profile||"")!=="law-firm"){
       const practiceText=normalizeText([lead.category,lead.industry,lead.title||lead.name,lead.descriptions,lead.description].filter(Boolean).join(" "));
       if(!matchesLawPractice(practiceText,job.practice_focus)){counts.industry++;continue;}
     }
@@ -1145,7 +1145,7 @@ async function processAcquisition(id) {
 
       leads=locationCandidateSet(leads,job)
         .filter(lead=>matchesRequestedIndustry(lead,job.industry))
-        .filter(lead=>!job.practice_focus||matchesLawPractice(normalizeText([lead.category,lead.industry,lead.title||lead.name,lead.descriptions,lead.description].filter(Boolean).join(" ")),job.practice_focus))
+        .filter(lead=>String(job.search_profile||"")==="law-firm"||!job.practice_focus||matchesLawPractice(normalizeText([lead.category,lead.industry,lead.title||lead.name,lead.descriptions,lead.description].filter(Boolean).join(" ")),job.practice_focus))
         .filter(lead=>!job.require_no_website||!isOwnedBusinessWebsite(lead.website))
         .filter(lead=>!job.require_phone||!!lead.phone)
         .filter(lead=>!job.require_email||normalizeEmails(lead.emails||lead.email||"").length>0)
@@ -1210,7 +1210,7 @@ async function processAcquisition(id) {
 
     let leads=locationCandidateSet(allRaw,job)
       .filter(lead=>matchesRequestedIndustry(lead,job.industry))
-      .filter(lead=>!job.practice_focus||matchesLawPractice(normalizeText([lead.category,lead.industry,lead.title||lead.name,lead.descriptions,lead.description].filter(Boolean).join(" ")),job.practice_focus))
+      .filter(lead=>String(job.search_profile||"")==="law-firm"||!job.practice_focus||matchesLawPractice(normalizeText([lead.category,lead.industry,lead.title||lead.name,lead.descriptions,lead.description].filter(Boolean).join(" ")),job.practice_focus))
       .map(lead=>({...lead,qualification:scoreLead(lead,job)}))
       .filter(lead=>lead.qualification.score>=Number(job.min_score||0))
       .filter(lead=>!job.require_phone||!!lead.phone)
