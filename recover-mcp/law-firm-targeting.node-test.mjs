@@ -22,14 +22,14 @@ console.log("law-firm-targeting tests passed");
 
 assert.equal(qualifiesNoWebsiteLawLead({
   website:"",
-  emails:["hello@example.com"],
+  emails:["realfirm@gmail.com"],
   practice_keys:["personal_injury"],
   personalization_fact:""
 }),true);
 
 assert.equal(qualifiesNoWebsiteLawLead({
   website:"https://example.com",
-  emails:["hello@example.com"],
+  emails:["realfirm@gmail.com"],
   practice_keys:["personal_injury"]
 }),false);
 
@@ -41,7 +41,7 @@ assert.equal(qualifiesNoWebsiteLawLead({
 
 assert.equal(qualifiesNoWebsiteLawLead({
   website:"",
-  emails:["hello@example.com"],
+  emails:["realfirm@gmail.com"],
   practice_keys:[]
 }),false);
 
@@ -62,3 +62,9 @@ assert.equal(isUsableLawEmail("jdoe@potterlawoffices.com"),false);
 assert.equal(isUsableLawEmail("your@email.com"),false);
 assert.equal(isUsableLawEmail("flast@therogerslawgroup.com"),false);
 assert.equal(isUsableLawEmail("info@thesunfirm.complease"),false);
+
+assert.equal(qualifiesNoWebsiteLawLead({
+  website:"",
+  emails:["error-lite+9c39@duckduckgo.com"],
+  practice_keys:["personal_injury"]
+}),false);
