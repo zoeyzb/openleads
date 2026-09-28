@@ -2,7 +2,7 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { orchestrate as enrichProfessionalEmail } from "email-enrich";
-import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail } from "./law-firm-targeting.mjs";
+import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isLawFirmLead } from "./law-firm-targeting.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||"";
@@ -532,6 +532,13 @@ function personalization({lead,practices,attorneyCount,source,targetLabel=""}){
 }
 async function enrichLead(key,lead){
   if(String(lead.search_profile||"")!=="law-firm"&&normalize(lead.industry)!=="law firm")return false;
+  if(!isLawFirmLead(lead)){
+    await redis.sAdd(ENRICHED_SET,key);
+    await redis.sAdd(REJECTED_SET,key);
+    await redis.sRem(READY_SET,key);
+    await redis.hIncrBy(STATS,"rejected_not_law_firm",1);
+    return true;
+  }
   if(await redis.sIsMember(ENRICHED_SET,key))return false;
 
   const website=String(lead.website||"").trim();
@@ -646,7 +653,7 @@ async function bootstrapExistingQualified(){
     for(const entry of (Array.isArray(page)?page:[page])){
       if(!entry?.field||entry.value===undefined)continue;
       let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
-      const isLaw=String(lead.search_profile||"")==="law-firm"||normalize(lead.industry)==="law firm";
+      const isLaw=(String(lead.search_profile||"")==="law-firm"||normalize(lead.industry)==="law firm")&&isLawFirmLead(lead);
       if(!isLaw)continue;
       scanned++;
 
