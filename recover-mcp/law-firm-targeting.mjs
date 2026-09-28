@@ -5,6 +5,10 @@ const NON_FIRM=/\b(bail bonds?|court reporter|process server|notary|paralegal se
 
 export const LAW_PRACTICES=[
   {key:"personal_injury",label:"personal injury",target:true,re:/\b(personal injury|injury lawyer|injury attorney|accident lawyer|accident attorney|car accident|truck accident|wrongful death|slip and fall|premises liability|medical malpractice)\b/},
+  {key:"settlement_claims",label:"settlement/claims",target:true,re:/\b(settlement lawyer|settlement attorney|insurance claim|insurance dispute|injury settlement|claim denial)\b/},
+  {key:"auto_accident",label:"auto accident",target:true,re:/\b(car accident|auto accident|motor vehicle accident|truck accident|motorcycle accident)\b/},
+  {key:"medical_malpractice",label:"medical malpractice",target:true,re:/\b(medical malpractice|medical negligence|birth injury|hospital negligence)\b/},
+  {key:"dui_traffic",label:"DUI/traffic",target:true,re:/\b(dui|dwi|traffic defense|traffic lawyer|license suspension)\b/},
   {key:"family_divorce",label:"family/divorce",target:true,re:/\b(family law|family lawyer|family attorney|divorce|custody|child custody|child support|spousal support|alimony|dissolution of marriage)\b/},
   {key:"criminal_defense",label:"criminal defense",target:true,re:/\b(criminal defense|criminal lawyer|criminal attorney|dui|dwi|drug crimes?|felony|misdemeanor|expungement|white collar crime|sex crimes?|traffic defense)\b/},
   {key:"estate_probate",label:"estate/probate",target:true,re:/\b(estate planning|probate|wills? and trusts?|trusts? and estates?|elder law|guardianship)\b/},
