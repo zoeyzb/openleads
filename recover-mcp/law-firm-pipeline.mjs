@@ -30,6 +30,8 @@ const REJECTED_SET="recover:law-firm:rejected:v3";
 const PENDING_SET="recover:law-firm:enrich-pending:v3";
 const PRIORITY_PENDING_SET="recover:law-firm:enrich-priority:v3";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
+const FL_BAR_CURSOR_KEY="recover:law-firm:florida-bar-cursor:v1";
+const FL_BAR_SEEN_SET="recover:law-firm:florida-bar-seen:v1";
 const DISCOVERY_BACKLOG_LIMIT=Math.max(1000,Number(process.env.LAW_FIRM_DISCOVERY_BACKLOG_LIMIT||15000));
 const STATS="recover:law-firm:stats:v3";
 const PROFILE={industry:"LAW_FIRM",require_phone:false,require_email:false,require_contact:false,require_no_website:true,include_no_website:true,min_score:45};
@@ -738,6 +740,129 @@ function stateBarQueries(lead={},people=[]){
   return [...new Set(out)].slice(0,4);
 }
 
+
+const OWNED_SITE_EXCLUDE_DOMAINS=[
+  "floridabar.org","calbar.ca.gov","texasbar.com","nycourts.gov","justia.com","avvo.com",
+  "findlaw.com","lawyers.com","martindale.com","superlawyers.com","yelp.com","facebook.com",
+  "linkedin.com","yellowpages.com","allbiz.com","chamberofcommerce.com","mapquest.com",
+  "google.com","bing.com","instagram.com","x.com","twitter.com","bbb.org"
+];
+function isExcludedOwnedSite(url=""){
+  const host=hostOf(url);
+  return !host||OWNED_SITE_EXCLUDE_DOMAINS.some(d=>host===d||host.endsWith("."+d))||/\.gov$|\.courts?\./i.test(host);
+}
+function likelyOwnedSiteFromLinks(links=[],lead={}){
+  const tokens=leadNameTokens(lead).filter(x=>x.length>=4);
+  for(const url of links){
+    if(isExcludedOwnedSite(url))continue;
+    const host=hostOf(url),stem=host.split(".")[0].replace(/[^a-z0-9]/g,"");
+    if(tokens.some(t=>{
+      const x=t.replace(/[^a-z0-9]/g,"");
+      return x.length>=4&&(stem.includes(x)||x.includes(stem));
+    }))return url;
+  }
+  return "";
+}
+async function findOwnedWebsiteViaBing(lead={}){
+  const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
+  const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
+  if(!name)return "";
+  const queries=[
+    ...(phone?[`"${phone}" "${name}"`]:[]),
+    `"${name}" ${String(lead.city||"")} ${String(lead.region||lead.state||"")} official website`.trim()
+  ];
+  for(const q of queries){
+    try{
+      const url="https://www.bing.com/search?q="+encodeURIComponent(q);
+      const r=await fetchText(url,4500);
+      const owned=likelyOwnedSiteFromLinks(bingResultLinks(r.html),lead);
+      if(owned)return owned;
+    }catch{}
+  }
+  return "";
+}
+function floridaBarProfile(html="",profileUrl="",fallbackCity=""){
+  const raw=String(html||""),text=stripHtml(raw);
+  const h1=(raw.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1]||"").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
+  const member=h1&& !/member profile/i.test(h1)?h1:
+    (text.match(/Member Profile\s+([A-Z][A-Za-z.'’\- ]{3,80}?)(?=\s+Member in Good Standing|\s+Bar Number:)/i)?.[1]||"").trim();
+  const firm=(text.match(/\bFirm:\s*([^]{0,140}?)(?=\s+Firm Size:|\s+Firm Position:|\s+The Find a Lawyer|$)/i)?.[1]||"")
+    .replace(/\s+/g," ").trim();
+  const phone=(text.match(/\bOffice:\s*([+()0-9 .-]{10,25})/i)?.[1]||"").replace(/\s+/g," ").trim();
+  const city=(text.match(/\b([A-Za-z .'-]{2,40}),\s*FL\s+\d{5}/i)?.[1]||fallbackCity||"").trim();
+  const mailtos=[...raw.matchAll(/mailto:([^"'? >]+)/ig)].map(m=>{
+    try{return decodeURIComponent(m[1]);}catch{return m[1];}
+  });
+  const emails=[...new Set([...mailtos,...emailsFrom(raw)]
+    .map(x=>String(x||"").trim().toLowerCase())
+    .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x)&&!/@floridabar\.org$/i.test(x)))].slice(0,3);
+  const sizeRaw=(text.match(/\bFirm Size:\s*([^ ]+(?:\s*[-–]\s*[^ ]+)*)/i)?.[1]||"").trim();
+  const privatePractice=/\bPrivate Law Practice\b/i.test(text);
+  const barNumber=(text.match(/\bBar Number:\s*(\d{3,10})/i)?.[1]||new URL(profileUrl).searchParams.get("num")||"").trim();
+  return {member,firm,phone,city,emails,sizeRaw,privatePractice,barNumber,text};
+}
+async function discoverFloridaBarCity(city){
+  const q=`site:floridabar.org/directories/find-mbr/profile "${city}, FL" "Firm Size:"`;
+  let links=[];
+  try{
+    const search=await fetchText("https://www.bing.com/search?q="+encodeURIComponent(q),5000);
+    links=bingResultLinks(search.html)
+      .filter(u=>/floridabar\.org\/directories\/find-mbr\/profile/i.test(u))
+      .slice(0,8);
+  }catch{return 0;}
+  if(!links.length)return 0;
+
+  const pages=await Promise.allSettled(links.map(url=>fetchText(url,5000)));
+  let added=0;
+  for(let i=0;i<pages.length;i++){
+    const item=pages[i]; if(item.status!=="fulfilled")continue;
+    const profileUrl=item.value.final_url||links[i];
+    const profile=floridaBarProfile(item.value.html,profileUrl,city);
+    if(!profile.member||!profile.emails.length)continue;
+    if(!profile.privatePractice&&!profile.firm)continue;
+    const name=profile.firm||profile.member;
+    const lead={
+      name,owner_name:profile.member,category:"Lawyer",industry:"LAW_FIRM",search_profile:"law-firm",
+      city:profile.city||city,region:"FL",state:"FL",phone:profile.phone,emails:profile.emails,website:"",
+      description:"Private Law Practice",social_profile_url:profileUrl,source:"florida_bar_public_profile",
+      source_url:profileUrl,bar_number:profile.barNumber,firm_size_public:profile.sizeRaw,
+      acquisition_location:`${profile.city||city}, FL`,created_at:new Date().toISOString()
+    };
+    if(!isLawFirmLead(lead))continue;
+    const key=`bar:fl:${profile.barNumber||profile.emails[0]}`;
+    if(await redis.sIsMember(FL_BAR_SEEN_SET,key))continue;
+    await redis.sAdd(FL_BAR_SEEN_SET,key);
+
+    const owned=await findOwnedWebsiteViaBing(lead);
+    if(owned){
+      await redis.hIncrBy(STATS,"bar_source_has_website",1);
+      continue;
+    }
+    await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
+    await redis.sAdd(SOURCE_PENDING_SET,key);
+    await redis.hIncrBy(STATS,"bar_source_candidate",1);
+    added++;
+  }
+  if(added)console.log(JSON.stringify({event:"law_firm_bar_discovery",state:"FL",city,profiles:links.length,added}));
+  return added;
+}
+async function floridaBarDiscoveryLoop(cities){
+  const fl=cities.filter(x=>x.state==="FL");
+  if(!fl.length)return;
+  while(true){
+    try{
+      let cursor=Math.max(0,Number(await redis.get(FL_BAR_CURSOR_KEY)||0));
+      const area=fl[cursor%fl.length];
+      cursor=(cursor+1)%fl.length;
+      await redis.set(FL_BAR_CURSOR_KEY,String(cursor));
+      await discoverFloridaBarCity(area.city);
+    }catch(error){
+      console.warn(JSON.stringify({event:"law_firm_bar_discovery_error",state:"FL",error:String(error?.message||error)}));
+    }
+    await sleep(8000);
+  }
+}
+
 async function enrichLead(key,lead){
   if(String(lead.search_profile||"")!=="law-firm"&&normalize(lead.industry)!=="law firm")return false;
   if(!isLawFirmLead(lead)){
@@ -1153,4 +1278,4 @@ async function enrichmentLoop(){
   }
 }
 
-await Promise.all([seedLoop(),enrichmentLoop()]);
+await Promise.all([seedLoop(),enrichmentLoop(),floridaBarDiscoveryLoop(cities)]);
