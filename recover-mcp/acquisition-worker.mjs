@@ -622,9 +622,17 @@ const HOME_COMFORT_QUERIES=[
   "sewer contractor"
 ];
 const LAW_FIRM_QUERIES={
-  personal_injury:["personal injury lawyer","injury attorney","car accident lawyer","personal injury law firm","accident law office"],
-  family_divorce:["divorce lawyer","family law attorney","child custody lawyer","family law office","divorce law firm"],
-  criminal_defense:["criminal defense lawyer","criminal defense attorney","DUI lawyer","criminal defense law office","criminal law firm"],
+  personal_injury:["personal injury lawyer","injury attorney","car accident lawyer","settlement lawyer","accident law office"],
+  family_divorce:["divorce lawyer","family law attorney","child custody lawyer","family law office","divorce attorney"],
+  criminal_defense:["criminal defense lawyer","criminal defense attorney","DUI lawyer","criminal defense law office","criminal lawyer"],
+  estate_probate:["estate planning attorney","probate lawyer","wills and trusts attorney","elder law attorney","probate law office"],
+  bankruptcy:["bankruptcy lawyer","bankruptcy attorney","debt relief lawyer","chapter 7 attorney","chapter 13 lawyer"],
+  immigration:["immigration lawyer","immigration attorney","visa lawyer","green card attorney","deportation defense lawyer"],
+  employment:["employment lawyer","employment attorney","wrongful termination lawyer","workplace discrimination attorney","labor lawyer"],
+  real_estate:["real estate attorney","real estate lawyer","property lawyer","landlord tenant attorney","real estate law office"],
+  workers_comp:["workers compensation lawyer","workers comp attorney","work injury lawyer","workers compensation law office","workplace injury attorney"],
+  disability:["social security disability lawyer","SSDI attorney","disability benefits lawyer","SSI lawyer","disability law office"],
+  civil_litigation:["civil litigation lawyer","trial lawyer","litigation attorney","civil lawyer","litigation law firm"],
   general:["law office","attorney at law","small law firm","solo attorney","law offices","law firm"]
 };
 const queryVariants=(industry,location,practiceFocus="")=>{
