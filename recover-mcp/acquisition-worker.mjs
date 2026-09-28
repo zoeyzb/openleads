@@ -639,17 +639,19 @@ const LAW_FIRM_QUERIES={
   civil_litigation:["civil litigation lawyer","trial lawyer","litigation attorney","civil lawyer","litigation law firm"],
   general:["law office","attorney at law","solo attorney","small law firm","law offices","general practice attorney","law firm"]
 };
-const queryVariants=(industry,location,practiceFocus="")=>{
+const queryVariants=(industry,location,practiceFocus="",coveragePass="")=>{
   if (/\blaw\s*firm\b|\battorney\b|\blawyer\b/.test(normalizeText(industry))){
     const key=normalizeText(practiceFocus).replace(/\s+/g,"_");
     const base=LAW_FIRM_QUERIES[key]||LAW_FIRM_QUERIES.general;
-    // No-site firms are underrepresented in practice-keyword/SEO searches.
-    // Lead with a generic small-firm query, varied deterministically by
-    // practice focus so later nationwide waves do not repeat the same query.
-    const seed=[...String(key||"general")].reduce((n,ch)=>n+ch.charCodeAt(0),0);
     const general=LAW_FIRM_QUERIES.general;
-    const g0=general[seed%Math.min(5,general.length)]||general[0];
-    const g1=general[(seed+2)%Math.min(6,general.length)]||general[1]||general[0];
+    const wave=Math.max(1,Number(String(coveragePass||"").match(/-w(\d+)/i)?.[1]||1));
+    // Empirical no-site yield is strongest for "law office", then
+    // "law offices", then "attorney at law". Use nationwide wave number
+    // to rotate those first instead of wasting first-pass capacity on
+    // low-yield "solo attorney"/"small law firm" searches.
+    const preferredByWave=["law office","law offices","attorney at law","general practice attorney"];
+    const g0=preferredByWave[(wave-1)%preferredByWave.length];
+    const g1=preferredByWave[wave%preferredByWave.length];
     const mixed=[
       g0,
       base[0],
@@ -959,7 +961,7 @@ async function processAcquisition(id) {
   let stagnantRounds=0;
 
   try {
-    let variants=queryVariants(job.industry,job.location,job.practice_focus||"");
+    let variants=queryVariants(job.industry,job.location,job.practice_focus||"",job.coverage_pass||"");
     const requestedFamily=normalizeText(job.query_family||"");
     if (isFastHomeServiceJob(job) && requestedFamily) {
       const exact=variants.find(query=>queryFamily(query)===requestedFamily);
