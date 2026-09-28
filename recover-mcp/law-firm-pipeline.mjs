@@ -18,12 +18,12 @@ const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_
 const JOB_TTL=Math.max(86400,Number(process.env.ACQUISITION_TTL_SECONDS||604800));
 const ACTIVE_QUEUE="recover:acquisition:queue:law-firm";
 const LEAD_HASH="recover:leadstore:qualified";
-const SEEDED_SET="recover:law-firm:seeded:v2";
-const ENRICHED_SET="recover:law-firm:enriched:v2";
-const READY_SET="recover:law-firm:qualified:v2";
-const REJECTED_SET="recover:law-firm:rejected:v2";
-const PENDING_SET="recover:law-firm:enrich-pending:v2";
-const STATS="recover:law-firm:stats:v2";
+const SEEDED_SET="recover:law-firm:seeded:v3";
+const ENRICHED_SET="recover:law-firm:enriched:v3";
+const READY_SET="recover:law-firm:qualified:v3";
+const REJECTED_SET="recover:law-firm:rejected:v3";
+const PENDING_SET="recover:law-firm:enrich-pending:v3";
+const STATS="recover:law-firm:stats:v3";
 const PROFILE={industry:"LAW_FIRM",require_phone:false,require_email:false,require_contact:false,require_no_website:true,include_no_website:true,min_score:45};
 const PRACTICE_FOCI=TARGET_LAW_PRACTICES.map(x=>({key:x.key,label:x.label}));
 const SCOPE_SET=campaignLeadSetKey(PROFILE);
@@ -286,9 +286,9 @@ async function enrichLead(key,lead){
     const practiceKey=String(focus||practiceKeys[0]||"unknown").trim();
     const day=new Date().toISOString().slice(0,10);
     await Promise.all([
-      redis.hIncrBy("recover:law-firm:qualified-by-area:v2",targetArea+"|"+practiceKey,1),
-      redis.hIncrBy("recover:law-firm:qualified-by-practice:v2",practiceKey,1),
-      redis.hIncrBy("recover:law-firm:qualified-by-day:v2",day,1)
+      redis.hIncrBy("recover:law-firm:qualified-by-area:v3",targetArea+"|"+practiceKey,1),
+      redis.hIncrBy("recover:law-firm:qualified-by-practice:v3",practiceKey,1),
+      redis.hIncrBy("recover:law-firm:qualified-by-day:v3",day,1)
     ]);
   }else{
     await redis.sRem(READY_SET,key);await redis.sAdd(REJECTED_SET,key);
