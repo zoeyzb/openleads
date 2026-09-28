@@ -15,7 +15,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_BATCH||6)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(8,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||4)));
-const EMAIL_METHOD_VERSION="email-v4";
+const EMAIL_METHOD_VERSION="email-v5";
 const LOOP_MS=Math.max(5000,Number(process.env.LAW_FIRM_LOOP_MS||15000));
 const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_FETCH_TIMEOUT_MS||7000)));
 const JOB_TTL=Math.max(86400,Number(process.env.ACQUISITION_TTL_SECONDS||604800));
@@ -125,6 +125,8 @@ function emailsFrom(text=""){
     .filter(isUsableLawEmail))].slice(0,8);
 }
 function likelyAttorneyName(lead={}){
+  const explicit=String(lead.owner_name||"").replace(/\s+/g," ").trim();
+  if(explicit&&explicit.split(/\s+/).length>=2)return explicit;
   const raw=String(lead.name||lead.title||"").replace(/\s+/g," ").trim();
   if(!raw)return "";
   const patterns=[
@@ -186,25 +188,35 @@ const THIRD_PARTY_EMAIL_DOMAINS=[
   "reachattorneys.com","birdeye.com","avvo.com","findlaw.com","lawyers.com","justia.com",
   "martindale.com","superlawyers.com","yellowpages.com","yelp.com","facebook.com","linkedin.com"
 ];
+function isThirdPartyEmailDomain(email=""){
+  const domain=String(email).split("@")[1]?.toLowerCase()||"";
+  return THIRD_PARTY_EMAIL_DOMAINS.some(d=>domain===d||domain.endsWith("."+d));
+}
 function emailLooksOwnedByLead(email="",lead={}){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
-  if(!domain)return false;
+  if(!domain||isThirdPartyEmailDomain(email))return false;
   if(FREE_MAIL_DOMAINS.has(domain))return true;
-  if(THIRD_PARTY_EMAIL_DOMAINS.some(d=>domain===d||domain.endsWith("."+d)))return false;
   const stem=domain.split(".")[0].replace(/[^a-z0-9]/g,"");
   const tokens=leadNameTokens(lead).map(x=>x.replace(/[^a-z0-9]/g,"")).filter(x=>x.length>=4);
   if(tokens.some(t=>stem.includes(t)||t.includes(stem)))return true;
   const local=String(email).split("@")[0]?.toLowerCase()||"";
   return tokens.some(t=>local.includes(t));
 }
+function contextHasExactPhone(text="",lead={}){
+  const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+  return !!(phone&&String(text).replace(/\D/g,"").includes(phone));
+}
 function contextualEmails(text="",lead={}){
   const raw=String(text||""),out=[];
   const re=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
   for(const m of raw.matchAll(re)){
     const email=String(m[0]||"").toLowerCase().replace(/[),.;:]+$/,"");
-    if(!isUsableLawEmail(email)||!emailLooksOwnedByLead(email,lead))continue;
-    const start=Math.max(0,(m.index||0)-600),end=Math.min(raw.length,(m.index||0)+email.length+600);
-    if(pageMatchesLead(raw.slice(start,end),lead))out.push(email);
+    if(!isUsableLawEmail(email)||isThirdPartyEmailDomain(email))continue;
+    const start=Math.max(0,(m.index||0)-900),end=Math.min(raw.length,(m.index||0)+email.length+900);
+    const context=raw.slice(start,end);
+    if(!pageMatchesLead(context,lead))continue;
+    // Accept either domain/name affinity OR exact phone evidence on the same page/snippet.
+    if(emailLooksOwnedByLead(email,lead)||contextHasExactPhone(context,lead))out.push(email);
   }
   return [...new Set(out)].slice(0,8);
 }
@@ -296,6 +308,23 @@ async function duckFallback(lead){
   let attorneyCount=Number(lead.attorney_count_estimate||0),personalFact="",personalFactSource="";
   let pageBudget=existingEmails.length?3:8;
   const visited=new Set();
+  const profileUrl=String(lead.social_profile_url||"").trim();
+  if(/^https?:\/\//i.test(profileUrl)){
+    try{
+      const direct=await fetchText(profileUrl,5000);
+      const directText=stripHtml(direct.html).slice(0,22000);
+      if(pageMatchesLead(directText,lead)){
+        const directEmails=contextualEmails(direct.html,lead);
+        emails.push(...directEmails);
+        texts.push(directText);
+        if(directEmails.length)sources.unshift(direct.final_url||profileUrl);
+        const estimate=attorneyEstimate(direct.html,directText);
+        if(estimate>attorneyCount)attorneyCount=estimate;
+        const fact=specificFactFromText(directText,lead);
+        if(fact&&!personalFact){personalFact=fact;personalFactSource=direct.final_url||profileUrl;}
+      }
+    }catch{}
+  }
   for(const q of queries){
     try{
       const url="https://html.duckduckgo.com/html/?q="+encodeURIComponent(q);
@@ -317,7 +346,7 @@ async function duckFallback(lead){
           const page=await fetchText(target,6000);
           const pageText=stripHtml(page.html).slice(0,22000);
           if(!pageMatchesLead(pageText,lead))continue;
-          const pageEmails=emailsFrom(page.html).filter(email=>emailLooksOwnedByLead(email,lead));
+          const pageEmails=contextualEmails(page.html,lead);
           emails.push(...pageEmails);
           texts.push(pageText);
           const estimate=attorneyEstimate(page.html,pageText);
@@ -458,7 +487,7 @@ async function enrichLead(key,lead){
   source=fb.source||String(lead.google_maps_url||"Google Maps");
   attorneyCount=Math.max(attorneyCount,Number(fb.attorneyCount||0));
   emails=[...new Set(emails.map(x=>String(x).toLowerCase().trim())
-    .filter(x=>isUsableLawEmail(x)&&emailLooksOwnedByLead(x,lead)))].slice(0,5);
+    .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x)))].slice(0,5);
   if(!emails.length){
     const zeroCost=await zeroCostEmailFallback(lead);
     if(zeroCost.emails.length){
