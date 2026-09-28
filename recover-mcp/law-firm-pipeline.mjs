@@ -995,15 +995,15 @@ async function seed(cities){
     if(await redis.sIsMember(SEEDED_SET,areaKey))continue;
 
     const id=randomUUID();
-    const coveragePass=`email-v11-w${wave+1}`;
-    const job={id,batch_id:"us-law-firm-qualified-v5",industry:"LAW_FIRM",search_profile:"law-firm",practice_focus:focus.key,coverage_pass:coveragePass,location:area.location,
+    const coveragePass=`email-v18-w${wave+1}`;
+    const job={id,batch_id:"us-law-firm-qualified-v6",industry:"LAW_FIRM",search_profile:"law-firm",practice_focus:focus.key,coverage_pass:coveragePass,location:area.location,
       partition_state:area.state,partition_city:area.city,source_population:area.population,target:18,min_score:45,
       require_phone:false,require_email:false,require_contact:false,require_no_website:true,include_no_website:true,
       max_rounds:1,depth:4,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,
       qualified_count:0,stored_count:0,created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
-      source:"law_firm_pipeline_v5"};
+      source:"law_firm_pipeline_v6"};
 
-    const claim=await claimCoverage(redis,job,{source:"law_firm_pipeline_v5",practice_focus:focus.key,coverage_pass:coveragePass});
+    const claim=await claimCoverage(redis,job,{source:"law_firm_pipeline_v6",practice_focus:focus.key,coverage_pass:coveragePass});
     await redis.sAdd(SEEDED_SET,areaKey);
     if(!claim.claimed)continue;
 
