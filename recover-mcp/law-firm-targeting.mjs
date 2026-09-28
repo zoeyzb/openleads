@@ -58,7 +58,7 @@ export function isUsableLawEmail(value=""){
   const [local,domain]=email.split("@");
   if(!local||!domain)return false;
   if([...BLOCKED_LAW_EMAIL_DOMAINS].some(d=>domain===d||domain.endsWith("."+d)))return false;
-  if(/^(?:www\.|u00(?:3c|3e)|error-lite(?:\+.*)?|jane\.?doe|janedoe|john\.?doe|johndoe|jdoe|doe[_\. -]?[a-z]?|your|test|example|first|firstname\.?lastname|first\.?last|flast|press|admissions|sale-\d+|webcust|faxagent(?:\.help)?|noreply|no-reply|donotreply|no-email|noemail)/i.test(local))return false;
+  if(/^(?:www\.|u00(?:3c|3e)|error-lite(?:\+.*)?|jane\.?doe|janedoe|john\.?doe|johndoe|jdoe|doe[_\. -]?[a-z]?|your|test|example|first|firstname\.?lastname|first\.?last|flast|press|admissions|sale-\d+|webcust|faxagent(?:\.help)?|webmaster|postmaster|hostmaster|abuse|noreply|no-reply|donotreply|no-email|noemail)/i.test(local))return false;
   if(/\.(?:png|jpe?g|gif|webp|svg|local)$/i.test(domain))return false;
   if(/(?:com|net|org)(?:please|www|first|last|the|email|contact)/i.test(domain))return false;
   if(/(?:yoursite|yourdomain|placeholder|invalid)\./i.test(domain))return false;
