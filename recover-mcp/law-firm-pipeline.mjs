@@ -276,6 +276,7 @@ async function enrichLead(key,lead){
     firm_size_tier:sizeTier,practice_areas:practices,practice_keys:practiceKeys,
     personalization_fact:p.fact,personalization_source:p.source,
     website_opportunity:"has_website",website_audit:audit,primary_pain_point:audit.primary_pain_point,
+    target_area:String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"").trim(),
     email_angle:emailAngle,lead_priority_score:priority,qualified_lead:qualified,
     law_firm_enriched_at:new Date().toISOString()};
 
@@ -283,7 +284,16 @@ async function enrichLead(key,lead){
   await redis.sAdd(ENRICHED_SET,key);
   await redis.hIncrBy(STATS,"enriched",1);
   if(qualified){
-    await redis.sAdd(READY_SET,key);await redis.hIncrBy(STATS,"qualified",1);
+    await redis.sAdd(READY_SET,key);
+    await redis.hIncrBy(STATS,"qualified",1);
+    const targetArea=String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"unknown").trim();
+    const practiceKey=String(focus||practiceKeys[0]||"unknown").trim();
+    const day=new Date().toISOString().slice(0,10);
+    await Promise.all([
+      redis.hIncrBy("recover:law-firm:qualified-by-area:v2",targetArea+"|"+practiceKey,1),
+      redis.hIncrBy("recover:law-firm:qualified-by-practice:v2",practiceKey,1),
+      redis.hIncrBy("recover:law-firm:qualified-by-day:v2",day,1)
+    ]);
   }else{
     await redis.sRem(READY_SET,key);await redis.sAdd(REJECTED_SET,key);
     if(!emails.length) await redis.hIncrBy(STATS,"rejected_no_email",1);
