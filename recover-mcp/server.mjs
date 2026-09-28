@@ -9,6 +9,7 @@ import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
 import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, isUsableLawEmail } from "./law-firm-targeting.mjs";
 import { startQualifiedGoogleSheetSync } from "./google-sheet-direct-sync.mjs";
+import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 import { createSmsSheetBridge } from "./sms-sheet-bridge.mjs";
 import {
   bulkSmsBlockReason,
@@ -69,6 +70,9 @@ const GOOGLE_SHEETS_TARGETS_JSON = process.env.GOOGLE_SHEETS_TARGETS_JSON || "";
 const GOOGLE_SHEETS_SYNC_ENABLED = String(process.env.GOOGLE_SHEETS_SYNC_ENABLED || "").toLowerCase() === "true";
 const GOOGLE_SHEETS_SYNC_INTERVAL_MS = Math.max(30000, Number(process.env.GOOGLE_SHEETS_SYNC_INTERVAL_MS || 60000));
 const GOOGLE_SHEETS_TAB_CAPACITY = Math.max(1, Number(process.env.GOOGLE_SHEETS_TAB_CAPACITY || 50000));
+const LAW_LEADS_SHEET_SYNC_ENABLED = String(process.env.LAW_LEADS_SHEET_SYNC_ENABLED || "").toLowerCase() === "true";
+const LAW_LEADS_SPREADSHEET_ID = String(process.env.LAW_LEADS_SPREADSHEET_ID || "").trim();
+const LAW_LEADS_SHEET_SYNC_INTERVAL_MS = Math.max(60000, Number(process.env.LAW_LEADS_SHEET_SYNC_INTERVAL_MS || 120000));
 const SMS_SHEET_BRIDGE = createSmsSheetBridge({ serviceAccountJson: GOOGLE_SERVICE_ACCOUNT_JSON, targetsJson: GOOGLE_SHEETS_TARGETS_JSON });
 if (SMS_SHEET_BRIDGE.writer_email) {
   console.log("SMS sheet writer email", SMS_SHEET_BRIDGE.writer_email);
@@ -3063,6 +3067,14 @@ startQualifiedGoogleSheetSync({
   capacity: GOOGLE_SHEETS_TAB_CAPACITY,
   targetsJson: GOOGLE_SHEETS_TARGETS_JSON,
   serviceAccountJson: GOOGLE_SERVICE_ACCOUNT_JSON,
+});
+
+startLawLeadSheetSync({
+  getRedis: getLawExportRedis,
+  serviceAccountJson: GOOGLE_SERVICE_ACCOUNT_JSON,
+  spreadsheetId: LAW_LEADS_SPREADSHEET_ID,
+  enabled: LAW_LEADS_SHEET_SYNC_ENABLED,
+  intervalMs: LAW_LEADS_SHEET_SYNC_INTERVAL_MS,
 });
 
 const httpServer = createHttpServer((req, res) => {
