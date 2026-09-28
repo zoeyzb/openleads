@@ -89,13 +89,15 @@ async function collectRows(redis){
       const rating=Number(lead.review_rating||lead.rating||0);
       const reviews=Number(lead.review_count||lead.reviews||0);
       const quality=clean(lead.personalization_quality).toLowerCase();
-      let personal="",source="";
+      let personal="",source=clean(lead.law_email_source);
       if(clean(lead.personalization_fact)&&quality==="specific"){
-        personal=clean(lead.personalization_fact); source=clean(lead.personalization_source);
+        personal=clean(lead.personalization_fact);
+        if(!source)source=clean(lead.personalization_source);
       }else if(reviews>=5&&rating>0){
         personal=`${name} has ${reviews} Google reviews at about ${rating.toFixed(1)} stars${city?` in ${city}`:""}`;
-        source=clean(lead.google_maps_url||lead.maps_url);
+        if(!source)source=clean(lead.google_maps_url||lead.maps_url);
       }
+      if(!source)source=clean(lead.personalization_source||lead.google_maps_url||lead.maps_url);
       const contextType=type==="Needs Classification"?"law":(type||"law");
       const context=city?`${contextType} firms in ${city}`:`${contextType} firms`;
       const opener=personal
