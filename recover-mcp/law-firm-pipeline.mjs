@@ -332,6 +332,84 @@ async function enrichLead(key,lead){
   console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:emails.length,attorneyCount:attorneyCount||null,sizeTier,practice:practices[0]||"",painPoint,qualified,priority,personalizationQuality:p.quality}));
   return true;
 }
+async function bootstrapExistingQualified(){
+  let scanned=0,qualifiedAdded=0,queuedForEnrichment=0,alreadyQualified=0;
+  for await(const page of redis.hScanIterator(LEAD_HASH,{COUNT:500})){
+    for(const entry of (Array.isArray(page)?page:[page])){
+      if(!entry?.field||entry.value===undefined)continue;
+      let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
+      const isLaw=String(lead.search_profile||"")==="law-firm"||normalize(lead.industry)==="law firm";
+      if(!isLaw)continue;
+      scanned++;
+
+      const website=String(lead.website||"").trim();
+      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+        .map(x=>String(x||"").trim().toLowerCase())
+        .filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+      const evidenceText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
+      const observedKeys=lawFirmPracticeKeys(evidenceText);
+      const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
+      const focus=String(lead.practice_focus||"").trim();
+      const practiceKeys=[...new Set([...storedKeys,...observedKeys,...(focus?[focus]:[])])];
+
+      if(!qualifiesNoWebsiteLawLead({website,emails,practice_keys:practiceKeys}))continue;
+
+      const wasQualified=await redis.sIsMember(READY_SET,entry.field);
+      if(wasQualified){alreadyQualified++;continue;}
+
+      const practices=[...new Set(practiceKeys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean))];
+      const targetLabel=practices[0]||"law";
+      const attorneyCount=Number(lead.attorney_count_estimate||0);
+      const p=personalization({
+        lead,
+        practices:lawFirmPracticeAreas(evidenceText),
+        attorneyCount,
+        source:String(lead.personalization_source||lead.google_maps_url||"Google Maps"),
+        targetLabel
+      });
+      const priority=priorityScore({
+        attorneyCount,
+        reviewCount:lead.review_count,
+        hasEmail:true,
+        painCount:1,
+        personalizationQuality:p.quality
+      });
+      const personalFact=String(lead.personalization_fact||p.fact||"").trim();
+      const opener=String(lead.email_angle||"").trim() ||
+        `${personalFact||`I came across ${lead.name||"your firm"} while researching ${targetLabel} firms`}. I couldn't find a website for the firm, so I thought I'd reach out.`;
+
+      const updated={
+        ...lead,
+        emails:[...new Set(emails)].slice(0,5),
+        practice_keys:practiceKeys,
+        practice_areas:practices,
+        lead_type:practices.join(" + "),
+        preferred_firm_size:attorneyCount>=2&&attorneyCount<=10,
+        firm_size_tier:firmSizeTier(attorneyCount),
+        personalization_fact:personalFact,
+        personalization_source:String(lead.personalization_source||p.source||""),
+        personalization_quality:String(lead.personalization_quality||p.quality||"basic"),
+        website_opportunity:"website_build",
+        primary_pain_point:"No website",
+        email_angle:opener,
+        lead_priority_score:priority,
+        qualified_lead:true,
+        law_firm_qualified_at:new Date().toISOString()
+      };
+      await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(updated));
+      await redis.sAdd(READY_SET,entry.field);
+      await redis.hIncrBy(STATS,"qualified",1);
+      qualifiedAdded++;
+
+      if(!(await redis.sIsMember(ENRICHED_SET,entry.field))){
+        queuedForEnrichment+=Number(await redis.sAdd(PENDING_SET,entry.field)||0);
+      }
+    }
+  }
+  console.log(JSON.stringify({event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,alreadyQualified,queuedForEnrichment}));
+  return {scanned,qualifiedAdded,alreadyQualified,queuedForEnrichment};
+}
+
 async function enrichBatch(){
   const popped=await redis.sPop(PENDING_SET,ENRICH_BATCH);
   const keys=(Array.isArray(popped)?popped:[popped]).filter(Boolean);
@@ -383,6 +461,7 @@ async function seed(cities){
   return seeded;
 }
 
+await bootstrapExistingQualified();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_load"}));
 const cities=await loadCities();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_loaded",cities:cities.length}));
