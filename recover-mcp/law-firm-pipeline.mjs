@@ -457,7 +457,8 @@ async function enrichLead(key,lead){
   combined+=" "+fb.text;
   source=fb.source||String(lead.google_maps_url||"Google Maps");
   attorneyCount=Math.max(attorneyCount,Number(fb.attorneyCount||0));
-  emails=[...new Set(emails.map(x=>String(x).toLowerCase().trim()).filter(isUsableLawEmail))].slice(0,5);
+  emails=[...new Set(emails.map(x=>String(x).toLowerCase().trim())
+    .filter(x=>isUsableLawEmail(x)&&emailLooksOwnedByLead(x,lead)))].slice(0,5);
   if(!emails.length){
     const zeroCost=await zeroCostEmailFallback(lead);
     if(zeroCost.emails.length){
@@ -541,7 +542,7 @@ async function bootstrapExistingQualified(){
       const website=String(lead.website||"").trim();
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>String(x||"").trim().toLowerCase())
-        .filter(isUsableLawEmail);
+        .filter(x=>isUsableLawEmail(x)&&emailLooksOwnedByLead(x,lead));
       const evidenceText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const observedKeys=lawFirmPracticeKeys(evidenceText);
       const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
