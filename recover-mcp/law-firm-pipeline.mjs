@@ -1,7 +1,7 @@
 // deployment trigger: qualified law sheet cleanup 2026-09-28
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
-import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail } from "./law-firm-targeting.mjs";
+import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail } from "./law-firm-targeting.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||"";
@@ -403,7 +403,7 @@ async function enrichLead(key,lead){
   const observedPractices=lawFirmPracticeAreas(observedText);
   const observedKeys=lawFirmPracticeKeys(observedText);
   const focus=String(lead.practice_focus||observedKeys[0]||"").trim();
-  const targetPractice=TARGET_LAW_PRACTICES.find(x=>x.key===focus);
+  const targetPractice=LAW_PRACTICES.find(x=>x.key===focus);
   const practices=[...new Set([...observedPractices,...(targetPractice?[targetPractice.label]:[])])];
   const practiceKeys=[...new Set([...observedKeys,...(focus?[focus]:[])])];
   const targetLabel=targetPractice?.label||practices[0]||"law";
@@ -499,7 +499,12 @@ async function bootstrapExistingQualified(){
       if(wasQualified){
         alreadyQualified++;
         const quality=String(lead.personalization_quality||"").trim().toLowerCase();
-        const needsRefresh=quality!=="specific"||!practiceKeys.length;
+        const personal=String(lead.personalization_fact||"").trim();
+        const needsRefresh=String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION
+          || quality!=="specific"
+          || !practiceKeys.length
+          || /^I noticed .*Google reviews/i.test(personal)
+          || /^Google:/i.test(personal);
         if(needsRefresh){
           await redis.sRem(ENRICHED_SET,entry.field);
           queuedForEnrichment+=Number(await redis.sAdd(PRIORITY_PENDING_SET,entry.field)||0);
@@ -507,7 +512,7 @@ async function bootstrapExistingQualified(){
         continue;
       }
 
-      const practices=[...new Set(practiceKeys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean))];
+      const practices=[...new Set(practiceKeys.map(k=>LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean))];
       const targetLabel=practices[0]||"law";
       const attorneyCount=Number(lead.attorney_count_estimate||0);
       const p=personalization({
