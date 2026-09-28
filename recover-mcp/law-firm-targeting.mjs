@@ -76,13 +76,11 @@ export function isPreferredLawFirmSize(value=0){
 export function qualifiesNoWebsiteLawLead(lead={}){
   const website=String(lead.website||"").trim();
   const contacts=Array.isArray(lead.emails)?lead.emails:[lead.email].filter(Boolean);
-  const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
   const sourceVerified=lead.email_source_verified===true;
-  // Ready means the exact sales cohort: no owned website, confirmed 2-10 attorney
-  // firm, and a source-backed usable email. Practice classification is metadata,
-  // not a substitute for contactability.
+  // Qualification is about sales usability: exact law firm, no owned website,
+  // and a source-backed usable/contactable email. Firm size is a ranking signal,
+  // not a gate: solos and larger firms remain valid leads.
   return !/^https?:\/\//i.test(website) &&
-    isPreferredLawFirmSize(attorneyCount) &&
     sourceVerified &&
     contacts.some(isUsableLawEmail);
 }
