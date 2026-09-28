@@ -527,6 +527,9 @@ async function persistPermanentQualified(redis, job, leads) {
   if(phoneIndexEntries.length) await redis.hSet("recover:leadstore:phone-index",phoneIndexEntries);
   if(identities.length){
     await redis.sAdd(campaignLeadSetKey(job),identities);
+    if(String(job.search_profile||"")==="law-firm"){
+      await redis.sAdd("recover:law-firm:enrich-pending:v2",identities);
+    }
     if(/\\bny\\b|new york/i.test(String(job.location||"")) && isHomeComfortTarget(job.industry||"")){
       await redis.sAdd("recover:leadstore:ny-home-comfort",identities);
     }
