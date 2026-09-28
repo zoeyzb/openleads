@@ -623,6 +623,10 @@ const HOME_COMFORT_QUERIES=[
 ];
 const LAW_FIRM_QUERIES={
   personal_injury:["personal injury lawyer","injury attorney","car accident lawyer","settlement lawyer","accident law office"],
+  settlement_claims:["settlement lawyer","insurance claim lawyer","injury settlement attorney","insurance dispute attorney","claim denial lawyer"],
+  auto_accident:["car accident lawyer","auto accident attorney","truck accident lawyer","motorcycle accident attorney","vehicle injury lawyer"],
+  medical_malpractice:["medical malpractice lawyer","medical negligence attorney","birth injury lawyer","hospital negligence attorney","malpractice law office"],
+  dui_traffic:["DUI lawyer","DWI attorney","traffic defense lawyer","license suspension attorney","traffic law office"],
   family_divorce:["divorce lawyer","family law attorney","child custody lawyer","family law office","divorce attorney"],
   criminal_defense:["criminal defense lawyer","criminal defense attorney","DUI lawyer","criminal defense law office","criminal lawyer"],
   estate_probate:["estate planning attorney","probate lawyer","wills and trusts attorney","elder law attorney","probate law office"],
