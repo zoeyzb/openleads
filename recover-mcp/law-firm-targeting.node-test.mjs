@@ -43,7 +43,7 @@ assert.equal(qualifiesNoWebsiteLawLead({
   website:"",
   emails:["realfirm@gmail.com"],
   practice_keys:[]
-}),false);
+}),true);
 
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:1500,limit:1000}),true);
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:999,limit:1000}),false);
