@@ -622,16 +622,24 @@ const HOME_COMFORT_QUERIES=[
   "sewer contractor"
 ];
 const LAW_FIRM_QUERIES={
-  personal_injury:["personal injury lawyer","personal injury law firm","car accident lawyer","injury attorney","accident law office"],
-  family_divorce:["divorce lawyer","family law attorney","divorce law firm","child custody lawyer","family law office"],
-  criminal_defense:["criminal defense lawyer","criminal defense attorney","criminal law firm","DUI lawyer","criminal defense law office"],
-  general:["law office","boutique law firm","small law firm","law offices","law firm"]
+  personal_injury:["personal injury lawyer","injury attorney","car accident lawyer","personal injury law firm","accident law office"],
+  family_divorce:["divorce lawyer","family law attorney","child custody lawyer","family law office","divorce law firm"],
+  criminal_defense:["criminal defense lawyer","criminal defense attorney","DUI lawyer","criminal defense law office","criminal law firm"],
+  general:["law office","attorney at law","small law firm","solo attorney","law offices","law firm"]
 };
 const queryVariants=(industry,location,practiceFocus="")=>{
   if (/\blaw\s*firm\b|\battorney\b|\blawyer\b/.test(normalizeText(industry))){
     const key=normalizeText(practiceFocus).replace(/\s+/g,"_");
     const base=LAW_FIRM_QUERIES[key]||LAW_FIRM_QUERIES.general;
-    return [...new Set([...base,...LAW_FIRM_QUERIES.general.slice(0,2)])].map(q=>`${q} in ${location}`);
+    const mixed=[
+      base[0],
+      LAW_FIRM_QUERIES.general[0],
+      base[1]||base[0],
+      LAW_FIRM_QUERIES.general[1],
+      base[2]||base[0],
+      LAW_FIRM_QUERIES.general[2]
+    ].filter(Boolean);
+    return [...new Set(mixed)].map(q=>`${q} in ${location}`);
   }
   if (isHomeComfortTarget(industry)) return HOME_COMFORT_QUERIES.map(q=>`${q} in ${location}`);
   return [
