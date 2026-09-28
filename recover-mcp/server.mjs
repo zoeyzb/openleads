@@ -39,6 +39,7 @@ const KEELEAD_BASE_URL = (process.env.KEELEAD_BASE_URL || "").replace(/\/$/, "")
 const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 const ACQUISITION_REDIS_URL = process.env.ACQUISITION_REDIS_URL || "";
+const LAW_EXPORT_REDIS_URL = process.env.LAW_EXPORT_REDIS_URL || "";
 const LAW_EXPORT_TOKEN = String(process.env.LAW_EXPORT_TOKEN || "");
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || "";
 const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER || "";
@@ -73,6 +74,7 @@ if (SMS_SHEET_BRIDGE.writer_email) {
   console.log("SMS sheet writer email", SMS_SHEET_BRIDGE.writer_email);
 }
 let acquisitionRedisPromise = null;
+let lawExportRedisPromise = null;
 const INBOX_SSE_CLIENTS = new Set();
 
 function broadcastInboxEvent(event) {
@@ -246,6 +248,38 @@ async function getAcquisitionRedis() {
     return client;
   } catch (error) {
     acquisitionRedisPromise = null;
+    throw error;
+  }
+}
+
+async function getLawExportRedis() {
+  if (!LAW_EXPORT_REDIS_URL) return getAcquisitionRedis();
+  if (!lawExportRedisPromise) {
+    lawExportRedisPromise = (async () => {
+      const client=createClient({
+        url:LAW_EXPORT_REDIS_URL,
+        socket:{
+          connectTimeout:30000,
+          reconnectStrategy:retries=>Math.min(1000+(retries*500),10000)
+        }
+      });
+      client.on("error",err=>console.error("Law export Redis error",err));
+      try{
+        await client.connect();
+        return client;
+      }catch(error){
+        lawExportRedisPromise=null;
+        try{await client.quit();}catch{}
+        throw error;
+      }
+    })();
+  }
+  try{
+    const client=await lawExportRedisPromise;
+    if(!client?.isReady&&!client?.isOpen)lawExportRedisPromise=null;
+    return client;
+  }catch(error){
+    lawExportRedisPromise=null;
     throw error;
   }
 }
@@ -3062,7 +3096,7 @@ const httpServer = createHttpServer((req, res) => {
         res.end(JSON.stringify({error:"unauthorized"}));
         return;
       }
-      const redis=await getAcquisitionRedis();
+      const redis=await getLawExportRedis();
       let lawCandidates=0,noWebsite=0,noWebsiteEmail=0,knownTarget=0,exportable=0;
       const byPractice={personal_injury:0,family_divorce:0,criminal_defense:0,unknown:0};
       for await (const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
@@ -3117,7 +3151,7 @@ const httpServer = createHttpServer((req, res) => {
         res.end(JSON.stringify({error:"unauthorized"}));
         return;
       }
-      const redis=await getAcquisitionRedis();
+      const redis=await getLawExportRedis();
       const rows=[["Type","Firm Name","Email","Phone","City","State","Attorney Count","Firm Size","Rating","Reviews","Personalization","Suggested Opener","Maps URL","Priority","Status"]];
       for await (const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
         for(const entry of (Array.isArray(page)?page:[page])){
