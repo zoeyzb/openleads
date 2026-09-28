@@ -53,6 +53,13 @@ const PENDING_SET="recover:law-firm:enrich-pending:v3";
 const PRIORITY_PENDING_SET="recover:law-firm:enrich-priority:v3";
 const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
+const WEBSITE_CANDIDATE_HASH="recover:law-firm:website-candidates:v1";
+const WEBSITE_AUDIT_PENDING_SET="recover:law-firm:website-audit-pending:v1";
+const WEBSITE_REFRESH_HASH="recover:law-firm:website-refresh:v1";
+const WEBSITE_REFRESH_READY_SET="recover:law-firm:website-refresh-ready:v1";
+const WEBSITE_REFRESH_REJECTED_SET="recover:law-firm:website-refresh-rejected:v1";
+const WEBSITE_AUDIT_BATCH=Math.max(1,Math.min(32,Number(process.env.LAW_WEBSITE_AUDIT_BATCH||20)));
+const WEBSITE_AUDIT_CONCURRENCY=Math.max(1,Math.min(12,Number(process.env.LAW_WEBSITE_AUDIT_CONCURRENCY||8)));
 const DISCOVERY_BACKLOG_LIMIT=Math.max(1000,Number(process.env.LAW_FIRM_DISCOVERY_BACKLOG_LIMIT||15000));
 const STATS="recover:law-firm:stats:v3";
 const PROFILE={industry:"LAW_FIRM",require_phone:false,require_email:false,require_contact:false,require_no_website:true,include_no_website:true,min_score:45};
@@ -695,6 +702,135 @@ function websiteAudit({html="",text="",url="",practiceFocus="",elapsedMs=0}={}){
   };
 }
 
+function sameOwnedWebsiteDomain(email="",website=""){
+  const emailDomain=String(email).split("@")[1]?.toLowerCase()||"";
+  const siteHost=hostOf(website);
+  if(!emailDomain||!siteHost)return false;
+  return emailDomain===siteHost||siteHost.endsWith("."+emailDomain)||emailDomain.endsWith("."+siteHost);
+}
+async function validateOwnedWebsiteEmails(values=[],lead={},website=""){
+  const unique=[...new Set(values.map(x=>String(x||"").trim().toLowerCase()).filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x)))];
+  const checks=await Promise.all(unique.map(async email=>{
+    const sameDomain=sameOwnedWebsiteDomain(email,website);
+    const identity=emailIdentityStrong(email,lead);
+    return {email,ok:(sameDomain||identity)&&await hasMailExchange(email)};
+  }));
+  return rankLawEmails(checks.filter(x=>x.ok).map(x=>x.email)).slice(0,5);
+}
+async function auditWebsiteRefreshLead(key,lead={}){
+  const website=String(lead.website||"").trim();
+  if(!/^https?:\/\//i.test(website))return false;
+  if(await redis.sIsMember(WEBSITE_REFRESH_READY_SET,key))return false;
+
+  const homepage=await fetchText(website,6000);
+  const homeText=stripHtml(homepage.html).slice(0,30000);
+  const audit=websiteAudit({
+    html:homepage.html,
+    text:homeText,
+    url:homepage.final_url||website,
+    practiceFocus:String(lead.practice_focus||""),
+    elapsedMs:Number(homepage.elapsed_ms||0)
+  });
+  if((audit.pain_points||[]).length<2){
+    await redis.sAdd(WEBSITE_REFRESH_REJECTED_SET,key);
+    await redis.hIncrBy(STATS,"website_refresh_rejected_weak",1);
+    return true;
+  }
+
+  let emails=[...emailsFrom(homepage.html),...contextualEmails(homepage.html,lead)];
+  let emailSource=homepage.final_url||website;
+  const links=linksFrom(homepage.final_url||website,homepage.html)
+    .filter(u=>/\b(contact|about|attorney|lawyer|team|people)\b/i.test(u))
+    .slice(0,3);
+  if(emails.length<1&&links.length){
+    const pages=await Promise.allSettled(links.map(url=>fetchText(url,5000)));
+    for(let i=0;i<pages.length;i++){
+      const item=pages[i];if(item.status!=="fulfilled")continue;
+      const found=[...emailsFrom(item.value.html),...contextualEmails(item.value.html,lead)];
+      if(found.length&&!emails.length)emailSource=item.value.final_url||links[i];
+      emails.push(...found);
+    }
+  }
+  emails=await validateOwnedWebsiteEmails(emails,lead,homepage.final_url||website);
+  if(!emails.length){
+    await redis.sAdd(WEBSITE_REFRESH_REJECTED_SET,key);
+    await redis.hIncrBy(STATS,"website_refresh_rejected_no_email",1);
+    return true;
+  }
+
+  const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
+  const practiceKeys=[...new Set([
+    ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
+    ...lawFirmPracticeKeys(evidence),
+    ...(String(lead.practice_focus||"").trim()?[String(lead.practice_focus).trim()]:[])
+  ])].filter(k=>LAW_PRACTICES.some(p=>p.key===k)).slice(0,3);
+  const practices=practiceKeys.map(k=>LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
+  const attorneyCount=Number(lead.attorney_count_estimate||0);
+  const p=personalization({
+    lead,practices,attorneyCount,
+    source:homepage.final_url||website,
+    targetLabel:practices[0]||"law"
+  });
+  const priority=priorityScore({
+    attorneyCount,
+    reviewCount:lead.review_count,
+    hasEmail:true,
+    painCount:(audit.pain_points||[]).length,
+    personalizationQuality:p.quality,
+    hasPractice:practiceKeys.length>0
+  });
+  const refreshed={
+    ...lead,
+    emails,
+    website:homepage.final_url||website,
+    website_opportunity:"website_refresh",
+    website_audit:audit,
+    primary_pain_point:audit.primary_pain_point,
+    practice_keys:practiceKeys,
+    practice_areas:practices,
+    lead_type:practices.join(" + "),
+    personalization_fact:p.fact,
+    personalization_source:p.source,
+    personalization_quality:p.quality,
+    law_email_method:"owned_website",
+    law_email_source:emailSource,
+    law_email_validation:"owned-site+mx",
+    lead_priority_score:priority,
+    website_refresh_qualified_at:new Date().toISOString()
+  };
+  await redis.hSet(WEBSITE_REFRESH_HASH,key,JSON.stringify(refreshed));
+  await redis.sAdd(WEBSITE_REFRESH_READY_SET,key);
+  await redis.sRem(WEBSITE_REFRESH_REJECTED_SET,key);
+  await redis.hIncrBy(STATS,"website_refresh_qualified",1);
+  console.log(JSON.stringify({
+    event:"law_website_refresh_qualified",key,name:lead.name,
+    email:emails[0],painPoints:(audit.pain_points||[]).length,
+    primaryPain:audit.primary_pain_point,priority
+  }));
+  return true;
+}
+async function websiteAuditBatch(){
+  const keys=await popSetBatch(WEBSITE_AUDIT_PENDING_SET,WEBSITE_AUDIT_BATCH);
+  if(!keys.length)return 0;
+  let index=0,done=0;
+  const run=async()=>{
+    while(index<keys.length){
+      const key=keys[index++];
+      try{
+        const raw=await redis.hGet(WEBSITE_CANDIDATE_HASH,key);
+        if(!raw)continue;
+        let lead;try{lead=JSON.parse(raw)||{};}catch{continue;}
+        if(await auditWebsiteRefreshLead(key,lead))done++;
+      }catch(error){
+        await redis.sAdd(WEBSITE_AUDIT_PENDING_SET,key);
+        console.warn(JSON.stringify({event:"law_website_audit_retry",key,error:String(error?.message||error)}));
+      }
+    }
+  };
+  await Promise.all(Array.from({length:Math.min(WEBSITE_AUDIT_CONCURRENCY,keys.length)},()=>run()));
+  return done;
+}
+
 function firmSizeTier(attorneyCount=0){
   const n=Number(attorneyCount||0);
   if(!n) return "unknown";
@@ -1196,13 +1332,14 @@ async function enrichmentLoop(){
   while(true){
     try{
       const enriched=await enrichBatch();
-      const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,emailStats]=await Promise.all([
+      const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,emailStats]=await Promise.all([
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
         redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
+        redis.sCard(WEBSITE_AUDIT_PENDING_SET),redis.sCard(WEBSITE_REFRESH_READY_SET),
         redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit"])
       ]);
       console.log(JSON.stringify({
-        event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,
+        event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,
         emailExisting:Number(emailStats?.[0]||0),emailDuck:Number(emailStats?.[1]||0),emailBing:Number(emailStats?.[2]||0),
         emailZeroCost:Number(emailStats?.[3]||0),emailNoHit:Number(emailStats?.[4]||0)
       }));
@@ -1211,4 +1348,20 @@ async function enrichmentLoop(){
   }
 }
 
-await Promise.all([seedLoop(),enrichmentLoop()]);
+async function websiteAuditLoop(){
+  while(true){
+    try{
+      const audited=await websiteAuditBatch();
+      if(audited){
+        const [pending,ready]=await Promise.all([
+          redis.sCard(WEBSITE_AUDIT_PENDING_SET),
+          redis.sCard(WEBSITE_REFRESH_READY_SET)
+        ]);
+        console.log(JSON.stringify({event:"law_website_audit_cycle",audited,pending,ready}));
+      }
+    }catch(error){console.error("law_website_audit_loop_error",error?.stack||error?.message||error);}
+    await sleep(Math.max(1500,LOOP_MS));
+  }
+}
+
+await Promise.all([seedLoop(),enrichmentLoop(),websiteAuditLoop()]);
