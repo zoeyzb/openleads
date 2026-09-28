@@ -122,7 +122,14 @@ function stripHtml(html=""){
     .replace(/<[^>]+>/g," ").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/\s+/g," ").trim();
 }
 function emailsFrom(text=""){
-  return [...new Set((String(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)||[])
+  let source=String(text||"");
+  try{source=decodeURIComponent(source.replace(/\+/g,"%20"));}catch{}
+  source=source
+    .replace(/&#64;|&commat;/gi,"@")
+    .replace(/&#46;|&period;/gi,".")
+    .replace(/\s*(?:\[|\(|\{)?\s*(?:at|AT)\s*(?:\]|\)|\})?\s*/g,"@")
+    .replace(/\s*(?:\[|\(|\{)?\s*(?:dot|DOT)\s*(?:\]|\)|\})?\s*/g,".");
+  return [...new Set((source.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)||[])
     .map(x=>x.toLowerCase().replace(/[),.;:]+$/,""))
     .filter(isUsableLawEmail))].slice(0,8);
 }
@@ -149,8 +156,24 @@ function likelyAttorneyName(lead={}){
   }
   return "";
 }
+function attorneyNameVariants(lead={}){
+  const primary=likelyAttorneyName(lead);
+  if(!primary)return [];
+  const values=[primary];
+  const parts=primary.replace(/,/g," ").split(/\s+/).filter(Boolean);
+  const suffixes=new Set(["jr","sr","ii","iii","iv","esq"]);
+  if(parts.length>=2&&parts.length<=4){
+    const clean=parts.filter(x=>!suffixes.has(x.toLowerCase().replace(/\./g,"")));
+    if(clean.length>=2){
+      // Maps frequently stores attorneys as "Last First M". Search both forms.
+      values.push([clean[1],...clean.slice(2),clean[0]].join(" "));
+      values.push([clean[clean.length-1],...clean.slice(1,-1),clean[0]].join(" "));
+    }
+  }
+  return [...new Set(values.map(x=>x.replace(/\s+/g," ").trim()).filter(x=>x.split(/\s+/).length>=2))].slice(0,3);
+}
 async function zeroCostEmailFallback(lead={}){
-  const personName=likelyAttorneyName(lead);
+  const personName=attorneyNameVariants(lead)[0]||"";
   if(!personName)return {emails:[],source:""};
   try{
     const result=await enrichProfessionalEmail("recover-law-email-v4",{
@@ -369,14 +392,14 @@ function specificFactFromText(text="",lead={}){
 }
 async function duckFallback(lead){
   const baseQueries=lawResearchQueries(lead);
-  const person=likelyAttorneyName(lead);
+  const people=attorneyNameVariants(lead);
   const region=String(lead.region||lead.state||lead.state_code||"").trim();
   const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
-  const attorneyQueries=person?[
+  const attorneyQueries=people.flatMap(person=>[
     `"${person}" ${region} attorney email`.trim(),
     `"${person}" ${region} state bar email`.trim(),
     ...(phone?[`"${person}" "${phone}"`]:[])
-  ]:[];
+  ]);
   const queries=[...new Set([...attorneyQueries,...baseQueries])];
   if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
   const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
