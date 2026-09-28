@@ -14,7 +14,7 @@ const MAX_CITIES=Math.max(50,Number(process.env.LAW_FIRM_MAX_CITIES||1200));
 const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_HIGH_WATER||24)));
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
-const ENRICH_CONCURRENCY=Math.max(1,Math.min(8,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||4)));
+const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
 const EMAIL_METHOD_VERSION="email-v6";
 const LOOP_MS=Math.max(1500,Number(process.env.LAW_FIRM_LOOP_MS||5000));
 const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_FETCH_TIMEOUT_MS||7000)));
@@ -365,76 +365,104 @@ function specificFactFromText(text="",lead={}){
 async function duckFallback(lead){
   const queries=lawResearchQueries(lead);
   if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
-  const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email].filter(isUsableLawEmail);
-  const emails=[...existingEmails],texts=[],sources=[];
+  const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+    .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
+  if(existingEmails.length){
+    return {
+      emails:rankLawEmails(existingEmails).slice(0,5),
+      text:"",
+      source:String(lead.personalization_source||lead.google_maps_url||""),
+      attorneyCount:Number(lead.attorney_count_estimate||0),
+      personalFact:String(lead.personalization_fact||""),
+      personalFactSource:String(lead.personalization_source||"")
+    };
+  }
+
+  const emails=[],texts=[],sources=[];
   let attorneyCount=Number(lead.attorney_count_estimate||0),personalFact="",personalFactSource="";
-  let pageBudget=existingEmails.length?3:8;
   const visited=new Set();
+
+  const absorbPage=(html="",finalUrl="")=>{
+    const pageText=stripHtml(html).slice(0,22000);
+    if(!pageMatchesLead(pageText,lead))return;
+    const pageEmails=contextualEmails(html,lead);
+    if(pageEmails.length){
+      emails.push(...pageEmails);
+      if(finalUrl&&!sources.includes(finalUrl))sources.unshift(finalUrl);
+    }
+    texts.push(pageText);
+    const estimate=attorneyEstimate(html,pageText);
+    if(estimate>attorneyCount)attorneyCount=estimate;
+    if(!personalFact){
+      const fact=specificFactFromText(pageText,lead);
+      if(fact){personalFact=fact;personalFactSource=finalUrl;}
+    }
+  };
+
   const profileUrl=String(lead.social_profile_url||"").trim();
   if(/^https?:\/\//i.test(profileUrl)){
     try{
-      const direct=await fetchText(profileUrl,5000);
-      const directText=stripHtml(direct.html).slice(0,22000);
-      if(pageMatchesLead(directText,lead)){
-        const directEmails=contextualEmails(direct.html,lead);
-        emails.push(...directEmails);
-        texts.push(directText);
-        if(directEmails.length)sources.unshift(direct.final_url||profileUrl);
-        const estimate=attorneyEstimate(direct.html,directText);
-        if(estimate>attorneyCount)attorneyCount=estimate;
-        const fact=specificFactFromText(directText,lead);
-        if(fact&&!personalFact){personalFact=fact;personalFactSource=direct.final_url||profileUrl;}
-      }
+      const direct=await fetchText(profileUrl,4500);
+      absorbPage(direct.html,direct.final_url||profileUrl);
+      if(emails.length)return {emails:rankLawEmails(emails),text:texts.join(" ").slice(0,48000),source:sources[0]||"",attorneyCount,personalFact,personalFactSource};
     }catch{}
   }
-  for(const q of queries){
-    try{
-      const url="https://html.duckduckgo.com/html/?q="+encodeURIComponent(q);
-      const result=await fetchText(url,6000);
-      const searchText=stripHtml(result.html).slice(0,9000);
-      emails.push(...contextualEmails(result.html,lead));
-      texts.push(searchText);
-      sources.push(url);
 
-      const resultLinks=duckResultLinks(result.html).sort((a,b)=>{
-        const rank=u=>/avvo|lawyers\.com|findlaw|justia|martindale|superlawyers|statebar|barassociation|bar\.org/i.test(u)?0:1;
+  // Two fast search waves. Run searches in parallel, then fetch the best unique pages in parallel.
+  const waves=[queries.slice(0,4),queries.slice(4,8)];
+  for(const wave of waves){
+    if(!wave.length||emails.length)break;
+    const searchResults=await Promise.allSettled(wave.map(async q=>{
+      const url="https://html.duckduckgo.com/html/?q="+encodeURIComponent(q);
+      const result=await fetchText(url,4500);
+      return {q,url,...result};
+    }));
+
+    const pageCandidates=[];
+    for(const item of searchResults){
+      if(item.status!=="fulfilled")continue;
+      const result=item.value;
+      const searchText=stripHtml(result.html).slice(0,9000);
+      texts.push(searchText);
+      const snippetEmails=contextualEmails(result.html,lead);
+      if(snippetEmails.length){
+        emails.push(...snippetEmails);
+        sources.unshift(result.url);
+      }
+      const links=duckResultLinks(result.html).sort((a,b)=>{
+        const rank=u=>/statebar|barassociation|bar\.org|allbiz|chamberofcommerce|justia|lawyers\.com|findlaw|avvo|martindale|superlawyers/i.test(u)?0:1;
         return rank(a)-rank(b);
       });
-      let perQueryPages=0;
-      for(const target of resultLinks){
-        if(pageBudget<=0||perQueryPages>=2)break;
-        if(visited.has(target))continue;
-        visited.add(target);pageBudget--;perQueryPages++;
-        try{
-          const page=await fetchText(target,6000);
-          const pageText=stripHtml(page.html).slice(0,22000);
-          if(!pageMatchesLead(pageText,lead))continue;
-          const pageEmails=contextualEmails(page.html,lead);
-          emails.push(...pageEmails);
-          texts.push(pageText);
-          const estimate=attorneyEstimate(page.html,pageText);
-          if(estimate>attorneyCount)attorneyCount=estimate;
-          if(!personalFact){
-            const fact=specificFactFromText(pageText,lead);
-            if(fact){personalFact=fact;personalFactSource=page.final_url||target;}
-          }
-          if(pageEmails.length && !sources.includes(page.final_url||target)) sources.unshift(page.final_url||target);
-        }catch{}
+      for(const link of links){
+        if(visited.has(link))continue;
+        visited.add(link);
+        pageCandidates.push(link);
+        if(pageCandidates.length>=8)break;
       }
+      if(pageCandidates.length>=8)break;
+    }
+    if(emails.length)break;
 
-      const combined=texts.join(" ");
-      if(!personalFact){
-        const fact=specificFactFromText(combined,lead);
-        if(fact){personalFact=fact;personalFactSource=sources[0]||url;}
-      }
-      const snippetEstimate=attorneyEstimate("",combined);
-      if(snippetEstimate>attorneyCount)attorneyCount=snippetEstimate;
-      if(emails.some(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x)))break;
-    }catch{}
+    const pages=await Promise.allSettled(pageCandidates.slice(0,8).map(target=>fetchText(target,4500)));
+    for(let i=0;i<pages.length;i++){
+      const item=pages[i];
+      if(item.status!=="fulfilled")continue;
+      absorbPage(item.value.html,item.value.final_url||pageCandidates[i]);
+      if(emails.length>=3)break;
+    }
   }
+
+  const combined=texts.join(" ");
+  if(!personalFact){
+    const fact=specificFactFromText(combined,lead);
+    if(fact){personalFact=fact;personalFactSource=sources[0]||"";}
+  }
+  const snippetEstimate=attorneyEstimate("",combined);
+  if(snippetEstimate>attorneyCount)attorneyCount=snippetEstimate;
+
   return {
-    emails:[...new Set(emails)],
-    text:texts.join(" ").slice(0,48000),
+    emails:rankLawEmails(emails).slice(0,5),
+    text:combined.slice(0,48000),
     source:sources[0]||"",
     attorneyCount,
     personalFact,
@@ -829,14 +857,30 @@ console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_load"}));
 const cities=await loadCities();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_loaded",cities:cities.length}));
 console.log(JSON.stringify({event:"law_firm_pipeline_started",cities:cities.length,practices:PRACTICE_FOCI.map(x=>x.key),target:TARGET_TOTAL,queueHighWater:QUEUE_HIGH_WATER,seedBatch:SEED_BATCH,enrichBatch:ENRICH_BATCH,enrichConcurrency:ENRICH_CONCURRENCY,discoveryBacklogLimit:DISCOVERY_BACKLOG_LIMIT}));
-while(true){
-  try{
-    const [seeded,enriched]=await Promise.all([seed(cities),enrichBatch()]);
-    const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource]=await Promise.all([
-      redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
-      redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(SOURCE_PENDING_SET)
-    ]);
-    console.log(JSON.stringify({event:"law_firm_pipeline_cycle",seeded,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource}));
-  }catch(error){console.error("law_firm_pipeline_error",error?.stack||error?.message||error);}
-  await sleep(LOOP_MS);
+
+async function seedLoop(){
+  while(true){
+    try{
+      const seeded=await seed(cities);
+      const queue=await redis.lLen(ACTIVE_QUEUE);
+      if(seeded)console.log(JSON.stringify({event:"law_firm_seed_cycle",seeded,queue}));
+    }catch(error){console.error("law_firm_seed_error",error?.stack||error?.message||error);}
+    await sleep(Math.max(1000,Math.min(LOOP_MS,2500)));
+  }
 }
+
+async function enrichmentLoop(){
+  while(true){
+    try{
+      const enriched=await enrichBatch();
+      const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource]=await Promise.all([
+        redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
+        redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(SOURCE_PENDING_SET)
+      ]);
+      console.log(JSON.stringify({event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingSource}));
+    }catch(error){console.error("law_firm_enrich_loop_error",error?.stack||error?.message||error);}
+    await sleep(LOOP_MS);
+  }
+}
+
+await Promise.all([seedLoop(),enrichmentLoop()]);
