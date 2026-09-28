@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,shouldPauseLawDiscovery,lawResearchQueries,isUsableLawEmail} from "./law-firm-targeting.mjs";
+import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,shouldPauseLawDiscovery,lawResearchQueries,isUsableLawEmail,isPreferredLawFirmSize} from "./law-firm-targeting.mjs";
 
 assert.equal(isLawFirmLead({category:"Personal injury attorney",name:"Smith & Doe Law"}),true);
 assert.equal(isLawFirmLead({category:"Criminal defense attorney",name:"Jones Defense Law"}),true);
@@ -20,30 +20,25 @@ assert.ok(scored.score>=70);
 assert.ok(scored.practice_areas.includes("personal injury"));
 console.log("law-firm-targeting tests passed");
 
-assert.equal(qualifiesNoWebsiteLawLead({
+assert.equal(isPreferredLawFirmSize(1),false);
+assert.equal(isPreferredLawFirmSize(2),true);
+assert.equal(isPreferredLawFirmSize(10),true);
+assert.equal(isPreferredLawFirmSize(11),false);
+
+const qualifiedBase={
   website:"",
   emails:["realfirm@gmail.com"],
   practice_keys:["personal_injury"],
-  personalization_fact:""
-}),true);
-
-assert.equal(qualifiesNoWebsiteLawLead({
-  website:"https://example.com",
-  emails:["realfirm@gmail.com"],
-  practice_keys:["personal_injury"]
-}),false);
-
-assert.equal(qualifiesNoWebsiteLawLead({
-  website:"",
-  emails:[],
-  practice_keys:["personal_injury"]
-}),false);
-
-assert.equal(qualifiesNoWebsiteLawLead({
-  website:"",
-  emails:["realfirm@gmail.com"],
-  practice_keys:[]
-}),true);
+  attorney_count_estimate:4,
+  email_source_verified:true
+};
+assert.equal(qualifiesNoWebsiteLawLead(qualifiedBase),true);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,website:"https://example.com"}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,emails:[]}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,practice_keys:[]}),true);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:1}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:11}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,email_source_verified:false}),false);
 
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:1500,limit:1000}),true);
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:999,limit:1000}),false);
@@ -64,7 +59,6 @@ assert.equal(isUsableLawEmail("flast@therogerslawgroup.com"),false);
 assert.equal(isUsableLawEmail("info@thesunfirm.complease"),false);
 
 assert.equal(qualifiesNoWebsiteLawLead({
-  website:"",
-  emails:["error-lite+9c39@duckduckgo.com"],
-  practice_keys:["personal_injury"]
+  ...qualifiedBase,
+  emails:["error-lite+9c39@duckduckgo.com"]
 }),false);
