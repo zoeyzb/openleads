@@ -3074,8 +3074,9 @@ const httpServer = createHttpServer((req, res) => {
           const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email].map(x=>String(x||"").trim().toLowerCase()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
           const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
           const evidenceKeys=lawFirmPracticeKeys(evidence);
+          const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
           const focus=String(lead.practice_focus||"").trim();
-          const practiceKeys=[...new Set([...evidenceKeys,...(focus?[focus]:[])])];
+          const practiceKeys=[...new Set([...storedKeys,...evidenceKeys,...(focus?[focus]:[])])];
           if(!qualifiesNoWebsiteLawLead({website,emails,practice_keys:practiceKeys})) continue;
           const labels=practiceKeys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
           const type=(labels.length?labels:lawFirmPracticeAreas(evidence)).map(x=>x.replace("personal injury","Personal Injury").replace("family/divorce","Family/Divorce").replace("criminal defense","Criminal Defense")).join(" + ");
