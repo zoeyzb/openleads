@@ -892,6 +892,12 @@ async function seed(cities){
   return added;
 }
 
+console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"bootstrap_existing"}));
+await bootstrapExistingQualified();
+console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_load"}));
+const cities=await loadCities();
+console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_loaded",cities:cities.length}));
+
 console.log(JSON.stringify({event:"law_firm_pipeline_started",cities:cities.length,practices:PRACTICE_FOCI.map(x=>x.key),target:TARGET_TOTAL,queueHighWater:QUEUE_HIGH_WATER,seedBatch:SEED_BATCH,enrichBatch:ENRICH_BATCH,enrichConcurrency:ENRICH_CONCURRENCY,discoveryBacklogLimit:DISCOVERY_BACKLOG_LIMIT}));
 
 async function seedLoop(){
