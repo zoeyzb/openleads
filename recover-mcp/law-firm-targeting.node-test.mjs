@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice} from "./law-firm-targeting.mjs";
+import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead} from "./law-firm-targeting.mjs";
 
 assert.equal(isLawFirmLead({category:"Personal injury attorney",name:"Smith & Doe Law"}),true);
 assert.equal(isLawFirmLead({category:"Criminal defense attorney",name:"Jones Defense Law"}),true);
@@ -19,3 +19,28 @@ const scored=scoreLawFirmLead(
 assert.ok(scored.score>=70);
 assert.ok(scored.practice_areas.includes("personal injury"));
 console.log("law-firm-targeting tests passed");
+
+assert.equal(qualifiesNoWebsiteLawLead({
+  website:"",
+  emails:["hello@example.com"],
+  practice_keys:["personal_injury"],
+  personalization_fact:""
+}),true);
+
+assert.equal(qualifiesNoWebsiteLawLead({
+  website:"https://example.com",
+  emails:["hello@example.com"],
+  practice_keys:["personal_injury"]
+}),false);
+
+assert.equal(qualifiesNoWebsiteLawLead({
+  website:"",
+  emails:[],
+  practice_keys:["personal_injury"]
+}),false);
+
+assert.equal(qualifiesNoWebsiteLawLead({
+  website:"",
+  emails:["hello@example.com"],
+  practice_keys:[]
+}),false);
