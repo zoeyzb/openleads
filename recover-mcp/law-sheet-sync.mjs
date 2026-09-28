@@ -1,5 +1,5 @@
 import { createSign } from "node:crypto";
-import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, isUsableLawEmail } from "./law-firm-targeting.mjs";
+import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, qualifiesNoWebsiteLawLead, isUsableLawEmail } from "./law-firm-targeting.mjs";
 
 const TOKEN_URL="https://oauth2.googleapis.com/token";
 const SHEETS_API="https://sheets.googleapis.com/v4/spreadsheets";
@@ -39,7 +39,7 @@ function parseLocation(lead={}){
   return {city,state};
 }
 function typeLabel(keys=[],evidence=""){
-  const labels=keys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
+  const labels=keys.map(k=>LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
   return (labels.length?labels:lawFirmPracticeAreas(evidence))
     .map(x=>x.replace("personal injury","Personal Injury").replace("family/divorce","Family/Divorce").replace("criminal defense","Criminal Defense"))
     .join(" + ") || "Needs Classification";
@@ -59,7 +59,7 @@ async function collectRows(redis){
         ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
         ...lawFirmPracticeKeys(evidence),
         ...(clean(lead.practice_focus)?[clean(lead.practice_focus)]:[])
-      ])].filter(k=>["personal_injury","family_divorce","criminal_defense"].includes(k));
+      ])].filter(k=>LAW_PRACTICES.some(p=>p.key===k));
       if(!qualifiesNoWebsiteLawLead({website,emails,practice_keys:practiceKeys}))continue;
 
       const type=typeLabel(practiceKeys,evidence);
