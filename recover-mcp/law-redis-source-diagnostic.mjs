@@ -20,12 +20,15 @@ for await(const pg of r.hScanIterator("recover:leadstore:qualified",{COUNT:500})
     if(emails.length)noWebEmail++;
   }
 }
-console.log(JSON.stringify({
+const payload={
   law,noWeb,noWebEmail,
   hash:await r.hLen("recover:leadstore:qualified"),
   q3:await r.sCard("recover:law-firm:qualified:v3"),
   p3:await r.sCard("recover:law-firm:enrich-pending:v3"),
   p2:await r.sCard("recover:law-firm:enrich-pending:v2"),
-  priority:await r.sCard("recover:law-firm:enrich-priority:v3")
-}));
+  priority:await r.sCard("recover:law-firm:enrich-priority:v3"),
+  at:new Date().toISOString()
+};
+await r.set("recover:diag:law-redis-source",JSON.stringify(payload),{EX:3600});
+console.log(JSON.stringify(payload));
 await r.quit();
