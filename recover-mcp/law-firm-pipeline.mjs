@@ -101,10 +101,62 @@ async function loadCities(){
     }
     byCity.set(key,prev);
   }
-  return [...byCity.values()]
+  const all=[...byCity.values()]
     .map(({zips,...area})=>({...area,zip_count:zips.size}))
-    .sort((a,b)=>b.population-a.population||b.zip_count-a.zip_count||a.location.localeCompare(b.location))
-    .slice(0,MAX_CITIES);
+    .filter(area=>area.population>=5000);
+
+  // No-website law firms are disproportionately more likely outside the
+  // largest metros. Build a state-diverse frontier that favors small/mid
+  // cities without abandoning major markets.
+  const bands={
+    small:all.filter(x=>x.population>=5000&&x.population<50000),
+    mid:all.filter(x=>x.population>=50000&&x.population<200000),
+    large:all.filter(x=>x.population>=200000&&x.population<750000),
+    mega:all.filter(x=>x.population>=750000)
+  };
+  for(const rows of Object.values(bands)){
+    rows.sort((a,b)=>a.state.localeCompare(b.state)||b.population-a.population||a.location.localeCompare(b.location));
+  }
+  const stateRoundRobin=(rows)=>{
+    const byState=new Map();
+    for(const row of rows){
+      if(!byState.has(row.state))byState.set(row.state,[]);
+      byState.get(row.state).push(row);
+    }
+    const states=[...byState.keys()].sort();
+    const out=[];
+    let remaining=true;
+    while(remaining){
+      remaining=false;
+      for(const state of states){
+        const row=byState.get(state)?.shift();
+        if(row){out.push(row);remaining=true;}
+      }
+    }
+    return out;
+  };
+  const small=stateRoundRobin(bands.small), mid=stateRoundRobin(bands.mid),
+    large=stateRoundRobin(bands.large), mega=stateRoundRobin(bands.mega);
+  const cursors={small:0,mid:0,large:0,mega:0}, result=[];
+  // 50% small, 30% mid, 15% large, 5% mega per 20 slots.
+  const pattern=["small","mid","small","large","small","mid","small","mega",
+    "mid","small","large","small","mid","small","small","mid",
+    "large","small","mid","small"];
+  while(result.length<MAX_CITIES){
+    let progressed=false;
+    for(const band of pattern){
+      const rows={small,mid,large,mega}[band];
+      const idx=cursors[band];
+      if(idx<rows.length){
+        result.push(rows[idx]);
+        cursors[band]=idx+1;
+        progressed=true;
+        if(result.length>=MAX_CITIES)break;
+      }
+    }
+    if(!progressed)break;
+  }
+  return result;
 }
 async function fetchText(url,timeout=FETCH_TIMEOUT_MS){
   const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),timeout);
