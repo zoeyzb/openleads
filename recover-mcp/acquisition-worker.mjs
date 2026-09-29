@@ -670,20 +670,27 @@ const queryVariants=(industry,location,practiceFocus="",coveragePass="")=>{
   if (/\blaw\s*firm\b|\battorney\b|\blawyer\b/.test(normalizeText(industry))){
     const key=normalizeText(practiceFocus).replace(/\s+/g,"_");
     const base=LAW_FIRM_QUERIES[key]||LAW_FIRM_QUERIES.general;
-    const general=LAW_FIRM_QUERIES.general;
     const wave=Math.max(1,Number(String(coveragePass||"").match(/-w(\d+)/i)?.[1]||1));
-    // The sales cohort is 2-10 attorneys, so first-pass discovery should
-    // bias toward multi-attorney firm language instead of solo-heavy "law office".
+    // The paid-email cohort is specifically 2-10 attorneys. Maps queries using
+    // singular "lawyer"/"attorney" overwhelmingly return solos, so firmize the
+    // practice terms while still keeping solos in the background lane if Maps
+    // returns them incidentally.
+    const firmize=q=>String(q||"")
+      .replace(/\b(?:lawyer|attorney)\b/gi,"law firm")
+      .replace(/\blaw office\b/gi,"law firm")
+      .replace(/\s+/g," ").trim();
+    const firmBase=[...new Set(base.map(firmize).filter(Boolean))];
     const preferredByWave=["law firm","law group","attorneys at law","small law firm","law partners","law associates","law firm PLLC","law firm PC"];
     const g0=preferredByWave[(wave-1)%preferredByWave.length];
     const g1=preferredByWave[wave%preferredByWave.length];
+    const g2=preferredByWave[(wave+2)%preferredByWave.length];
     const mixed=[
       g0,
-      base[0],
+      firmBase[0],
       g1,
-      base[1]||base[0],
-      general[0],
-      base[2]||base[0]
+      firmBase[1]||firmBase[0],
+      g2,
+      firmBase[2]||firmBase[0]
     ].filter(Boolean);
     return [...new Set(mixed)].map(q=>`${q} in ${location}`);
   }
