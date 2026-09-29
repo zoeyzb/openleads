@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v23-evidence-escalation";
+const EMAIL_METHOD_VERSION="email-v24-bing-link-decode";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -602,17 +602,35 @@ function attorneyEstimate(html="",text=""){
   }
   return Math.min(100,estimate);
 }
+function decodeBingRedirect(raw=""){
+  try{
+    const url=new URL(String(raw||"").replace(/&amp;/g,"&"));
+    if(!/(^|\.)bing\.com$/i.test(url.hostname))return url.href;
+    if(!/\/ck\/a/i.test(url.pathname))return "";
+    let target=String(url.searchParams.get("u")||url.searchParams.get("url")||"");
+    if(!target)return "";
+    target=decodeURIComponent(target);
+    if(target.startsWith("a1")){
+      const encoded=target.slice(2).replace(/-/g,"+").replace(/_/g,"/");
+      try{target=Buffer.from(encoded,"base64").toString("utf8");}catch{}
+    }
+    if(!/^https?:\/\//i.test(target))return "";
+    return new URL(target).href;
+  }catch{return "";}
+}
 function bingResultLinks(html=""){
   const out=[];
   for(const m of String(html).matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)){
+    const decoded=decodeBingRedirect(m[1]);
+    if(!decoded)continue;
     try{
-      const u=new URL(String(m[1]).replace(/&amp;/g,"&"));
+      const u=new URL(decoded);
       if(/(^|\.)bing\.com$/i.test(u.hostname))continue;
       if(!/^https?:$/.test(u.protocol))continue;
       out.push(u.href);
     }catch{}
   }
-  return [...new Set(out)].slice(0,8);
+  return [...new Set(out)].slice(0,12);
 }
 async function bingFallback(lead,query,pageBudget=6,key=""){
   const emails=[],texts=[],sources=[];
@@ -642,6 +660,7 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
     }
     // Fetch actual source pages for corroboration. Search-result snippets are
     // never treated as publish-source evidence.
+    if(links.length)await redis.hIncrBy(STATS,"bing_source_links",links.length);
     const pages=await Promise.allSettled(links.slice(0,pageBudget).map(target=>fetchResearchPage(target,lead,key)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
@@ -657,7 +676,11 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
         const fact=specificFactFromText(pageText,lead);
         if(fact){personalFact=fact;personalFactSource=page.final_url||target;}
       }
-      if(pageEmails.length)sources.unshift(page.final_url||target);
+      await redis.hIncrBy(STATS,"bing_source_pages_matched",1);
+      if(pageEmails.length){
+        sources.unshift(page.final_url||target);
+        await redis.hIncrBy(STATS,"bing_source_email_pages",1);
+      }
     }
   }catch{}
   return {emails:[...new Set(emails)],text:texts.join(" ").slice(0,24000),source:sources[0]||"",attorneyCount,personalFact,personalFactSource};
@@ -1757,14 +1780,16 @@ async function enrichmentLoop(){
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
         redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
         redis.sCard(WEBSITE_AUDIT_PENDING_SET),redis.sCard(WEBSITE_REFRESH_READY_SET),
-        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable"])
+        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","bing_source_links","bing_source_pages_matched","bing_source_email_pages"])
       ]);
       console.log(JSON.stringify({
         event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,
         emailExisting:Number(emailStats?.[0]||0),emailDuck:Number(emailStats?.[1]||0),emailBing:Number(emailStats?.[2]||0),
         emailZeroCost:Number(emailStats?.[3]||0),emailNoHit:Number(emailStats?.[4]||0),
         scraplingSourceHit:Number(emailStats?.[5]||0),scraplingSourceFail:Number(emailStats?.[6]||0),
-        emailVerifierUnavailable:Number(emailStats?.[7]||0)
+        emailVerifierUnavailable:Number(emailStats?.[7]||0),
+        bingSourceLinks:Number(emailStats?.[8]||0),bingSourcePagesMatched:Number(emailStats?.[9]||0),
+        bingSourceEmailPages:Number(emailStats?.[10]||0)
       }));
     }catch(error){console.error("law_firm_enrich_loop_error",error?.stack||error?.message||error);}
     await sleep(LOOP_MS);
