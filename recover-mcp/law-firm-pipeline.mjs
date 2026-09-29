@@ -21,7 +21,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v48-bar-firm-phone-recovery";
+const EMAIL_METHOD_VERSION="email-v49-strict-firm-source-binding";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -140,7 +140,7 @@ async function publishedEmailsOnExactSource(source="",emails=[],lead={},key=""){
     const page=await fetchResearchPage(source,lead,key,true);
     if(!page?.html)return [];
     const pageText=stripHtml(page.html).slice(0,30000);
-    if(!pageMatchesLead(pageText,lead))return [];
+    if(!sourcePageMatchesFirmIdentity(pageText,lead))return [];
     const published=new Set(contextualEmails(page.html,lead,page.final_url||source).map(x=>String(x).toLowerCase()));
     return emails.filter(email=>published.has(String(email).toLowerCase()));
   }catch{return [];}
@@ -618,6 +618,26 @@ function pageMatchesLead(text="",lead={}){
   if(tokens.length<2)return false;
   const hits=tokens.filter(x=>plain.includes(x)).length;
   return hits>=2;
+}
+function sourcePageMatchesFirmIdentity(text="",lead={}){
+  const plain=normalize(text);
+  if(!plain)return false;
+  const digits=String(text).replace(/\D/g,"");
+  const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+  if(phone&&digits.includes(phone))return true;
+
+  const city=normalize(lead.city||"");
+  const state=normalize(lead.region||lead.state||lead.state_code||"");
+  const geoMatch=Boolean((city&&plain.includes(city))||(state&&state.length>=2&&plain.includes(state)));
+
+  const fullName=normalize(lead.name||lead.title||"");
+  if(fullName.length>=8&&plain.includes(fullName)&&geoMatch)return true;
+
+  const tokens=leadNameTokens(lead).filter(x=>x.length>=4);
+  const hits=tokens.filter(x=>plain.includes(x)).length;
+  if(tokens.length>=2&&hits>=2&&geoMatch)return true;
+  if(tokens.length===1&&hits===1&&city&&state&&plain.includes(city)&&plain.includes(state))return true;
+  return false;
 }
 function ownedWebsiteFromMatchedPage(url="",text="",lead={}){
   const rank=lawSourceRank(url,lead);
@@ -1975,7 +1995,7 @@ async function enrichLead(key,lead){
     law_email_enrich_version:EMAIL_METHOD_VERSION,
     law_email_method:emailMethod,law_email_source:source||"",
     law_email_source_verified:emailSourceVerified,
-    law_email_validation:emailSourceVerified?"published_exact+firm_identity+mx+keelead_infrastructure_heuristic":"rejected",
+    law_email_validation:emailSourceVerified?"published_exact+strict_firm_identity+mx+keelead_infrastructure_heuristic":"rejected",
     law_email_mailbox_verified:false,
     law_bar_domain:stateBarDomain(lead),
     law_firm_enriched_at:new Date().toISOString()};
