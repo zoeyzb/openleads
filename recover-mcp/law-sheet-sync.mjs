@@ -62,27 +62,26 @@ function typeLabel(keys=[],evidence=""){
 }
 async function collectRows(redis){
   const out=[];
-  const readyKeys=await redis.sMembers("recover:law-firm:qualified:v3");
-  for(let offset=0;offset<readyKeys.length;offset+=250){
-    const keys=readyKeys.slice(offset,offset+250);
+  const [readyKeys,candidateKeys]=await Promise.all([
+    redis.sMembers("recover:law-firm:qualified:v3"),
+    redis.sMembers("recover:law-firm:email-candidates:v1")
+  ]);
+  const allKeys=[...new Set([...readyKeys,...candidateKeys])];
+  for(let offset=0;offset<allKeys.length;offset+=250){
+    const keys=allKeys.slice(offset,offset+250);
     const values=await redis.hmGet("recover:leadstore:qualified",keys);
     for(let i=0;i<keys.length;i++){
       if(!values[i])continue;
       let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
       const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
       if(!isLaw)continue;
+      const website=clean(lead.website||lead.website_url);
+      if(/^https?:\/\//i.test(website))continue;
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
         .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
-      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
       const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
-      const noOwnedWebsite=!/^https?:\/\//i.test(clean(lead.website||lead.website_url));
-      if(!qualifiesNoWebsiteLawLead({
-        website:noOwnedWebsite?"":clean(lead.website||lead.website_url),
-        emails,
-        attorney_count_estimate:attorneyCount,
-        email_source_verified:sourceVerified
-      }))continue;
+      if(!emails.length||!sourceVerified)continue;
 
       const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const practiceKeys=[...new Set([
@@ -90,12 +89,13 @@ async function collectRows(redis){
         ...lawFirmPracticeKeys(evidence),
         ...(clean(lead.practice_focus)?[clean(lead.practice_focus)]:[])
       ])].filter(k=>LAW_PRACTICES.some(p=>p.key===k));
-
       const type=typeLabel(practiceKeys,evidence);
       const name=clean(lead.name||lead.title);
       const {city,state}=parseLocation(lead);
       const rating=Number(lead.review_rating||lead.rating||0);
       const reviews=Number(lead.review_count||lead.reviews||0);
+      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+      const strictReady=attorneyCount>=2&&attorneyCount<=10;
       const quality=clean(lead.personalization_quality).toLowerCase();
       let personal="",source=clean(lead.law_email_source);
       if(clean(lead.personalization_fact)&&quality==="specific"){
@@ -112,70 +112,12 @@ async function collectRows(redis){
         ? `I found ${name} while looking at ${context}. ${personal.replace(/^I noticed\s+/i,"")}. I couldn't find a firm website, so I wanted to reach out.`
         : `I found ${name} while looking at ${context}, but I couldn't find a firm website, so I wanted to reach out.`;
       out.push({
-        priority:Number(lead.lead_priority_score||0)||0,
+        priority:(strictReady?1000:0)+(Number(lead.lead_priority_score||0)||0),
         email:emails[0]||"",
         row:[type,name,emails[0]||"",clean(lead.phone),city,state,personal,source,opener,
-          clean(lead.attorney_count_estimate),clean(lead.firm_size_tier),rating||"",reviews||"",clean(lead.google_maps_url||lead.maps_url),
-          Number(lead.lead_priority_score||0)||"","New"]
-      });
-    }
-  }
-  out.sort((a,b)=>b.priority-a.priority||String(a.row[0]).localeCompare(String(b.row[0]))||String(a.row[1]).localeCompare(String(b.row[1])));
-  return out;
-}
-
-async function collectEmailCandidateRows(redis){
-  const out=[];
-  const candidateKeys=await redis.sMembers("recover:law-firm:email-candidates:v1");
-  for(let offset=0;offset<candidateKeys.length;offset+=250){
-    const keys=candidateKeys.slice(offset,offset+250);
-    const values=await redis.hmGet("recover:leadstore:qualified",keys);
-    for(let i=0;i<keys.length;i++){
-      if(!values[i])continue;
-      let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
-      const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
-      if(!isLaw)continue;
-      const website=clean(lead.website||lead.website_url);
-      if(/^https?:\/\//i.test(website))continue;
-      const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
-      if(!sourceVerified)continue;
-      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
-        .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
-        .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
-      if(!emails.length)continue;
-
-      const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
-      const practiceKeys=[...new Set([
-        ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
-        ...lawFirmPracticeKeys(evidence),
-        ...(clean(lead.practice_focus)?[clean(lead.practice_focus)]:[])
-      ])].filter(k=>LAW_PRACTICES.some(p=>p.key===k));
-      const type=typeLabel(practiceKeys,evidence);
-      const name=clean(lead.name||lead.title);
-      const {city,state}=parseLocation(lead);
-      const rating=Number(lead.review_rating||lead.rating||0);
-      const reviews=Number(lead.review_count||lead.reviews||0);
-      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
-      const firmSize=clean(lead.firm_size_tier)||(attorneyCount?String(attorneyCount):"unknown");
-      const quality=clean(lead.personalization_quality).toLowerCase();
-      let personal="",source=clean(lead.law_email_source);
-      if(clean(lead.personalization_fact)&&quality==="specific"){
-        personal=clean(lead.personalization_fact);
-        if(!source)source=clean(lead.personalization_source);
-      }else if(reviews>=5&&rating>0){
-        personal=`${name} has ${reviews} Google reviews at about ${rating.toFixed(1)} stars${city?` in ${city}`:""}`;
-        if(!source)source=clean(lead.google_maps_url||lead.maps_url);
-      }
-      if(!source)source=clean(lead.personalization_source||lead.google_maps_url||lead.maps_url);
-      const strictReady=attorneyCount>=2&&attorneyCount<=10;
-      const status=strictReady?"Ready":"Verify Size";
-      out.push({
-        priority:(strictReady?1000:0)+(Number(lead.lead_priority_score||0)||0),
-        email:emails[0],
-        row:[type,name,emails[0],clean(lead.phone),city,state,personal,source,
-          strictReady?"Eligible after size check":"Usable email found; verify 2–10 attorneys before paid outreach.",
-          attorneyCount||"",firmSize,rating||"",reviews||"",clean(lead.google_maps_url||lead.maps_url),
-          Number(lead.lead_priority_score||0)||"",status]
+          attorneyCount||"",clean(lead.firm_size_tier)||(attorneyCount?String(attorneyCount):"unknown"),
+          rating||"",reviews||"",clean(lead.google_maps_url||lead.maps_url),
+          Number(lead.lead_priority_score||0)||"",strictReady?"Ready":"Verify Size"]
       });
     }
   }
@@ -355,14 +297,6 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       );
       await request(":batchUpdate",{method:"POST",body:{requests}});
       console.log(JSON.stringify({event:"law_sheet_sync",rows:leads.length,spreadsheetId,tabName}));
-
-      const candidateTabName="Email Candidates";
-      const candidateSheetId=await ensureAdditionalSheet(candidateTabName);
-      const candidateStatuses=await previousStatusesFor(candidateTabName);
-      const candidateLeads=await collectEmailCandidateRows(redis);
-      for(const item of candidateLeads){if(candidateStatuses.has(item.email))item.row[15]=candidateStatuses.get(item.email);}
-      await writeRowsToTab(candidateTabName,candidateSheetId,candidateLeads);
-      console.log(JSON.stringify({event:"law_email_candidate_sheet_sync",rows:candidateLeads.length,spreadsheetId,tabName:candidateTabName}));
 
       // Website-refresh inventory is intentionally excluded from this campaign.
     }catch(error){console.error("law_sheet_sync_error",error?.message||error);}
