@@ -504,7 +504,7 @@ async function zeroCostEmailFallback(lead={}){
 }
 function leadNameTokens(lead={}){
   const stop=new Set(["law","laws","firm","firms","office","offices","attorney","attorneys","lawyer","lawyers","llc","pllc","pc","pa","group","associates","the","and"]);
-  return normalize(lead.name||lead.title||"").split(" ").filter(x=>x.length>=3&&!stop.has(x)).slice(0,6);
+  return [...new Set(normalize(lead.name||lead.title||"").split(" ").filter(x=>x.length>=3&&!stop.has(x)))].slice(0,6);
 }
 function pageMatchesLead(text="",lead={}){
   const plain=normalize(text);
