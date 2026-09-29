@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v24-trusted-source-mix";
+const EMAIL_METHOD_VERSION="email-v25-name-shape-repartition";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -156,11 +156,12 @@ function normalize(v=""){return String(v||"").toLowerCase().replace(/[^a-z0-9]+/
 function lawFirmNameShape(lead={}){
   const name=String(lead.name||lead.title||"").replace(/\s+/g," ").trim();
   if(!name)return "unknown";
-  if(/\b(?:law offices|attorneys at law|attorneys|lawyers|partners|associates|law group|legal group)\b/i.test(name)||
+  if(/\b(?:attorneys at law|attorneys|lawyers|partners|associates|law group|legal group)\b/i.test(name)||
      /\s(?:&|and)\s/i.test(name))return "multi";
+  if(/\b(?:law firm|pllc|p\.c\.|pc|p\.a\.|pa|llp|professional corporation)\b/i.test(name))return "firm";
   if(/^the?\s*law office of\s+[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4}$/i.test(name)||
-     /^[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,3}(?:,?\s+(?:esq\.?|attorney(?: at law)?))?$/i.test(name))return "solo";
-  if(/\b(?:law firm|pllc|p\.c\.|pc|p\.a\.|pa|llp|llc)\b/i.test(name))return "firm";
+     /\battorney(?:\s+at\s+law)?\b/i.test(name)||
+     /^[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,3}(?:,?\s+Esq\.?)?$/i.test(name))return "solo";
   return "unknown";
 }
 function highValueLawResearchLead(lead={}){
