@@ -2086,22 +2086,23 @@ async function normalizeEmailQueues(){
 }
 async function enrichBatch(){
   // Conversion-first scheduling:
-  // 1) existing/source-backed email but missing size proof,
-  // 2) already-size-verified leads missing an email,
-  // 3) fresh discoveries,
-  // 4) cold recovery backlog.
-  // This maximizes send-ready conversions instead of spending most capacity on
-  // low-probability rediscovery while near-ready leads wait.
-  const regularKeys=await popSetBatch(PENDING_SET,Math.min(28,ENRICH_BATCH));
+  // 1) source-backed email missing size proof,
+  // 2) verified 2-10 size missing an email,
+  // 3) high-potential firm/multi or strong-identity email recovery,
+  // 4) fresh discovery output,
+  // 5) broad recovery backlog.
+  // The old allocator capped PRIORITY_PENDING_SET at 6/64 even when thousands
+  // of high-value leads were waiting; reserve materially more of each batch.
+  const regularKeys=await popSetBatch(PENDING_SET,Math.min(20,ENRICH_BATCH));
   const afterRegular=Math.max(0,ENRICH_BATCH-regularKeys.length);
   const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(16,afterRegular)):[];
   const afterSizeReady=Math.max(0,afterRegular-sizeReadyKeys.length);
-  const freshKeys=afterSizeReady?await popSetBatch(SOURCE_PENDING_SET,Math.min(12,afterSizeReady)):[];
-  const afterFresh=Math.max(0,afterSizeReady-freshKeys.length);
-  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(6,afterFresh)):[];
-  const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
-  const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
-  const keys=[...new Set([...regularKeys,...sizeReadyKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
+  const priorityKeys=afterSizeReady?await popSetBatch(PRIORITY_PENDING_SET,Math.min(24,afterSizeReady)):[];
+  const afterPriority=Math.max(0,afterSizeReady-priorityKeys.length);
+  const freshKeys=afterPriority?await popSetBatch(SOURCE_PENDING_SET,Math.min(8,afterPriority)):[];
+  const afterFresh=Math.max(0,afterPriority-freshKeys.length);
+  const recoverableKeys=afterFresh?await popSetBatch(RECOVERABLE_PENDING_SET,afterFresh):[];
+  const keys=[...new Set([...regularKeys,...sizeReadyKeys,...priorityKeys,...freshKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
   await Promise.all(keys.map(k=>Promise.all([
     redis.sRem(SOURCE_PENDING_SET,k),
@@ -2157,7 +2158,10 @@ async function seed(cities){
     redis.sCard(RECOVERABLE_PENDING_SET)
   ]);
   if(queue>=QUEUE_HIGH_WATER)return 0;
-  const activeEnrichmentBacklog=pendingPriority+pendingSource+pendingSizeReady+pendingRegular;
+  // Raw discovery is not the bottleneck anymore. Count recoverable work too so
+  // a 35K-record inventory cannot keep growing while thousands of email/headcount
+  // candidates wait for enrichment.
+  const activeEnrichmentBacklog=pendingPriority+pendingSource+pendingSizeReady+pendingRegular+pendingRecoverable;
   if(shouldPauseLawDiscovery({pendingEnrichment:activeEnrichmentBacklog,limit:DISCOVERY_BACKLOG_LIMIT})){
     await redis.hIncrBy(STATS,"discovery_paused_for_enrichment",1);
     return 0;
