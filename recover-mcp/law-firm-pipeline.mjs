@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v31-complete-almost-ready";
+const EMAIL_METHOD_VERSION="email-v32-strict-identity-size-ready";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -514,14 +514,14 @@ function pageMatchesLead(text="",lead={}){
   const personTokens=person?normalize(person).split(" ").filter(x=>x.length>=3):[];
   if(personTokens.length>=2&&personTokens.filter(x=>plain.includes(x)).length>=2)return true;
   const tokens=leadNameTokens(lead);
-  if(!tokens.length)return false;
+  if(tokens.length<2)return false;
   const hits=tokens.filter(x=>plain.includes(x)).length;
-  return hits>=Math.min(2,tokens.length);
+  return hits>=2;
 }
 const FREE_MAIL_DOMAINS=new Set([
   "gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","me.com","msn.com",
   "proton.me","protonmail.com","live.com","comcast.net","att.net","bellsouth.net","verizon.net",
-  "sbcglobal.net","earthlink.net","cs.com"
+  "sbcglobal.net","earthlink.net","cs.com","vcn.com"
 ]);
 
 const GENERIC_EMAIL_LOCAL=new Set(["info","contact","office","admin","hello","support","mail","reception","receptionist","intake","legal","law","team","general","marketing"]);
@@ -589,7 +589,7 @@ function emailLooksOwnedByLead(email="",lead={}){
   const legalMarker=/law|legal|attorney|lawyer|firm|office|esq/.test(stem);
   // Avoid generic corporate/surname domains: require either two business-name
   // tokens, a law-specific domain marker, or independent local-part identity.
-  return domainHits>=2||(domainHits>=1&&legalMarker)||(domainHits>=1&&localHits>=1)||localHits>=1;
+  return domainHits>=2||(domainHits>=1&&legalMarker)||(domainHits>=1&&localHits>=1);
 }
 function emailIdentityStrong(email="",lead={}){
   if(!isUsableLawEmail(email)||isThirdPartyEmailDomain(email)||!emailDomainGeographySafe(email,lead))return false;
@@ -1640,6 +1640,12 @@ async function bootstrapExistingQualified(){
       const practiceKeys=[...new Set([...storedKeys,...observedKeys,...(focus?[focus]:[])])];
 
       let effectiveWebsite=website;
+      const bootstrapSizeReady=lead.attorney_count_evidence_verified===true&&Number(lead.attorney_count_estimate||0)>=2&&Number(lead.attorney_count_estimate||0)<=10;
+      if(!fullRequalify&&!website&&bootstrapSizeReady&&(!sourceBacked||!emails.length)){
+        await redis.sRem(ENRICHED_SET,entry.field);
+        await moveToEmailQueue(entry.field,SIZE_READY_PENDING_SET);
+        queuedForEnrichment++;
+      }
       if(wasQualified&&!website&&emails.length){
         const fromSource=await detectOwnedWebsiteFromEvidenceSource(existingSource,emails,lead,entry.field);
         const discovered=fromSource||await detectOwnedWebsiteFromEmailDomains(emails,lead);
@@ -1683,7 +1689,11 @@ async function bootstrapExistingQualified(){
         }
         if(!fullRequalify){
           if(!effectiveWebsite&&(!emails.length||!sourceBacked)&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
-            if(emailRecoveryPriority(lead)>=5){
+            if(bootstrapSizeReady){
+              await redis.sRem(ENRICHED_SET,entry.field);
+              await moveToEmailQueue(entry.field,SIZE_READY_PENDING_SET);
+              queuedForEnrichment++;
+            }else if(emailRecoveryPriority(lead)>=5){
               await redis.sRem(ENRICHED_SET,entry.field);
               await moveToEmailQueue(entry.field,RECOVERABLE_PENDING_SET);
               queuedForEnrichment++;
