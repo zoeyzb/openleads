@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v39-source-fetch-fix";
+const EMAIL_METHOD_VERSION="email-v40-pdf-public-email-recovery";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -419,7 +419,7 @@ async function callScrapling(url){
   }finally{clearTimeout(initTimer);}
 }
 async function callJinaReader(url,lead={}){
-  if(!JINA_READER_ENABLED||!url||lawSourceRank(url,lead)>4)return null;
+  if(!JINA_READER_ENABLED||!url||(lawSourceRank(url,lead)>4&&!/\\.pdf(?:$|[?#])/i.test(String(url))))return null;
   const cached=JINA_READER_CACHE.get(url);
   if(cached&&Date.now()-cached.at<30*60*1000)return cached.value;
 
@@ -842,7 +842,7 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       let result=null;
       try{result=await fetchText(url,5000);}catch{}
       let resultLinks=result?.html?bingResultLinks(result.html):[];
-      if(!resultLinks.length&&searchIndex===0&&(highValueLawResearchLead(lead)||emailRecoveryPriority(lead)>=5)){
+      if(!resultLinks.length&&searchIndex<3&&(highValueLawResearchLead(lead)||emailRecoveryPriority(lead)>=5)){
         const stealth=await callScrapling(url);
         if(stealth?.html){
           result=stealth;
@@ -1517,6 +1517,8 @@ async function enrichLead(key,lead){
       ...(person?[`"${person}" "notice to creditors" email`]:[])
     ];
     const directoryEmailQueries=[
+      ...(name?[`"${name}" email filetype:pdf`]:[]),
+      ...(name?[`"${name}" "E-mail" filetype:pdf`]:[]),
       ...(name?[`site:allbiz.com "${name}" email`]:[]),
       ...(name&&phone?[`site:allbiz.com "${name}" "${phone}"`]:[]),
       ...(name?[`site:chamberofcommerce.com "${name}" email`]:[]),
