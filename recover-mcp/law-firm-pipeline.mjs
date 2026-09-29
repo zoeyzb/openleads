@@ -1267,14 +1267,29 @@ async function cleanupWebsiteRefreshReady(){
 async function bootstrapExistingQualified(){
   let scanned=0,qualifiedAdded=0,qualifiedRemoved=0,queuedForEnrichment=0,alreadyQualified=0,requalifyQueued=0;
   const fullRequalify=(await redis.get(REQUALIFY_VERSION_KEY))!==EMAIL_METHOD_VERSION;
-  for await(const page of redis.hScanIterator(LEAD_HASH,{COUNT:500})){
+  const readySet=new Set(await redis.sMembers(READY_SET));
+  const requalRegular=[],requalPriority=[],requalRecoverable=[],requalAll=[];
+
+  if(fullRequalify){
+    // Rebuild historical work queues from scratch in bulk. Fresh worker output
+    // uses SOURCE_PENDING_SET and is intentionally preserved.
+    await Promise.all([
+      redis.del(PENDING_SET),
+      redis.del(PRIORITY_PENDING_SET),
+      redis.del(RECOVERABLE_PENDING_SET)
+    ]);
+  }
+
+  for await(const page of redis.hScanIterator(LEAD_HASH,{COUNT:1000})){
     for(const entry of (Array.isArray(page)?page:[page])){
       if(!entry?.field||entry.value===undefined)continue;
       let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
       const isLaw=(String(lead.search_profile||"")==="law-firm"||normalize(lead.industry)==="law firm")&&isLawFirmLead(lead);
+      const wasQualified=readySet.has(entry.field);
       if(!isLaw){
-        if(await redis.sIsMember(READY_SET,entry.field)){
+        if(wasQualified){
           await redis.sRem(READY_SET,entry.field);
+          readySet.delete(entry.field);
           qualifiedRemoved++;
         }
         continue;
@@ -1287,7 +1302,9 @@ async function bootstrapExistingQualified(){
       const identityEmails=sourceBacked?[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>String(x||"").trim().toLowerCase())
         .filter(x=>emailIdentityStrong(x,lead)):[];
-      const emailChecks=await Promise.all(identityEmails.map(async email=>({email,ok:await hasMailExchange(email)})));
+      const emailChecks=identityEmails.length
+        ? await Promise.all(identityEmails.map(async email=>({email,ok:await hasMailExchange(email)})))
+        : [];
       const emails=emailChecks.filter(x=>x.ok).map(x=>x.email);
       const attorneyCount=Number(lead.attorney_count_estimate||0);
       const evidenceText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
@@ -1296,10 +1313,6 @@ async function bootstrapExistingQualified(){
       const focus=String(lead.practice_focus||"").trim();
       const practiceKeys=[...new Set([...storedKeys,...observedKeys,...(focus?[focus]:[])])];
 
-      const wasQualified=await redis.sIsMember(READY_SET,entry.field);
-      const emailCandidate=!website&&sourceBacked&&emails.length>0;
-      if(emailCandidate)await redis.sAdd(EMAIL_CANDIDATE_SET,entry.field);
-      else await redis.sRem(EMAIL_CANDIDATE_SET,entry.field);
       let effectiveWebsite=website;
       if(wasQualified&&!website&&emails.length){
         const discovered=await detectOwnedWebsiteFromEmailDomains(emails,lead);
@@ -1307,58 +1320,52 @@ async function bootstrapExistingQualified(){
           effectiveWebsite=discovered;
           const updatedLead={...lead,website:discovered,website_opportunity:"website_refresh"};
           await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(updatedLead));
-          await queueWebsiteRefreshCandidate(entry.field,{...updatedLead,emails,practice_keys:practiceKeys},discovered);
         }
       }
+
       if(fullRequalify&&!effectiveWebsite){
         const name=String(lead.name||lead.title||"");
         const existingUsable=emails.length>0;
         const multiName=/\b(law offices|attorneys at law|law group|partners|associates|attorneys|&| and )\b/i.test(name);
-        const targetSet=existingUsable?PENDING_SET:(multiName||emailRecoveryPriority(lead)>=5?PRIORITY_PENDING_SET:RECOVERABLE_PENDING_SET);
-        await redis.sRem(ENRICHED_SET,entry.field);
-        await moveToEmailQueue(entry.field,targetSet);
+        requalAll.push(entry.field);
+        if(existingUsable)requalRegular.push(entry.field);
+        else if(multiName||emailRecoveryPriority(lead)>=5)requalPriority.push(entry.field);
+        else requalRecoverable.push(entry.field);
         requalifyQueued++;
       }
-      if(!qualifiesNoWebsiteLawLead({
+
+      const qualifies=qualifiesNoWebsiteLawLead({
         website:effectiveWebsite,
         emails,
         practice_keys:practiceKeys,
         attorney_count_estimate:attorneyCount,
         email_source_verified:sourceBacked&&emails.length>0
-      })){
+      });
+
+      if(!qualifies){
         if(wasQualified){
           await redis.sRem(READY_SET,entry.field);
+          readySet.delete(entry.field);
           qualifiedRemoved++;
         }
-        if(!effectiveWebsite&&(!emails.length||!sourceBacked)&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
-          // Do not turn every old miss into active work after a version bump.
-          // Only high-signal records (named attorney + phone + bar/city evidence)
-          // earn a bounded background retry; fresh discoveries use SOURCE_PENDING_SET.
-          if(emailRecoveryPriority(lead)>=5){
+        if(!fullRequalify){
+          if(!effectiveWebsite&&(!emails.length||!sourceBacked)&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
+            if(emailRecoveryPriority(lead)>=5){
+              await redis.sRem(ENRICHED_SET,entry.field);
+              await moveToEmailQueue(entry.field,RECOVERABLE_PENDING_SET);
+              queuedForEnrichment++;
+            }
+          }else if(!effectiveWebsite&&emails.length&&(!practiceKeys.length||!attorneyCount)){
             await redis.sRem(ENRICHED_SET,entry.field);
-            await moveToEmailQueue(entry.field,RECOVERABLE_PENDING_SET);
+            await moveToEmailQueue(entry.field,PENDING_SET);
             queuedForEnrichment++;
           }
-        }else if(!effectiveWebsite&&emails.length&&(!practiceKeys.length||!attorneyCount)){
-          // Email-bearing no-site firms are valuable candidates. If size is unknown,
-          // re-run research for headcount instead of discarding them.
-          await redis.sRem(ENRICHED_SET,entry.field);
-          await moveToEmailQueue(entry.field,PENDING_SET);
-          queuedForEnrichment++;
         }
         continue;
       }
 
       if(wasQualified){
         alreadyQualified++;
-        // Email-known leads are already usable. Only missing practice classification
-        // gets a low-priority refresh; personalization never blocks qualification.
-        const needsRefresh=!practiceKeys.length;
-        if(needsRefresh){
-          await redis.sRem(ENRICHED_SET,entry.field);
-          await moveToEmailQueue(entry.field,PENDING_SET);
-          queuedForEnrichment++;
-        }
         continue;
       }
 
@@ -1389,7 +1396,7 @@ async function bootstrapExistingQualified(){
         practice_keys:practiceKeys,
         practice_areas:practices,
         lead_type:practices.join(" + "),
-        preferred_firm_size:attorneyCount>=2&&attorneyCount<=10,
+        preferred_firm_size:true,
         firm_size_tier:firmSizeTier(attorneyCount),
         personalization_fact:personalFact,
         personalization_source:String(lead.personalization_source||p.source||""),
@@ -1406,16 +1413,37 @@ async function bootstrapExistingQualified(){
       };
       await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(updated));
       await redis.sAdd(READY_SET,entry.field);
+      readySet.add(entry.field);
       await redis.hIncrBy(STATS,"qualified",1);
       qualifiedAdded++;
-
-      if(!(await redis.sIsMember(ENRICHED_SET,entry.field))){
-        queuedForEnrichment+=Number(await redis.sAdd(PENDING_SET,entry.field)||0);
-      }
     }
   }
-  if(fullRequalify)await redis.set(REQUALIFY_VERSION_KEY,EMAIL_METHOD_VERSION);
-  console.log(JSON.stringify({event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,queuedForEnrichment,requalifyQueued,fullRequalify}));
+
+  if(fullRequalify){
+    const addChunks=async(setKey,keys)=>{
+      for(let i=0;i<keys.length;i+=500){
+        const chunk=keys.slice(i,i+500);
+        if(chunk.length)await redis.sAdd(setKey,chunk);
+      }
+    };
+    for(let i=0;i<requalAll.length;i+=500){
+      const chunk=requalAll.slice(i,i+500);
+      if(chunk.length)await redis.sRem(ENRICHED_SET,chunk);
+    }
+    await Promise.all([
+      addChunks(PENDING_SET,requalRegular),
+      addChunks(PRIORITY_PENDING_SET,requalPriority),
+      addChunks(RECOVERABLE_PENDING_SET,requalRecoverable)
+    ]);
+    await redis.set(REQUALIFY_VERSION_KEY,EMAIL_METHOD_VERSION);
+    queuedForEnrichment+=requalifyQueued;
+  }
+
+  console.log(JSON.stringify({
+    event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,
+    queuedForEnrichment,requalifyQueued,fullRequalify,
+    requalifyRegular:requalRegular.length,requalifyPriority:requalPriority.length,requalifyRecoverable:requalRecoverable.length
+  }));
   return {scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,queuedForEnrichment,requalifyQueued};
 }
 
