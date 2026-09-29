@@ -21,7 +21,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v47-domain-first-preflight";
+const EMAIL_METHOD_VERSION="email-v48-bar-firm-phone-recovery";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -1003,6 +1003,7 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       const ranked=(result.resultLinks||bingResultLinks(result.html))
         .filter(u=>lawSourceRank(u,lead)<90)
         .sort((a,b)=>lawSourceRank(a,lead)-lawSourceRank(b,lead));
+      if(ranked.some(u=>lawSourceRank(u,lead)<=1))await redis.hIncrBy(STATS,"bar_query_hit",1);
       if(ranked.length)await redis.hIncrBy(STATS,"bing_queries_with_links",1);
       for(const link of ranked){
         const rank=lawSourceRank(link,lead);
@@ -1035,6 +1036,8 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       if(!page?.html)continue;
       const pageText=stripHtml(page.html).slice(0,22000);
       if(!pageMatchesLead(pageText,lead))continue;
+      const matchedRank=lawSourceRank(page.final_url||target,lead);
+      if(matchedRank<=1)await redis.hIncrBy(STATS,"bar_source_page_matched",1);
       if(!ownedWebsite)ownedWebsite=ownedWebsiteFromMatchedPage(page.final_url||target,pageText,lead);
       const discoveredEmails=contextualEmails(page.html,lead,page.final_url||target);
       const wantedSet=new Set((wantedEmails||[]).map(x=>String(x||"").trim().toLowerCase()));
@@ -1050,6 +1053,7 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       if(pageEmails.length){
         sources.unshift(page.final_url||target);
         await redis.hIncrBy(STATS,"bing_source_email_pages",1);
+        if(lawSourceRank(page.final_url||target,lead)<=1)await redis.hIncrBy(STATS,"bar_email_page",1);
       }
     }
   }catch(error){
@@ -1546,30 +1550,36 @@ function emailRecoveryPriority(lead={}){
 function stateBarQueries(lead={},people=[]){
   const state=String(lead.region||lead.state||lead.state_code||"").trim().toUpperCase();
   const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
+  const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
   const person=people[0]||"";
   const alternate=people[1]||"";
   const out=[];
   if(state==="FL"){
     if(person)out.push(`site:floridabar.org/directories/find-mbr/profile "${person}"`);
-    if(alternate)out.push(`site:floridabar.org/directories/find-mbr/profile "${alternate}"`);
     if(name)out.push(`site:floridabar.org/directories/find-mbr "${name}"`);
+    if(phone)out.push(`site:floridabar.org/directories/find-mbr "${phone}"`);
+    if(alternate)out.push(`site:floridabar.org/directories/find-mbr/profile "${alternate}"`);
   }else if(state==="CA"){
     if(person)out.push(`site:apps.calbar.ca.gov/attorney "${person}"`);
-    if(alternate)out.push(`site:apps.calbar.ca.gov/attorney "${alternate}"`);
     if(name)out.push(`site:apps.calbar.ca.gov/attorney "${name}"`);
+    if(phone)out.push(`site:apps.calbar.ca.gov/attorney "${phone}"`);
+    if(alternate)out.push(`site:apps.calbar.ca.gov/attorney "${alternate}"`);
   }else if(state==="TX"){
     if(person)out.push(`site:texasbar.com "Find A Lawyer" "${person}"`);
     if(name)out.push(`site:texasbar.com "Find A Lawyer" "${name}"`);
+    if(phone)out.push(`site:texasbar.com "Find A Lawyer" "${phone}"`);
     if(person)out.push(`"${person}" Texas attorney email filetype:pdf`);
   }else if(state==="NY"){
     if(person)out.push(`site:nycourts.gov "${person}" attorney`);
     if(name)out.push(`site:nycourts.gov "${name}" attorney`);
+    if(phone)out.push(`site:nycourts.gov "${phone}" attorney`);
   }else{
     const domain=stateBarDomain(lead);
     if(domain&&person)out.push(`site:${domain} "${person}" attorney`);
     if(domain&&name)out.push(`site:${domain} "${name}"`);
+    if(domain&&phone)out.push(`site:${domain} "${phone}"`);
   }
-  return [...new Set(out)].slice(0,4);
+  return [...new Set(out)].slice(0,6);
 }
 
 
@@ -1690,8 +1700,7 @@ async function enrichLead(key,lead){
       ...(name?[`"${name}" ${city} ${region} email`.trim()]:[]),
       ...(person?[`"${person}" ${region} attorney email`.trim()]:[]),
       ...(phone&&name?[`"${name}" "${phone}" "Email"`]:[]),
-      ...(barQueries[0]?[barQueries[0]]:[]),
-      ...(barQueries[1]?[barQueries[1]]:[]),
+      ...barQueries,
       ...publicRecordQueries,
       ...(name?[`"${name}" email filetype:pdf`]:[]),
       ...(name?[`"${name}" "E-mail" filetype:pdf`]:[]),
@@ -2477,7 +2486,7 @@ async function enrichmentLoop(){
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
         redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
         redis.sCard(WEBSITE_AUDIT_PENDING_SET),redis.sCard(WEBSITE_REFRESH_READY_SET),redis.sCard(EMAIL_CANDIDATE_SET),
-        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","scrapling_search_hit","bing_source_links","bing_source_pages_matched","bing_source_email_pages","email_raw_candidate_leads","email_identity_mx_pass_leads","email_identity_mx_reject_leads","email_keelead_pass_leads","email_keelead_reject_leads","email_source_verified_leads","jina_source_hit","jina_source_fail","email_existing_recorroborated","email_existing_recorroboration_miss","post_email_headcount_verified","post_email_headcount_miss","post_email_headcount_bing","post_email_headcount_duck","rejected_no_verified_email","rejected_unverified_attorney_count","rejected_wrong_size","rejected_has_website","scrapling_static_hit","scrapling_static_fail","bing_queries_with_links","bing_source_page_fetch_reject","bing_rss_query_hit","bing_query_fetch_reject","bing_fallback_error","email_source_binding_reject_leads","scrapling_generic_skip","owned_website_research_hit","website_preflight_hit","website_preflight_miss"])
+        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","scrapling_search_hit","bing_source_links","bing_source_pages_matched","bing_source_email_pages","email_raw_candidate_leads","email_identity_mx_pass_leads","email_identity_mx_reject_leads","email_keelead_pass_leads","email_keelead_reject_leads","email_source_verified_leads","jina_source_hit","jina_source_fail","email_existing_recorroborated","email_existing_recorroboration_miss","post_email_headcount_verified","post_email_headcount_miss","post_email_headcount_bing","post_email_headcount_duck","rejected_no_verified_email","rejected_unverified_attorney_count","rejected_wrong_size","rejected_has_website","scrapling_static_hit","scrapling_static_fail","bing_queries_with_links","bing_source_page_fetch_reject","bing_rss_query_hit","bing_query_fetch_reject","bing_fallback_error","email_source_binding_reject_leads","scrapling_generic_skip","owned_website_research_hit","website_preflight_hit","website_preflight_miss","bar_query_hit","bar_source_page_matched","bar_email_page"])
       ]);
       console.log(JSON.stringify({
         event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,
@@ -2493,7 +2502,7 @@ async function enrichmentLoop(){
         postEmailHeadcountBing:Number(emailStats?.[24]||0),postEmailHeadcountDuck:Number(emailStats?.[25]||0),
         rejectedNoVerifiedEmail:Number(emailStats?.[26]||0),rejectedUnverifiedAttorneyCount:Number(emailStats?.[27]||0),
         rejectedWrongSize:Number(emailStats?.[28]||0),rejectedHasWebsite:Number(emailStats?.[29]||0),
-        scraplingStaticHit:Number(emailStats?.[30]||0),scraplingStaticFail:Number(emailStats?.[31]||0),bingQueriesWithLinks:Number(emailStats?.[32]||0),bingSourcePageFetchReject:Number(emailStats?.[33]||0),bingRssQueryHit:Number(emailStats?.[34]||0),bingQueryFetchReject:Number(emailStats?.[35]||0),bingFallbackError:Number(emailStats?.[36]||0),emailSourceBindingRejectLeads:Number(emailStats?.[37]||0),scraplingGenericSkip:Number(emailStats?.[38]||0),ownedWebsiteResearchHit:Number(emailStats?.[39]||0),websitePreflightHit:Number(emailStats?.[40]||0),websitePreflightMiss:Number(emailStats?.[41]||0)
+        scraplingStaticHit:Number(emailStats?.[30]||0),scraplingStaticFail:Number(emailStats?.[31]||0),bingQueriesWithLinks:Number(emailStats?.[32]||0),bingSourcePageFetchReject:Number(emailStats?.[33]||0),bingRssQueryHit:Number(emailStats?.[34]||0),bingQueryFetchReject:Number(emailStats?.[35]||0),bingFallbackError:Number(emailStats?.[36]||0),emailSourceBindingRejectLeads:Number(emailStats?.[37]||0),scraplingGenericSkip:Number(emailStats?.[38]||0),ownedWebsiteResearchHit:Number(emailStats?.[39]||0),websitePreflightHit:Number(emailStats?.[40]||0),websitePreflightMiss:Number(emailStats?.[41]||0),barQueryHit:Number(emailStats?.[42]||0),barSourcePageMatched:Number(emailStats?.[43]||0),barEmailPage:Number(emailStats?.[44]||0)
       }));
     }catch(error){console.error("law_firm_enrich_loop_error",error?.stack||error?.message||error);}
     await sleep(LOOP_MS);
