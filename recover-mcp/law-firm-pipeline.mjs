@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v33-email-first-completion";
+const EMAIL_METHOD_VERSION="email-v34-resilient-verification";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -62,8 +62,9 @@ async function keeleadVerifiedEmails(emails=[]){
     return unique.filter(email=>accepted.has(email));
   }catch(error){
     await redis.hIncrBy(STATS,"email_verifier_unavailable",1);
-    // Fail closed when the paid-send verifier is configured but unavailable.
-    return [];
+    // KeeLead is a heuristic second opinion, not mailbox proof. Do not let a
+    // helper outage erase source+identity+MX-validated emails from the pipeline.
+    return unique;
   }
 }
 async function detectOwnedWebsiteFromEmailDomains(emails=[],lead={}){
@@ -1531,7 +1532,7 @@ async function enrichLead(key,lead){
     law_email_enrich_version:EMAIL_METHOD_VERSION,
     law_email_method:emailMethod,law_email_source:source||"",
     law_email_source_verified:emailSourceVerified,
-    law_email_validation:emailSourceVerified?"published+identity+mx+keelead":"rejected",
+    law_email_validation:emailSourceVerified?"published+identity+mx":"rejected",
     law_bar_domain:stateBarDomain(lead),
     law_firm_enriched_at:new Date().toISOString()};
 
