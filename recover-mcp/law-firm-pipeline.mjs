@@ -1411,10 +1411,30 @@ async function enrichLead(key,lead){
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ].filter(Boolean))];
     const useDeepIdentity=false;
+    const preferDuck=highValueLawResearchLead(lead);
     const [bingResult,zeroResult]=await Promise.allSettled([
-      bingFallback(lead,bingQueries,emailRecoveryPriority(lead)>=5?10:8,key),
+      preferDuck
+        ? Promise.resolve({emails:[],text:"",source:"",attorneyCount:0,attorneyCountSource:"",personalFact:"",personalFactSource:""})
+        : bingFallback(lead,bingQueries,emailRecoveryPriority(lead)>=5?10:8,key),
       useDeepIdentity?zeroCostEmailFallback(lead):Promise.resolve({emails:[],source:"",name_variant:""})
     ]);
+    if(preferDuck){
+      const targetedDuck=await duckFallback({...lead,website:""},key);
+      emails.push(...targetedDuck.emails);
+      combined+=" "+targetedDuck.text;
+      if(targetedDuck.source)source=targetedDuck.source;
+      const tdCount=Number(targetedDuck.attorneyCount||0);
+      const tdSource=String(targetedDuck.attorneyCountSource||"");
+      if(tdCount>0&&isDirectPublishedEmailSource(tdSource)){
+        attorneyCountVerified=true;
+        if(tdCount>=attorneyCount){attorneyCount=tdCount;attorneyCountSource=tdSource;}
+      }
+      if(targetedDuck.personalFact){personalFact=targetedDuck.personalFact;personalFactSource=targetedDuck.personalFactSource||targetedDuck.source||"";}
+      if(targetedDuck.emails.length){
+        emailMethod="duck";
+        await redis.hIncrBy(STATS,"email_duck_hit",1);
+      }
+    }
 
     if(bingResult.status==="fulfilled"){
       const bf=bingResult.value;
@@ -1447,7 +1467,7 @@ async function enrichLead(key,lead){
 
   let fb={emails:[],text:"",source:"",attorneyCount:0,attorneyCountSource:"",personalFact:"",personalFactSource:""};
   const needsHeadcount=emails.length>0&&!(attorneyCount>=2&&attorneyCount<=10);
-  if((!emails.length&&emailRecoveryPriority(lead)>=5)||needsHeadcount){
+  if((!emails.length&&!highValueLawResearchLead(lead)&&emailRecoveryPriority(lead)>=5)||needsHeadcount){
     fb=await duckFallback({...lead,emails,attorney_count_estimate:attorneyCount,law_email_source:source,website:""},key);
     emails.push(...fb.emails);
     combined+=" "+fb.text;
