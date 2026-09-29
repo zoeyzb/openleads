@@ -1072,17 +1072,24 @@ async function enrichLead(key,lead){
     const barDomain=stateBarDomain(lead);
     const bingQueries=[
       ...stateBarQueries(lead,people).slice(0,2),
-      ...(phone?[`"${phone}" "${name}" email`,`"${phone}" attorney email`]:[]),
+      ...(phone?[
+        `"${phone}" "${name}" email`,
+        `"${phone}" attorney email`,
+        `"${phone}" site:allbiz.com`,
+        `"${phone}" site:chamberofcommerce.com`
+      ]:[]),
       ...(person?[
         `"${person}" ${region} state bar email`.trim(),
         `"${person}" attorney email filetype:pdf`.trim()
       ]:[]),
       `"${name}" ${city} ${region} email`.trim(),
+      `"${name}" ${city} ${region} site:manta.com email`.trim(),
+      `"${name}" ${city} ${region} site:bbb.org email`.trim(),
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ];
     const useDeepIdentity=emailRecoveryPriority(lead)>=4;
     const [bingResult,zeroResult]=await Promise.allSettled([
-      bingFallback(lead,bingQueries,5),
+      bingFallback(lead,bingQueries,emailRecoveryPriority(lead)>=5?8:6),
       useDeepIdentity?zeroCostEmailFallback(lead):Promise.resolve({emails:[],source:"",name_variant:""})
     ]);
 
