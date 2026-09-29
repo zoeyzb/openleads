@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v28-bootstrap-keelead";
+const EMAIL_METHOD_VERSION="email-v29-published-size-source";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -818,14 +818,20 @@ async function duckFallback(lead,key=""){
   ];
   const firmName=String(lead.name||lead.title||"").replace(/"/g,"").trim();
   const headcountQueries=firmName?[
-    `"${firmName}" attorneys team`,
-    `"${firmName}" lawyers team`,
-    `"${firmName}" "attorneys at law"`,
-    `"${firmName}" partners associates`
+    `"${firmName}" "Firm Size"`,
+    `"${firmName}" site:lawyers.com "Firm Size"`,
+    `"${firmName}" site:martindale.com "Firm Size"`,
+    `"${firmName}" "Lawyers ("`,
+    `"${firmName}" "Attorneys ("`,
+    `"${firmName}" "team of" attorneys`
   ]:[];
   const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
-  const queries=[...new Set(existingEmails.length?[...headcountQueries,...attorneyQueries,...baseQueries]:[...attorneyQueries,...baseQueries,...headcountQueries])];
+  const shape=lawFirmNameShape(lead);
+  const prioritizeSize=existingEmails.length>0||shape==="multi"||shape==="firm"||HISTORICAL_QUALIFIED_KEYS.has(key);
+  const queries=[...new Set(prioritizeSize
+    ? [...headcountQueries.slice(0,4),...attorneyQueries.slice(0,4),...baseQueries,...headcountQueries.slice(4)]
+    : [...attorneyQueries,...baseQueries,...headcountQueries])];
   if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
   const existingAttorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
   if(existingEmails.length&&existingAttorneyCount>=2&&existingAttorneyCount<=10){
@@ -868,7 +874,7 @@ async function duckFallback(lead,key=""){
     try{
       const direct=await fetchText(profileUrl,4500);
       absorbPage(direct.html,direct.final_url||profileUrl);
-      if(emails.length&&attorneyCount>=2&&attorneyCount<=10)return {emails:rankLawEmails(emails),text:texts.join(" ").slice(0,48000),source:sources[0]||"",attorneyCount,personalFact,personalFactSource};
+      if(emails.length&&attorneyCount>=2&&attorneyCount<=10)return {emails:rankLawEmails(emails),text:texts.join(" ").slice(0,48000),source:sources[0]||"",attorneyCount,attorneyCountSource,personalFact,personalFactSource};
     }catch{}
   }
 
@@ -925,8 +931,6 @@ async function duckFallback(lead,key=""){
     const fact=specificFactFromText(combined,lead);
     if(fact){personalFact=fact;personalFactSource=sources[0]||"";}
   }
-  const snippetEstimate=attorneyEstimate("",combined);
-  if(snippetEstimate>attorneyCount)attorneyCount=snippetEstimate;
 
   return {
     emails:rankLawEmails(emails).slice(0,5),
@@ -1322,7 +1326,11 @@ async function enrichLead(key,lead){
       combined+=" "+bf.text;
       if(bf.source)source=bf.source;
       const bfCount=Number(bf.attorneyCount||0);
-      if(bfCount>0){attorneyCountVerified=true;if(bfCount>=attorneyCount){attorneyCount=bfCount;attorneyCountSource=String(bf.attorneyCountSource||bf.source||"");}}
+      const bfCountSource=String(bf.attorneyCountSource||"");
+      if(bfCount>0&&isDirectPublishedEmailSource(bfCountSource)){
+        attorneyCountVerified=true;
+        if(bfCount>=attorneyCount){attorneyCount=bfCount;attorneyCountSource=bfCountSource;}
+      }
       if(bf.personalFact){personalFact=bf.personalFact;personalFactSource=bf.personalFactSource||bf.source||"";}
       if(bf.emails.length){
         emailMethod="bing";
@@ -1349,7 +1357,11 @@ async function enrichLead(key,lead){
     combined+=" "+fb.text;
     if(fb.source)source=fb.source;
     const fbCount=Number(fb.attorneyCount||0);
-    if(fbCount>0){attorneyCountVerified=true;if(fbCount>=attorneyCount){attorneyCount=fbCount;attorneyCountSource=String(fb.attorneyCountSource||fb.source||"");}}
+    const fbCountSource=String(fb.attorneyCountSource||"");
+    if(fbCount>0&&isDirectPublishedEmailSource(fbCountSource)){
+      attorneyCountVerified=true;
+      if(fbCount>=attorneyCount){attorneyCount=fbCount;attorneyCountSource=fbCountSource;}
+    }
     if(fb.personalFact){personalFact=fb.personalFact;personalFactSource=fb.personalFactSource||fb.source||"";}
     if(fb.emails.length){
       emailMethod="duck";
