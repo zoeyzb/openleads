@@ -1,10 +1,18 @@
 import { createSign } from "node:crypto";
-import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, qualifiesNoWebsiteLawLead, isUsableLawEmail } from "./law-firm-targeting.mjs";
+import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, qualifiesNoWebsiteLawLead, isUsableLawEmail, isLawFirmLead } from "./law-firm-targeting.mjs";
 
 const TOKEN_URL="https://oauth2.googleapis.com/token";
 const SHEETS_API="https://sheets.googleapis.com/v4/spreadsheets";
 const SCOPE="https://www.googleapis.com/auth/spreadsheets";
 const clean=v=>String(v??"").trim();
+function sourceHost(value=""){
+  try{return new URL(String(value||"")).hostname.toLowerCase().replace(/^www\./,"");}catch{return "";}
+}
+function emailDomain(value=""){return String(value||"").split("@")[1]?.toLowerCase().replace(/^www\./,"")||"";}
+function sourceIsOwnedEmailDomain(source="",email=""){
+  const host=sourceHost(source),domain=emailDomain(email);
+  return !!(host&&domain&&(host===domain||host.endsWith("."+domain)||domain.endsWith("."+host)));
+}
 
 const GENERIC_CONTACT_LOCAL=new Set(["info","contact","office","admin","hello","support","mail","reception","receptionist","intake","legal","law","team","general","marketing"]);
 function contactEmailRank(email=""){
@@ -70,7 +78,7 @@ async function collectRows(redis){
       if(!values[i])continue;
       let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
       const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
-      if(!isLaw)continue;
+      if(!isLaw||!isLawFirmLead(lead))continue;
       const website=clean(lead.website||lead.website_url);
       if(/^https?:\/\//i.test(website))continue;
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
@@ -131,14 +139,15 @@ async function collectVerifiedEmailCandidateRows(redis){
       if(!values[i])continue;
       let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
       const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
-      if(!isLaw)continue;
+      if(!isLaw||!isLawFirmLead(lead))continue;
       const website=clean(lead.website||lead.website_url);
       if(/^https?:\/\//i.test(website))continue;
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
         .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
       const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
-      if(!emails.length||!sourceVerified)continue;
+      const source=clean(lead.law_email_source||lead.email_source||lead.email_evidence_url||lead.personalization_source||lead.google_maps_url||lead.maps_url);
+      if(!emails.length||!sourceVerified||sourceIsOwnedEmailDomain(source,emails[0]))continue;
 
       const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
       const sizeEvidenceVerified=lead.attorney_count_evidence_verified===true;
