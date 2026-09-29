@@ -1962,6 +1962,20 @@ async function enrichBatch(){
   await Promise.all(Array.from({length:Math.min(ENRICH_CONCURRENCY,keys.length)},()=>run()));
   return done;
 }
+async function lawAreaSaturated(area={}){
+  const field=[normalize(area.state||""),normalize(area.city||""),"",""].join("|");
+  const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
+    redis.hGet("recover:yield:area:attempts",field),
+    redis.hGet("recover:yield:area:new",field),
+    redis.hGet("recover:yield:area:duplicates",field)
+  ]);
+  const attempts=Number(attemptsRaw||0),netNew=Number(newRaw||0),duplicates=Number(dupRaw||0);
+  const saturated=(attempts>=1&&netNew===0&&duplicates>=10) ||
+    (attempts>=2&&netNew===0&&duplicates>=5) ||
+    (attempts>=4&&netNew/Math.max(1,attempts)<0.5&&duplicates>netNew*3);
+  return {saturated,attempts,netNew,duplicates,field};
+}
+
 async function seed(cities){
   const [queue,pendingPriority,pendingSource,pendingSizeReady,pendingRegular,pendingRecoverable]=await Promise.all([
     redis.lLen(ACTIVE_QUEUE),
@@ -1996,6 +2010,11 @@ async function seed(cities){
     scanned++;
 
     const area=cities[cityIndex];
+    const areaYield=await lawAreaSaturated(area);
+    if(areaYield.saturated){
+      await redis.hIncrBy(STATS,"discovery_area_saturated_skip",1);
+      continue;
+    }
     // Rotate practice by both city and wave so adjacent cities diversify
     // and a city is not revisited for the same practice until a full sweep completes.
     const focus=PRACTICE_FOCI[(cityIndex+wave)%PRACTICE_FOCI.length];
