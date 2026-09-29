@@ -21,7 +21,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v44-source-identity-binding";
+const EMAIL_METHOD_VERSION="email-v45-fast-deep-research";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -504,15 +504,25 @@ async function fetchResearchPage(url,lead={},key="",allowStealth=true){
   // Many real 2-10 attorney firms look "solo" from the Maps business name.
   const shouldDeepRead=highValueLawResearchLead(lead)||emailRecoveryPriority(lead)>=5;
   if(allowStealth&&shouldDeepRead){
+    const rank=lawSourceRank(url,lead);
+    const isPdf=/\.pdf(?:$|[?#])/i.test(String(url));
+    const conversion=lead.conversion_headcount_priority===true;
     const jina=await callJinaReader(url,lead);
     if(jina?.html){
       const jinaText=stripHtml(jina.html).slice(0,24000);
       if(pageMatchesLead(jinaText,lead))return jina;
     }
-    const stealth=await callScrapling(url);
-    if(stealth?.html){
-      const stealthText=stripHtml(stealth.html).slice(0,24000);
-      if(pageMatchesLead(stealthText,lead))return stealth;
+    // Generic pages used to fall through to Scrapling and routinely cost
+    // ~30-50s. Reserve that expensive path for authoritative/PDF sources or
+    // the tiny post-email headcount cohort.
+    if(conversion||rank<=2||isPdf){
+      const stealth=await callScrapling(url);
+      if(stealth?.html){
+        const stealthText=stripHtml(stealth.html).slice(0,24000);
+        if(pageMatchesLead(stealthText,lead))return stealth;
+      }
+    }else{
+      await redis.hIncrBy(STATS,"scrapling_generic_skip",1);
     }
   }
   return directMatches?direct:null;
@@ -895,7 +905,7 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
           if(resultLinks.length)await redis.hIncrBy(STATS,"bing_rss_query_hit",1);
         }catch{}
       }
-      if(!resultLinks.length&&searchIndex<4&&(highValueLawResearchLead(lead)||emailRecoveryPriority(lead)>=5)){
+      if(!resultLinks.length&&searchIndex<2&&lead.conversion_headcount_priority===true){
         const stealth=await callScrapling(url);
         if(stealth?.html){
           result=stealth;
@@ -1118,7 +1128,7 @@ async function duckFallback(lead,key=""){
       let result=null;
       try{result=await fetchText(url,4500);}catch{}
       let resultLinks=result?.html?duckResultLinks(result.html):[];
-      if(!resultLinks.length&&searchIndex===0&&(highValueLawResearchLead(lead)||emailRecoveryPriority(lead)>=5)){
+      if(!resultLinks.length&&searchIndex===0&&lead.conversion_headcount_priority===true){
         const stealth=await callScrapling(url);
         if(stealth?.html){
           result=stealth;
@@ -2364,7 +2374,7 @@ async function enrichmentLoop(){
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
         redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
         redis.sCard(WEBSITE_AUDIT_PENDING_SET),redis.sCard(WEBSITE_REFRESH_READY_SET),redis.sCard(EMAIL_CANDIDATE_SET),
-        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","scrapling_search_hit","bing_source_links","bing_source_pages_matched","bing_source_email_pages","email_raw_candidate_leads","email_identity_mx_pass_leads","email_identity_mx_reject_leads","email_keelead_pass_leads","email_keelead_reject_leads","email_source_verified_leads","jina_source_hit","jina_source_fail","email_existing_recorroborated","email_existing_recorroboration_miss","post_email_headcount_verified","post_email_headcount_miss","post_email_headcount_bing","post_email_headcount_duck","rejected_no_verified_email","rejected_unverified_attorney_count","rejected_wrong_size","rejected_has_website","scrapling_static_hit","scrapling_static_fail","bing_queries_with_links","bing_source_page_fetch_reject","bing_rss_query_hit","bing_query_fetch_reject","bing_fallback_error","email_source_binding_reject_leads"])
+        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","scrapling_search_hit","bing_source_links","bing_source_pages_matched","bing_source_email_pages","email_raw_candidate_leads","email_identity_mx_pass_leads","email_identity_mx_reject_leads","email_keelead_pass_leads","email_keelead_reject_leads","email_source_verified_leads","jina_source_hit","jina_source_fail","email_existing_recorroborated","email_existing_recorroboration_miss","post_email_headcount_verified","post_email_headcount_miss","post_email_headcount_bing","post_email_headcount_duck","rejected_no_verified_email","rejected_unverified_attorney_count","rejected_wrong_size","rejected_has_website","scrapling_static_hit","scrapling_static_fail","bing_queries_with_links","bing_source_page_fetch_reject","bing_rss_query_hit","bing_query_fetch_reject","bing_fallback_error","email_source_binding_reject_leads","scrapling_generic_skip"])
       ]);
       console.log(JSON.stringify({
         event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,
@@ -2380,7 +2390,7 @@ async function enrichmentLoop(){
         postEmailHeadcountBing:Number(emailStats?.[24]||0),postEmailHeadcountDuck:Number(emailStats?.[25]||0),
         rejectedNoVerifiedEmail:Number(emailStats?.[26]||0),rejectedUnverifiedAttorneyCount:Number(emailStats?.[27]||0),
         rejectedWrongSize:Number(emailStats?.[28]||0),rejectedHasWebsite:Number(emailStats?.[29]||0),
-        scraplingStaticHit:Number(emailStats?.[30]||0),scraplingStaticFail:Number(emailStats?.[31]||0),bingQueriesWithLinks:Number(emailStats?.[32]||0),bingSourcePageFetchReject:Number(emailStats?.[33]||0),bingRssQueryHit:Number(emailStats?.[34]||0),bingQueryFetchReject:Number(emailStats?.[35]||0),bingFallbackError:Number(emailStats?.[36]||0),emailSourceBindingRejectLeads:Number(emailStats?.[37]||0)
+        scraplingStaticHit:Number(emailStats?.[30]||0),scraplingStaticFail:Number(emailStats?.[31]||0),bingQueriesWithLinks:Number(emailStats?.[32]||0),bingSourcePageFetchReject:Number(emailStats?.[33]||0),bingRssQueryHit:Number(emailStats?.[34]||0),bingQueryFetchReject:Number(emailStats?.[35]||0),bingFallbackError:Number(emailStats?.[36]||0),emailSourceBindingRejectLeads:Number(emailStats?.[37]||0),scraplingGenericSkip:Number(emailStats?.[38]||0)
       }));
     }catch(error){console.error("law_firm_enrich_loop_error",error?.stack||error?.message||error);}
     await sleep(LOOP_MS);
