@@ -201,6 +201,10 @@ function lawFirmNameShape(lead={}){
   return "unknown";
 }
 function highValueLawResearchLead(lead={}){
+  // Once an email is already source-verified, proving 2-10 attorneys is the
+  // remaining money gate. Allow deeper reads for that tiny conversion cohort
+  // even when the business name looks solo/ambiguous.
+  if(lead.conversion_headcount_priority===true)return true;
   const shape=lawFirmNameShape(lead);
   // Paid cohort is 2-10 attorneys. Multi/firm-shaped names are the highest-value
   // candidates even when Maps metadata is sparse, so they always qualify for
@@ -1060,7 +1064,8 @@ async function duckFallback(lead,key=""){
     }
     if(emails.length&&attorneyCount>=2&&attorneyCount<=10)break;
 
-    const pages=await Promise.allSettled(pageCandidates.slice(0,8).map((target,pageIndex)=>fetchResearchPage(target,lead,key,pageIndex<2)));
+    const deepPageLimit=lead.conversion_headcount_priority===true?4:2;
+    const pages=await Promise.allSettled(pageCandidates.slice(0,8).map((target,pageIndex)=>fetchResearchPage(target,lead,key,pageIndex<deepPageLimit)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
       if(item.status!=="fulfilled"||!item.value?.html)continue;
@@ -1600,9 +1605,18 @@ async function enrichLead(key,lead){
       `"${sizeName}" site:justia.com attorneys`
     ]:[];
     if(sizeQueries.length){
+      const headcountLead={
+        ...lead,
+        emails,
+        law_email_source:source,
+        law_email_source_verified:true,
+        conversion_headcount_priority:true,
+        website:""
+      };
+      await redis.hIncrBy(STATS,"post_email_headcount_deep_priority",1);
       const [bingSize,duckSize]=await Promise.allSettled([
-        bingFallback(lead,sizeQueries,12,key),
-        duckFallback({...lead,emails,law_email_source:source,website:""},key)
+        bingFallback(headcountLead,sizeQueries,12,key,[],6),
+        duckFallback(headcountLead,key)
       ]);
       const candidates=[];
       if(bingSize.status==="fulfilled"&&bingSize.value){
