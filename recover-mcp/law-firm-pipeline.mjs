@@ -1955,7 +1955,7 @@ async function enrichLead(key,lead){
     law_email_enrich_version:EMAIL_METHOD_VERSION,
     law_email_method:emailMethod,law_email_source:source||"",
     law_email_source_verified:emailSourceVerified,
-    law_email_validation:emailSourceVerified?"published+identity+mx+keelead":"rejected",
+    law_email_validation:emailSourceVerified?"published_exact+firm_identity+mx+keelead_infrastructure_heuristic":"rejected",\n    law_email_mailbox_verified:false,
     law_bar_domain:stateBarDomain(lead),
     law_firm_enriched_at:new Date().toISOString()};
 
@@ -2487,9 +2487,9 @@ async function enrichmentLoop(){
         emailVerifierUnavailable:Number(emailStats?.[7]||0),scraplingSearchHit:Number(emailStats?.[8]||0),
         bingSourceLinks:Number(emailStats?.[9]||0),bingSourcePagesMatched:Number(emailStats?.[10]||0),
         bingSourceEmailPages:Number(emailStats?.[11]||0),
-        emailRawCandidateLeads:Number(emailStats?.[12]||0),emailIdentityMxPassLeads:Number(emailStats?.[13]||0),
-        emailIdentityMxRejectLeads:Number(emailStats?.[14]||0),emailKeeleadPassLeads:Number(emailStats?.[15]||0),
-        emailKeeleadRejectLeads:Number(emailStats?.[16]||0),emailSourceVerifiedAttempts:Number(emailStats?.[17]||0),currentEmailCandidates,jinaSourceHit:Number(emailStats?.[18]||0),jinaSourceFail:Number(emailStats?.[19]||0),emailExistingRecorroborated:Number(emailStats?.[20]||0),emailExistingRecorroborationMiss:Number(emailStats?.[21]||0),postEmailHeadcountVerified:Number(emailStats?.[22]||0),postEmailHeadcountMiss:Number(emailStats?.[23]||0),
+        emailRawCandidateAttempts:Number(emailStats?.[12]||0),emailIdentityMxPassAttempts:Number(emailStats?.[13]||0),
+        emailIdentityMxRejectAttempts:Number(emailStats?.[14]||0),emailKeeleadInfrastructurePassAttempts:Number(emailStats?.[15]||0),
+        emailKeeleadInfrastructureRejectAttempts:Number(emailStats?.[16]||0),emailSourceVerifiedAttempts:Number(emailStats?.[17]||0),currentEmailCandidates,jinaSourceHit:Number(emailStats?.[18]||0),jinaSourceFail:Number(emailStats?.[19]||0),emailExistingRecorroborated:Number(emailStats?.[20]||0),emailExistingRecorroborationMiss:Number(emailStats?.[21]||0),postEmailHeadcountVerified:Number(emailStats?.[22]||0),postEmailHeadcountMiss:Number(emailStats?.[23]||0),
         postEmailHeadcountBing:Number(emailStats?.[24]||0),postEmailHeadcountDuck:Number(emailStats?.[25]||0),
         rejectedNoVerifiedEmail:Number(emailStats?.[26]||0),rejectedUnverifiedAttorneyCount:Number(emailStats?.[27]||0),
         rejectedWrongSize:Number(emailStats?.[28]||0),rejectedHasWebsite:Number(emailStats?.[29]||0),
