@@ -163,7 +163,6 @@ async function collectVerifiedEmailCandidateRows(redis){
       const {city,state}=parseLocation(lead);
       const rating=Number(lead.review_rating||lead.rating||0);
       const reviews=Number(lead.review_count||lead.reviews||0);
-      const source=clean(lead.law_email_source||lead.email_source||lead.email_evidence_url||lead.personalization_source||lead.google_maps_url||lead.maps_url);
       const personal=clean(lead.personalization_fact);
       const contextType=type==="Needs Classification"?"law":(type||"law");
       const context=city?`${contextType} firms in ${city}`:`${contextType} firms`;
