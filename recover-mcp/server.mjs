@@ -3988,20 +3988,48 @@ httpServer.listen(PORT, "0.0.0.0", () => {
       const redis = await getAcquisitionRedis();
       const values = await redis.hVals("recover:leadstore:qualified");
       let parsed=0, noWebsite=0, contactable=0, noWebsiteContactable=0, coreNoWebsiteContactable=0, withWebsite=0;
+      let lawNoWebsite=0, lawNoWebsiteWithAnyEmail=0, lawNoWebsiteUsableEmail=0, lawNoWebsiteSourceVerifiedEmail=0;
+      let lawNoWebsiteSize2to10=0, lawEligibleSendReady=0, lawUnknownSizeEmailCandidates=0;
       for (const value of values) {
         let lead; try { lead=JSON.parse(value); } catch { continue; }
         if (!lead) continue;
         parsed++;
         const website=String(lead.website||"").trim();
-        const emails=Array.isArray(lead.emails) ? lead.emails : String(lead.email||lead.emails||"").split(/[;,\\s]+/).filter(Boolean);
+        const emails=(Array.isArray(lead.emails) ? lead.emails : String(lead.email||lead.emails||"").split(/[;,\\s]+/).filter(Boolean))
+          .map(x=>String(x||"").trim().toLowerCase()).filter(Boolean);
+        const usableEmails=emails.filter(isUsableLawEmail);
         const hasContact=Boolean(String(lead.phone||"").trim())||emails.length>0;
         const nw=!website;
+        const isLaw=String(lead.search_profile||"")==="law-firm"||String(lead.industry||"").toUpperCase()==="LAW_FIRM";
+        const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
+        const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+        const size2to10=attorneyCount>=2&&attorneyCount<=10;
         if(nw) noWebsite++; else withWebsite++;
         if(hasContact) contactable++;
         if(nw&&hasContact) noWebsiteContactable++;
         if(nw&&hasContact&&isCoreHomeServiceLead(lead)) coreNoWebsiteContactable++;
+        if(isLaw&&nw){
+          lawNoWebsite++;
+          if(emails.length)lawNoWebsiteWithAnyEmail++;
+          if(usableEmails.length)lawNoWebsiteUsableEmail++;
+          if(usableEmails.length&&sourceVerified)lawNoWebsiteSourceVerifiedEmail++;
+          if(size2to10)lawNoWebsiteSize2to10++;
+          if(usableEmails.length&&sourceVerified&&size2to10)lawEligibleSendReady++;
+          if(usableEmails.length&&sourceVerified&&!attorneyCount)lawUnknownSizeEmailCandidates++;
+        }
       }
-      console.log(JSON.stringify({event:"qualified_lead_store_stats",redis_hash_entries:values.length,parsed,no_website:noWebsite,with_website:withWebsite,contactable,no_website_contactable:noWebsiteContactable,core_home_service_no_website_contactable:coreNoWebsiteContactable}));
+      console.log(JSON.stringify({
+        event:"qualified_lead_store_stats",
+        redis_hash_entries:values.length,parsed,no_website:noWebsite,with_website:withWebsite,contactable,
+        no_website_contactable:noWebsiteContactable,core_home_service_no_website_contactable:coreNoWebsiteContactable,
+        law_no_website:lawNoWebsite,
+        law_no_website_with_any_email:lawNoWebsiteWithAnyEmail,
+        law_no_website_usable_email:lawNoWebsiteUsableEmail,
+        law_no_website_source_verified_email:lawNoWebsiteSourceVerifiedEmail,
+        law_no_website_size_2_10:lawNoWebsiteSize2to10,
+        law_unknown_size_email_candidates:lawUnknownSizeEmailCandidates,
+        law_eligible_send_ready:lawEligibleSendReady
+      }));
     } catch (error) {
       console.error("qualified_lead_store_stats_error", error);
     }
