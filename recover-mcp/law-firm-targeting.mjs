@@ -122,15 +122,18 @@ export function lawResearchQueries(lead={}){
   queries.push(
     `"${name}" ${where} email`.trim(),
     `"${name}" ${where} attorney contact`.trim(),
+    `"${name}" "notice to creditors" email`.trim(),
+    `"${name}" "Attorney for" email`.trim(),
+    `"${name}" "represented by" email`.trim(),
+    `"${name}" bankruptcy email`.trim(),
+    `"${name}" "legal notice" email`.trim(),
+    `"${name}" ${region} state bar email`.trim(),
+    `"${name}" ${region} court email`.trim(),
+    `"${name}" ${region} attorney email filetype:pdf`.trim(),
     `"${name}" ${where} site:allbiz.com email`.trim(),
     `"${name}" ${where} site:chamberofcommerce.com email`.trim(),
-    `"${name}" ${where} site:manta.com email`.trim(),
-    `"${name}" ${where} site:bbb.org email`.trim(),
-    `"${name}" ${where} site:mapquest.com email`.trim(),
     `"${name}" ${region} site:justia.com`.trim(),
-    `"${name}" ${region} site:lawyers.com`.trim(),
-    `"${name}" ${region} state bar`.trim(),
-    `"${name}" ${region} attorney email filetype:pdf`.trim()
+    `"${name}" ${region} site:lawyers.com`.trim()
   );
   return [...new Set(queries)].slice(0,14);
 }
