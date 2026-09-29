@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v34-resilient-verification";
+const EMAIL_METHOD_VERSION="email-v35-exact-email-recovery";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -736,7 +736,7 @@ function bingResultLinks(html=""){
   }
   return [...new Set(out)].slice(0,12);
 }
-async function bingFallback(lead,query,pageBudget=6,key=""){
+async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[]){
   const emails=[],texts=[],sources=[];
   let attorneyCount=0,attorneyCountSource="",personalFact="",personalFactSource="";
   const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,6);
@@ -782,7 +782,9 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
       if(!page?.html)continue;
       const pageText=stripHtml(page.html).slice(0,22000);
       if(!pageMatchesLead(pageText,lead))continue;
-      const pageEmails=contextualEmails(page.html,lead,page.final_url||target);
+      const discoveredEmails=contextualEmails(page.html,lead,page.final_url||target);
+      const wantedSet=new Set((wantedEmails||[]).map(x=>String(x||"").trim().toLowerCase()));
+      const pageEmails=wantedSet.size?discoveredEmails.filter(x=>wantedSet.has(String(x).toLowerCase())):discoveredEmails;
       emails.push(...pageEmails);texts.push(pageText);
       const estimate=attorneyEstimate(page.html,pageText);
       if(estimate>attorneyCount){attorneyCount=estimate;attorneyCountSource=page.final_url||target;}
@@ -1345,8 +1347,34 @@ async function enrichLead(key,lead){
   let emailMethod=emails.length?"existing_source_backed":"none";
   if(emailMethod!=="none")await redis.hIncrBy(STATS,"email_existing_hit",1);
 
-  // The measured Duck lane produced zero hits. Run the two productive lanes
-  // first and in parallel; only pay the Duck/page-fetch cost when both fail.
+  // Recover previously-known emails safely before rediscovering from scratch.
+  // The exact address must appear on a matched public page; SERP text never counts.
+  if(emailMethod==="none"&&!existingSourceBacked&&existingCandidates.length){
+    const leadName=String(lead.name||lead.title||"").replace(/"/g,"").trim();
+    const exactQueries=existingCandidates.slice(0,3).flatMap(email=>[
+      `"${email}" "${leadName}"`,
+      `"${email}" attorney`
+    ]);
+    const exactResult=await bingFallback(lead,exactQueries,10,key,existingCandidates).catch(()=>null);
+    if(exactResult?.emails?.length){
+      emails.push(...exactResult.emails);
+      combined+=" "+String(exactResult.text||"");
+      source=String(exactResult.source||source||"");
+      const exactCount=Number(exactResult.attorneyCount||0);
+      const exactCountSource=String(exactResult.attorneyCountSource||"");
+      if(exactCount>0&&isDirectPublishedEmailSource(exactCountSource)){
+        attorneyCount=exactCount;
+        attorneyCountVerified=true;
+        attorneyCountSource=exactCountSource;
+      }
+      emailMethod="existing_email_recorroborated";
+      await redis.hIncrBy(STATS,"email_existing_recorroborated",1);
+    }else{
+      await redis.hIncrBy(STATS,"email_existing_recorroboration_miss",1);
+    }
+  }
+
+  // Run general discovery only when exact stored-email corroboration did not work.
   if(emailMethod==="none"){
     const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
     const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
