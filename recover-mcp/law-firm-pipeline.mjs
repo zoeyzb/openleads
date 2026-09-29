@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v30-capped-jina-reader";
+const EMAIL_METHOD_VERSION="email-v31-complete-almost-ready";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -140,6 +140,7 @@ const HISTORICAL_RECOVERY_VERSION_KEY="recover:law-firm:historical-recovery-vers
 const HISTORICAL_QUALIFIED_KEYS=new Set(["place:ChIJ-U4jzLpzaYgRiuVOJexcUts","place:ChIJ-cZwjdl814kR3naYgZCQKWI","place:ChIJ205yYu_UyFQRWo9oRpd3T-M","place:ChIJ2ROk0Extq4kRBT2E7-tRYlw","place:ChIJ32Qgyr7wtocRGWTUwdhYGTk","place:ChIJ3QySmg_HmoARkctGxRlocHU","place:ChIJ3W-ACwxx44kR2rru4m1yG4A","place:ChIJ4W_J98Jv54gRGvAwT50QYxA","place:ChIJ4fF-dR4YhYARuNJj2qaVxFc","place:ChIJ5WPlZJCNwokRIEUL9eDQOZw","place:ChIJ5wdWFlsyMYYRWPy3nw0m03A","place:ChIJ5z3GsvfFvIcRO0k17OFS-74","place:ChIJ71pJNPiKR4gRLhF2R_ErKEk","place:ChIJ7cSewURXwokRJYKLE-zxnBw","place:ChIJ7wsutdx4bIcR6p_AksLnRyw","place:ChIJ95gGZEgg6IgRZsn5pby6rpE","place:ChIJ9zP3h5kSAIkRdWMOrKTPeI8","place:ChIJA9HEiW7rJIYR95Qpcp4Lgvg","place:ChIJAQBkSoYo3YARpPJt5RHVTWY","place:ChIJAyCOMGLOw4kR7YvAi7XZ_H4","place:ChIJBVc_u6i2hYARiPAijtV8dAY","place:ChIJD6vum6RfQogRdNScZ6vQ5Zs","place:ChIJDyWvCZZXwokRTcTR4Oj1oKQ","place:ChIJE4PSX6raxokR91IKiYlqp9k","place:ChIJF31O_YIEU4cRpSPVKS9wwtY","place:ChIJFU2oKxYzMYYRebQBKdNNm0g","place:ChIJG1VBA1HxNIgRGAJy-YLCIhI","place:ChIJGWLs2eTQhIARV7GeoY81EcE","place:ChIJH8ORLCxfVFMRiTs-1FsCUGk","place:ChIJHfJFQjomwokRSql3ngElZ5M","place:ChIJIXOHPySX-IgRBKF_bc-rke0","place:ChIJJzoh2FyGmYcRN71FnFcpY00","place:ChIJK7eQx4j5Y4gRb9qliaeIfQg","place:ChIJKYY8pmLnmoARE4mULG2YnNs","place:ChIJKer573eoZYYRC-qFdZ_Eg3A","place:ChIJKw02pnLRhIARPEIfaW4NNg0","place:ChIJLTBYQhSrw4kRMnKH-0QzcG8","place:ChIJLyxfboWMk4cRf66FH6ritxo","place:ChIJM02Gea1YXIYRyvJ5ZwPhoQw","place:ChIJM6BqOO0wq4kRTae0vIkDBVo","place:ChIJM_1lHE5ZVFMRwH1fHLVGt34","place:ChIJMbp75upAwFQRe2uTudVjsow","place:ChIJN7r7r72awoARjAesAtfbDLw","place:ChIJNycr3iOHmYcRXquelBr03KE","place:ChIJO7QVTAluAHwRVsaeyJtxK7A","place:ChIJO7lK00vF54gRQ8j3zzWyLwU","place:ChIJPRt57X_d9YgRI5UYwRJE_2U","place:ChIJQ3oMBtrRUIgR65BnUyVPft4","place:ChIJRVH9a48Tt4cR6SOOdv3Edck","place:ChIJRW1H7r3VFogRlFoHqpncZ0I","place:ChIJRYrj7X3pwogRdG_E9PJYcf0","place:ChIJTa7FEGNQ4IYRSydBoKqsl2o","place:ChIJUYXwNCnaNYgRjAdaoH_ogLw","place:ChIJVYdWQ-4Cw4kRr4bAd6NLQVY","place:ChIJVxw7O9jeJIgR1FiEkRQhZLI","place:ChIJY6aHQLRcfYcRKiqiFK5w0do","place:ChIJayky0_XFvIcRjdDZMkHLRD8","place:ChIJb2hcRZsU3okR_EKIIlGOyw8","place:ChIJb3hWSBZv_4gROY_ApeSM8wU","place:ChIJbxKvvzbu2YkRMdteRtp7klE","place:ChIJd1aP8_KVlocR8_cIhc_Dsd0","place:ChIJdTzQCQJ5hYARdGR1UtB9dkE","place:ChIJeXm0tUXM3IARGzqfb3eOmCY","place:ChIJf2DHHpm3D4gRXfghePyBLmk","place:ChIJfyFrYXdVwIcRYhnjhZT1owA","place:ChIJgx6wDyjpaIgRAC-jEra5Hjw","place:ChIJi87TdvdvwokRjr-8f8K3FG0","place:ChIJjcnM45EgnYgREsRlrRsiyGg","place:ChIJkTUAzFFwzoARxKluSnPRdWQ","place:ChIJl6VxtjJBZIgRBc4VIABoDiw","place:ChIJmbFHSgiQhYAR0v11xfpj4bw","place:ChIJn5Qcag_1UocRtfKl2ZxDBug","place:ChIJnQ8ijF_v44kRFNChrD1otkQ","place:ChIJo-hS02IU7IARMFpv8tr4RTY","place:ChIJpWJorhCs0IkRRcYffMNkoeI","place:ChIJqSz5ytfMwoARZvRZn84vWmI","place:ChIJr104108HYIgRkJT9GlF7xKw","place:ChIJs4frIbQakFQRQPUW66WTiH4","place:ChIJsRDfI5BBZIgR4v0gkMlYNgA","place:ChIJsewYiPRp6oAR6fKhe5QIWcY","place:ChIJt4aEWsHfyFYRT_jYSgVRVw4","place:ChIJt9fh31NZ54YR5ZyCFBn9ock","place:ChIJtRjaRPXgtYcR2V6WyoGvW6g","place:ChIJuzD2vZYT2YkR7dqgvdWC6DY","place:ChIJxUWzCxINkIARDdm6uFNIS-E","place:ChIJzWyZs58FU4gR5-_YQva8wr4"]);
 const REJECTED_SET="recover:law-firm:rejected:v3";
 const PENDING_SET="recover:law-firm:enrich-pending:v3";
+const SIZE_READY_PENDING_SET="recover:law-firm:size-ready-pending:v1";
 const PRIORITY_PENDING_SET="recover:law-firm:enrich-priority:v3";
 const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
@@ -1525,7 +1526,8 @@ async function enrichLead(key,lead){
     else if(!preferredSize) await redis.hIncrBy(STATS,"rejected_wrong_size",1);
     else if(effectiveWebsite) await redis.hIncrBy(STATS,"rejected_has_website",1);
   }
-  console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:emails.length,emailMethod,attorneyCount:attorneyCount||null,sizeTier,practice:practices[0]||"",painPoint,qualified,priority,personalizationQuality:p.quality}));
+  const rejectReason=qualified?"":effectiveWebsite?"owned_website":!emails.length||!emailSourceVerified?"no_verified_email":!attorneyCountVerified?"unverified_attorney_count":!preferredSize?"wrong_size":"other";
+  console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:emails.length,emailMethod,attorneyCount:attorneyCount||null,attorneyCountVerified,attorneyCountSource:attorneyCountSource||"",effectiveWebsite:effectiveWebsite||"",sizeTier,practice:practices[0]||"",painPoint,qualified,rejectReason,priority,personalizationQuality:p.quality}));
   return true;
 }
 async function cleanupWebsiteRefreshReady(){
@@ -1570,7 +1572,7 @@ async function bootstrapExistingQualified(){
   const fullRequalify=(await redis.get(REQUALIFY_VERSION_KEY))!==EMAIL_METHOD_VERSION;
   const historicalRecovery=(await redis.get(HISTORICAL_RECOVERY_VERSION_KEY))!==EMAIL_METHOD_VERSION;
   const readySet=new Set(await redis.sMembers(READY_SET));
-  const requalRegular=[],requalPriority=[],requalRecoverable=[],requalAll=[];
+  const requalSizeReady=[],requalRegular=[],requalPriority=[],requalRecoverable=[],requalAll=[];
 
   if(historicalRecovery){
     const historicalKeys=[...HISTORICAL_QUALIFIED_KEYS];
@@ -1597,6 +1599,7 @@ async function bootstrapExistingQualified(){
     // uses SOURCE_PENDING_SET and is intentionally preserved.
     await Promise.all([
       redis.del(PENDING_SET),
+      redis.del(SIZE_READY_PENDING_SET),
       redis.del(PRIORITY_PENDING_SET),
       redis.del(RECOVERABLE_PENDING_SET)
     ]);
@@ -1655,7 +1658,9 @@ async function bootstrapExistingQualified(){
         if(historicalQualified)historicalQualifiedMarkers++;
         requalAll.push(entry.field);
         const nameShape=lawFirmNameShape(lead);
-        if(historicalQualified||existingUsable)requalRegular.push(entry.field);
+        const sizeReady=lead.attorney_count_evidence_verified===true&&Number(lead.attorney_count_estimate||0)>=2&&Number(lead.attorney_count_estimate||0)<=10;
+        if(sizeReady)requalSizeReady.push(entry.field);
+        else if(historicalQualified||existingUsable)requalRegular.push(entry.field);
         else if(nameShape==="multi"||nameShape==="firm"||multiName||emailRecoveryPriority(lead)>=5)requalPriority.push(entry.field);
         else requalRecoverable.push(entry.field);
         requalifyQueued++;
@@ -1759,6 +1764,7 @@ async function bootstrapExistingQualified(){
       if(chunk.length)await redis.sRem(ENRICHED_SET,chunk);
     }
     await Promise.all([
+      addChunks(SIZE_READY_PENDING_SET,requalSizeReady),
       addChunks(PENDING_SET,requalRegular),
       addChunks(PRIORITY_PENDING_SET,requalPriority),
       addChunks(RECOVERABLE_PENDING_SET,requalRecoverable)
@@ -1770,7 +1776,7 @@ async function bootstrapExistingQualified(){
   console.log(JSON.stringify({
     event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,
     queuedForEnrichment,requalifyQueued,fullRequalify,
-    requalifyRegular:requalRegular.length,requalifyPriority:requalPriority.length,requalifyRecoverable:requalRecoverable.length,
+    requalifySizeReady:requalSizeReady.length,requalifyRegular:requalRegular.length,requalifyPriority:requalPriority.length,requalifyRecoverable:requalRecoverable.length,
     historicalQualifiedMarkers
   }));
   return {scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,queuedForEnrichment,requalifyQueued};
@@ -1789,6 +1795,7 @@ async function popSetBatch(setKey,count){
 async function moveToEmailQueue(key,targetSet){
   await Promise.all([
     redis.sRem(SOURCE_PENDING_SET,key),
+    redis.sRem(SIZE_READY_PENDING_SET,key),
     redis.sRem(RECOVERABLE_PENDING_SET,key),
     redis.sRem(PRIORITY_PENDING_SET,key),
     redis.sRem(PENDING_SET,key)
@@ -1796,13 +1803,22 @@ async function moveToEmailQueue(key,targetSet){
   if(targetSet)await redis.sAdd(targetSet,key);
 }
 async function normalizeEmailQueues(){
-  const [fresh,recoverable,priority]=await Promise.all([
+  const [fresh,sizeReady,recoverable,priority]=await Promise.all([
     redis.sMembers(SOURCE_PENDING_SET),
+    redis.sMembers(SIZE_READY_PENDING_SET),
     redis.sMembers(RECOVERABLE_PENDING_SET),
     redis.sMembers(PRIORITY_PENDING_SET)
   ]);
   if(fresh.length){
     await Promise.all(fresh.map(k=>Promise.all([
+      redis.sRem(SIZE_READY_PENDING_SET,k),
+      redis.sRem(RECOVERABLE_PENDING_SET,k),
+      redis.sRem(PRIORITY_PENDING_SET,k),
+      redis.sRem(PENDING_SET,k)
+    ])));
+  }
+  if(sizeReady.length){
+    await Promise.all(sizeReady.map(k=>Promise.all([
       redis.sRem(RECOVERABLE_PENDING_SET,k),
       redis.sRem(PRIORITY_PENDING_SET,k),
       redis.sRem(PENDING_SET,k)
@@ -1817,7 +1833,7 @@ async function normalizeEmailQueues(){
   if(priority.length){
     await Promise.all(priority.map(k=>redis.sRem(PENDING_SET,k)));
   }
-  console.log(JSON.stringify({event:"law_email_queue_normalized",fresh:fresh.length,recoverable:recoverable.length,priority:priority.length}));
+  console.log(JSON.stringify({event:"law_email_queue_normalized",fresh:fresh.length,sizeReady:sizeReady.length,recoverable:recoverable.length,priority:priority.length}));
 }
 async function enrichBatch(){
   // Full recovery mode: keep fresh work first, but use all remaining capacity
@@ -1825,15 +1841,18 @@ async function enrichBatch(){
   const freshCap=Math.min(8,ENRICH_BATCH);
   const freshKeys=await popSetBatch(SOURCE_PENDING_SET,freshCap);
   const afterFresh=Math.max(0,ENRICH_BATCH-freshKeys.length);
-  const regularKeys=afterFresh?await popSetBatch(PENDING_SET,Math.min(24,afterFresh)):[];
-  const afterRegular=Math.max(0,afterFresh-regularKeys.length);
-  const priorityKeys=afterRegular?await popSetBatch(PRIORITY_PENDING_SET,Math.min(28,afterRegular)):[];
+  const sizeReadyKeys=afterFresh?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(32,afterFresh)):[];
+  const afterSizeReady=Math.max(0,afterFresh-sizeReadyKeys.length);
+  const regularKeys=afterSizeReady?await popSetBatch(PENDING_SET,Math.min(16,afterSizeReady)):[];
+  const afterRegular=Math.max(0,afterSizeReady-regularKeys.length);
+  const priorityKeys=afterRegular?await popSetBatch(PRIORITY_PENDING_SET,Math.min(16,afterRegular)):[];
   const afterPriority=Math.max(0,afterRegular-priorityKeys.length);
   const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
-  const keys=[...new Set([...freshKeys,...regularKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
+  const keys=[...new Set([...freshKeys,...sizeReadyKeys,...regularKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
   await Promise.all(keys.map(k=>Promise.all([
     redis.sRem(SOURCE_PENDING_SET,k),
+    redis.sRem(SIZE_READY_PENDING_SET,k),
     redis.sRem(RECOVERABLE_PENDING_SET,k),
     redis.sRem(PRIORITY_PENDING_SET,k),
     redis.sRem(PENDING_SET,k)
@@ -1862,15 +1881,16 @@ async function enrichBatch(){
   return done;
 }
 async function seed(cities){
-  const [queue,pendingPriority,pendingSource,pendingRegular,pendingRecoverable]=await Promise.all([
+  const [queue,pendingPriority,pendingSource,pendingSizeReady,pendingRegular,pendingRecoverable]=await Promise.all([
     redis.lLen(ACTIVE_QUEUE),
     redis.sCard(PRIORITY_PENDING_SET),
     redis.sCard(SOURCE_PENDING_SET),
+    redis.sCard(SIZE_READY_PENDING_SET),
     redis.sCard(PENDING_SET),
     redis.sCard(RECOVERABLE_PENDING_SET)
   ]);
   if(queue>=QUEUE_HIGH_WATER)return 0;
-  const totalEnrichmentBacklog=pendingPriority+pendingSource+pendingRegular+pendingRecoverable;
+  const totalEnrichmentBacklog=pendingPriority+pendingSource+pendingSizeReady+pendingRegular+pendingRecoverable;
   if(shouldPauseLawDiscovery({pendingEnrichment:totalEnrichmentBacklog,limit:DISCOVERY_BACKLOG_LIMIT})){
     await redis.hIncrBy(STATS,"discovery_paused_for_enrichment",1);
     return 0;
