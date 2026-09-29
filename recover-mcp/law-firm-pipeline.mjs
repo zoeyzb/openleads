@@ -736,11 +736,18 @@ function attorneyEstimate(html="",text=""){
     ...plain.matchAll(/\b(?:team of|our team of|firm of)\s+(\d{1,3})\s+(?:attorneys|lawyers)\b/gi),
     ...plain.matchAll(/\b(?:number of attorneys|attorney count|number of lawyers|lawyer count)\s*[:#-]?\s*(\d{1,3})\b/gi),
     ...plain.matchAll(/\b(?:attorneys|lawyers)\s*\(\s*(\d{1,3})\s*\)/gi),
-    ...plain.matchAll(/\bfirm\s+size\s*:?\s*(\d{1,3})\s+(?:attorneys|lawyers)?\b/gi)
+    ...plain.matchAll(/\b(?:attorneys|lawyers)\s*[:#-]\s*(\d{1,3})\b/gi),
+    ...plain.matchAll(/\bfirm\s+size\s*:?\s*(\d{1,3})\s+(?:attorneys|lawyers)?\b/gi),
+    ...plain.matchAll(/\b(?:size|team size)\s*[:#-]\s*(\d{1,3})\s+(?:attorneys|lawyers)\b/gi),
+    ...plain.matchAll(/\b(?:firm|office)\s+(?:has|employs|includes|consists of|is made up of)\s+(\d{1,3})\s+(?:attorneys|lawyers)\b/gi),
+    ...plain.matchAll(/\b(\d{1,3})\s+(?:attorneys|lawyers)\s+(?:at|with|in)\s+(?:the\s+|this\s+)?(?:firm|office)\b/gi)
   ].map(m=>Number(m[1])).filter(n=>n>0&&n<=500);
 
-  const ranges=[...plain.matchAll(/\bfirm\s+size\s*:?\s*(\d{1,2})\s*(?:to|[-–])\s*(\d{1,2})\b/gi)]
-    .map(m=>[Number(m[1]),Number(m[2])])
+  const ranges=[
+    ...plain.matchAll(/\bfirm\s+size\s*:?\s*(\d{1,2})\s*(?:to|[-–])\s*(\d{1,2})\b/gi),
+    ...plain.matchAll(/\b(?:attorneys|lawyers)\s*[:#-]\s*(\d{1,2})\s*(?:to|[-–])\s*(\d{1,2})\b/gi),
+    ...plain.matchAll(/\b(\d{1,2})\s*(?:to|[-–])\s*(\d{1,2})\s+(?:attorneys|lawyers)\b/gi)
+  ].map(m=>[Number(m[1]),Number(m[2])])
     .filter(([lo,hi])=>lo>0&&hi>=lo&&hi<=100);
 
   const candidates=[...exact];
@@ -1565,6 +1572,7 @@ async function enrichLead(key,lead){
       `"${sizeName}" "firm size"`,
       `"${sizeName}" attorneys lawyers ${sizeRegion}`.trim(),
       `"${sizeName}" site:lawyers.com "Firm Size"`,
+      `"${sizeName}" site:lawyers.com "Lawyers:"`,
       `"${sizeName}" site:martindale.com "Firm Size"`,
       `"${sizeName}" site:justia.com attorneys`
     ]:[];
@@ -1673,6 +1681,7 @@ async function enrichLead(key,lead){
   }else{
     await redis.sRem(READY_SET,key);await redis.sAdd(REJECTED_SET,key);
     if(!emails.length||!emailSourceVerified) await redis.hIncrBy(STATS,"rejected_no_verified_email",1);
+    else if(!attorneyCountVerified) await redis.hIncrBy(STATS,"rejected_unverified_attorney_count",1);
     else if(!preferredSize) await redis.hIncrBy(STATS,"rejected_wrong_size",1);
     else if(effectiveWebsite) await redis.hIncrBy(STATS,"rejected_has_website",1);
   }
