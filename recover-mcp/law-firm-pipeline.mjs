@@ -71,6 +71,7 @@ const SEED_CURSOR_KEY="recover:law-firm:seed-cursor:v7";
 const SEED_WAVE_KEY="recover:law-firm:seed-wave:v7";
 const ENRICHED_SET="recover:law-firm:enriched:v3";
 const READY_SET="recover:law-firm:qualified:v3";
+const EMAIL_CANDIDATE_SET="recover:law-firm:email-candidates:v1";
 const REJECTED_SET="recover:law-firm:rejected:v3";
 const PENDING_SET="recover:law-firm:enrich-pending:v3";
 const PRIORITY_PENDING_SET="recover:law-firm:enrich-priority:v3";
@@ -616,23 +617,33 @@ async function duckFallback(lead){
       `"${phone}" attorney email`
     ]:[])
   ];
-  const queries=[...new Set([...attorneyQueries,...baseQueries])];
+  const firmName=String(lead.name||lead.title||"").replace(/"/g,"").trim();
+  const headcountQueries=firmName?[
+    `"${firmName}" attorneys team`,
+    `"${firmName}" lawyers team`,
+    `"${firmName}" "attorneys at law"`,
+    `"${firmName}" partners associates`
+  ]:[];
+  const queries=[...new Set([...attorneyQueries,...headcountQueries,...baseQueries])];
   if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
   const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
-  if(existingEmails.length){
+  const existingAttorneyCount=Number(lead.attorney_count_estimate||0);
+  if(existingEmails.length&&existingAttorneyCount>=2&&existingAttorneyCount<=10){
     return {
       emails:rankLawEmails(existingEmails).slice(0,5),
       text:"",
-      source:String(lead.personalization_source||lead.google_maps_url||""),
-      attorneyCount:Number(lead.attorney_count_estimate||0),
+      source:String(lead.law_email_source||lead.email_source||lead.personalization_source||lead.google_maps_url||""),
+      attorneyCount:existingAttorneyCount,
       personalFact:String(lead.personalization_fact||""),
       personalFactSource:String(lead.personalization_source||"")
     };
   }
 
-  const emails=[],texts=[],sources=[];
-  let attorneyCount=Number(lead.attorney_count_estimate||0),personalFact="",personalFactSource="";
+  // Keep a good existing email, but continue research when firm size is
+  // unknown/outside target so headcount can be proved before paid outreach.
+  const emails=[...existingEmails],texts=[],sources=[];
+  let attorneyCount=existingAttorneyCount,personalFact="",personalFactSource="";
   const visited=new Set();
 
   const absorbPage=(html="",finalUrl="")=>{
@@ -664,7 +675,7 @@ async function duckFallback(lead){
   // Two fast search waves. Run searches in parallel, then fetch the best unique pages in parallel.
   const waves=[queries.slice(0,4),queries.slice(4,8)];
   for(const wave of waves){
-    if(!wave.length||emails.length)break;
+    if(!wave.length||(emails.length&&attorneyCount>=2&&attorneyCount<=10))break;
     const searchResults=await Promise.allSettled(wave.map(async q=>{
       const url="https://html.duckduckgo.com/html/?q="+encodeURIComponent(q);
       const result=await fetchText(url,4500);
@@ -694,14 +705,14 @@ async function duckFallback(lead){
       }
       if(pageCandidates.length>=8)break;
     }
-    if(emails.length)break;
+    if(emails.length&&attorneyCount>=2&&attorneyCount<=10)break;
 
     const pages=await Promise.allSettled(pageCandidates.slice(0,8).map(target=>fetchText(target,4500)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
       if(item.status!=="fulfilled")continue;
       absorbPage(item.value.html,item.value.final_url||pageCandidates[i]);
-      if(emails.length>=3)break;
+      if(emails.length>=3&&attorneyCount>=2&&attorneyCount<=10)break;
     }
   }
 
@@ -1100,8 +1111,9 @@ async function enrichLead(key,lead){
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
 
   let fb={emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
-  if(!emails.length&&emailRecoveryPriority(lead)>=5){
-    fb=await duckFallback({...lead,website:""});
+  const needsHeadcount=emails.length>0&&!(attorneyCount>=2&&attorneyCount<=10);
+  if((!emails.length&&emailRecoveryPriority(lead)>=5)||needsHeadcount){
+    fb=await duckFallback({...lead,emails,attorney_count_estimate:attorneyCount,law_email_source:source,website:""});
     emails.push(...fb.emails);
     combined+=" "+fb.text;
     if(fb.source)source=fb.source;
@@ -1148,6 +1160,9 @@ async function enrichLead(key,lead){
   const painPoint="No website";
   const discoveredOwnedWebsite=!website&&emails.length?await detectOwnedWebsiteFromEmailDomains(emails,lead):"";
   const effectiveWebsite=website||discoveredOwnedWebsite;
+  const emailCandidate=!effectiveWebsite&&emailSourceVerified&&emails.length>0;
+  if(emailCandidate)await redis.sAdd(EMAIL_CANDIDATE_SET,key);
+  else await redis.sRem(EMAIL_CANDIDATE_SET,key);
   const qualified=qualifiesNoWebsiteLawLead({
     website:effectiveWebsite,
     emails,
@@ -1273,6 +1288,9 @@ async function bootstrapExistingQualified(){
       const practiceKeys=[...new Set([...storedKeys,...observedKeys,...(focus?[focus]:[])])];
 
       const wasQualified=await redis.sIsMember(READY_SET,entry.field);
+      const emailCandidate=!website&&sourceBacked&&emails.length>0;
+      if(emailCandidate)await redis.sAdd(EMAIL_CANDIDATE_SET,entry.field);
+      else await redis.sRem(EMAIL_CANDIDATE_SET,entry.field);
       let effectiveWebsite=website;
       if(wasQualified&&!website&&emails.length){
         const discovered=await detectOwnedWebsiteFromEmailDomains(emails,lead);
@@ -1303,7 +1321,9 @@ async function bootstrapExistingQualified(){
             await moveToEmailQueue(entry.field,RECOVERABLE_PENDING_SET);
             queuedForEnrichment++;
           }
-        }else if(!effectiveWebsite&&emails.length&&!practiceKeys.length){
+        }else if(!effectiveWebsite&&emails.length&&(!practiceKeys.length||!attorneyCount)){
+          // Email-bearing no-site firms are valuable candidates. If size is unknown,
+          // re-run research for headcount instead of discarding them.
           await redis.sRem(ENRICHED_SET,entry.field);
           await moveToEmailQueue(entry.field,PENDING_SET);
           queuedForEnrichment++;
