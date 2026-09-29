@@ -202,7 +202,9 @@ function lawFirmNameShape(lead={}){
 }
 function highValueLawResearchLead(lead={}){
   const shape=lawFirmNameShape(lead), score=emailRecoveryPriority(lead);
-  return score>=5||((shape==="multi"||shape==="firm")&&score>=4);
+  // Paid cohort is 2-10 attorneys. Expensive browser/reader fallbacks are
+  // reserved for firms whose public name actually suggests multiple lawyers.
+  return (shape==="multi"||shape==="firm")&&score>=4;
 }
 function parseCsvLine(line){
   const out=[];let cell="",quoted=false;
@@ -406,7 +408,7 @@ async function fetchResearchPage(url,lead={},key="",allowStealth=true){
     attorneyEstimate(direct.html,directText)>0
   );
   if(directEvidence)return direct;
-  const shouldDeepRead=HISTORICAL_QUALIFIED_KEYS.has(key)||highValueLawResearchLead(lead);
+  const shouldDeepRead=highValueLawResearchLead(lead);
   if(allowStealth&&shouldDeepRead){
     const jina=await callJinaReader(url,lead);
     if(jina?.html){
@@ -1408,7 +1410,7 @@ async function enrichLead(key,lead){
       ...(barQueries[1]?[barQueries[1]]:[]),
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ].filter(Boolean))];
-    const useDeepIdentity=emailRecoveryPriority(lead)>=4;
+    const useDeepIdentity=false;
     const [bingResult,zeroResult]=await Promise.allSettled([
       bingFallback(lead,bingQueries,emailRecoveryPriority(lead)>=5?10:8,key),
       useDeepIdentity?zeroCostEmailFallback(lead):Promise.resolve({emails:[],source:"",name_variant:""})
