@@ -153,6 +153,20 @@ console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"redis_connect"
 await connectRedis();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"redis_connected"}));
 function normalize(v=""){return String(v||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
+function lawFirmNameShape(lead={}){
+  const name=String(lead.name||lead.title||"").replace(/\s+/g," ").trim();
+  if(!name)return "unknown";
+  if(/\b(?:law offices|attorneys at law|attorneys|lawyers|partners|associates|law group|legal group)\b/i.test(name)||
+     /\s(?:&|and)\s/i.test(name))return "multi";
+  if(/^the?\s*law office of\s+[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4}$/i.test(name)||
+     /^[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,3}(?:,?\s+(?:esq\.?|attorney(?: at law)?))?$/i.test(name))return "solo";
+  if(/\b(?:law firm|pllc|p\.c\.|pc|p\.a\.|pa|llp|llc)\b/i.test(name))return "firm";
+  return "unknown";
+}
+function highValueLawResearchLead(lead={}){
+  const shape=lawFirmNameShape(lead);
+  return shape==="multi"||shape==="firm"||emailRecoveryPriority(lead)>=5;
+}
 function parseCsvLine(line){
   const out=[];let cell="",quoted=false;
   for(let i=0;i<line.length;i++){
@@ -314,7 +328,7 @@ async function fetchResearchPage(url,lead={},key=""){
     attorneyEstimate(direct.html,directText)>0
   );
   if(directEvidence)return direct;
-  const shouldStealth=HISTORICAL_QUALIFIED_KEYS.has(key)||emailRecoveryPriority(lead)>=5;
+  const shouldStealth=HISTORICAL_QUALIFIED_KEYS.has(key)||highValueLawResearchLead(lead);
   if(shouldStealth){
     const stealth=await callScrapling(url);
     if(stealth?.html){
@@ -618,6 +632,17 @@ function decodeBingRedirect(raw=""){
     return new URL(target).href;
   }catch{return "";}
 }
+function markdownResultLinks(text=""){
+  const out=[];
+  for(const m of String(text||"").matchAll(/\[[^\]]{1,240}\]\((https?:\/\/[^)\s]+)\)/g)){
+    try{
+      const u=new URL(m[1]);
+      if(/(^|\.)(bing|google|duckduckgo)\.com$/i.test(u.hostname))continue;
+      out.push(u.href);
+    }catch{}
+  }
+  return [...new Set(out)].slice(0,16);
+}
 function bingResultLinks(html=""){
   const out=[];
   for(const m of String(html).matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)){
@@ -639,8 +664,18 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
   try{
     const searchResults=await Promise.allSettled(queries.map(async q=>{
       const url="https://www.bing.com/search?q="+encodeURIComponent(q);
-      const result=await fetchText(url,5000);
-      return {q,url,...result};
+      let result=null;
+      try{result=await fetchText(url,5000);}catch{}
+      let resultLinks=result?.html?bingResultLinks(result.html):[];
+      if(!resultLinks.length&&highValueLawResearchLead(lead)){
+        const stealth=await callScrapling(url);
+        if(stealth?.html){
+          result=stealth;
+          resultLinks=[...new Set([...bingResultLinks(stealth.html),...markdownResultLinks(stealth.html)])];
+          await redis.hIncrBy(STATS,"scrapling_search_hit",1);
+        }
+      }
+      return {q,url,...(result||{html:"",final_url:url,status:0}),resultLinks};
     }));
     const links=[];
     for(const item of searchResults){
@@ -650,7 +685,7 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
       // Search snippets are discovery hints only. Never qualify an email from a
       // Bing SERP itself; the address must be corroborated on a matched source page.
       texts.push(searchText);
-      for(const link of bingResultLinks(result.html).sort((a,b)=>{
+      for(const link of (result.resultLinks||bingResultLinks(result.html)).sort((a,b)=>{
         const rank=u=>/govinfo\.gov|docs\.justia\.com|statebar|barassociation|bar\.org|supremecourt|disciplinaryboard|trellis|allbiz|chamberofcommerce|justia/i.test(u)?0:1;
         return rank(a)-rank(b);
       })){
@@ -815,8 +850,18 @@ async function duckFallback(lead){
     if(!wave.length||(emails.length&&attorneyCount>=2&&attorneyCount<=10))break;
     const searchResults=await Promise.allSettled(wave.map(async q=>{
       const url="https://html.duckduckgo.com/html/?q="+encodeURIComponent(q);
-      const result=await fetchText(url,4500);
-      return {q,url,...result};
+      let result=null;
+      try{result=await fetchText(url,4500);}catch{}
+      let resultLinks=result?.html?duckResultLinks(result.html):[];
+      if(!resultLinks.length&&highValueLawResearchLead(lead)){
+        const stealth=await callScrapling(url);
+        if(stealth?.html){
+          result=stealth;
+          resultLinks=[...new Set([...duckResultLinks(stealth.html),...markdownResultLinks(stealth.html)])];
+          await redis.hIncrBy(STATS,"scrapling_search_hit",1);
+        }
+      }
+      return {q,url,...(result||{html:"",final_url:url,status:0}),resultLinks};
     }));
 
     const pageCandidates=[];
@@ -825,7 +870,7 @@ async function duckFallback(lead){
       const result=item.value;
       const searchText=stripHtml(result.html).slice(0,9000);
       texts.push(searchText);
-      const links=duckResultLinks(result.html).sort((a,b)=>{
+      const links=(result.resultLinks||duckResultLinks(result.html)).sort((a,b)=>{
         const rank=u=>/govinfo\.gov|docs\.justia\.com|statebar|barassociation|bar\.org|supremecourt|disciplinaryboard|allbiz|chamberofcommerce|justia/i.test(u)?0:1;
         return rank(a)-rank(b);
       });
@@ -839,7 +884,7 @@ async function duckFallback(lead){
     }
     if(emails.length&&attorneyCount>=2&&attorneyCount<=10)break;
 
-    const pages=await Promise.allSettled(pageCandidates.slice(0,8).map(target=>fetchText(target,4500)));
+    const pages=await Promise.allSettled(pageCandidates.slice(0,8).map(target=>fetchResearchPage(target,lead)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
       if(item.status!=="fulfilled")continue;
@@ -1483,8 +1528,9 @@ async function bootstrapExistingQualified(){
         const historicalQualified=HISTORICAL_QUALIFIED_KEYS.has(entry.field)||lead.qualified_lead===true||Boolean(lead.law_firm_qualified_at)||lead.law_email_source_verified===true||/identity\+mx|source\+identity\+mx|published\+identity\+mx/i.test(String(lead.law_email_validation||""));
         if(historicalQualified)historicalQualifiedMarkers++;
         requalAll.push(entry.field);
+        const nameShape=lawFirmNameShape(lead);
         if(historicalQualified||existingUsable)requalRegular.push(entry.field);
-        else if(multiName||emailRecoveryPriority(lead)>=5)requalPriority.push(entry.field);
+        else if(nameShape==="multi"||nameShape==="firm"||multiName||emailRecoveryPriority(lead)>=5)requalPriority.push(entry.field);
         else requalRecoverable.push(entry.field);
         requalifyQueued++;
       }
@@ -1649,12 +1695,12 @@ async function normalizeEmailQueues(){
 async function enrichBatch(){
   // Full recovery mode: keep fresh work first, but use all remaining capacity
   // on existing-email / high-signal / recoverable no-site law firms.
-  const freshCap=Math.min(16,ENRICH_BATCH);
+  const freshCap=Math.min(8,ENRICH_BATCH);
   const freshKeys=await popSetBatch(SOURCE_PENDING_SET,freshCap);
   const afterFresh=Math.max(0,ENRICH_BATCH-freshKeys.length);
-  const regularKeys=afterFresh?await popSetBatch(PENDING_SET,Math.min(20,afterFresh)):[];
+  const regularKeys=afterFresh?await popSetBatch(PENDING_SET,Math.min(24,afterFresh)):[];
   const afterRegular=Math.max(0,afterFresh-regularKeys.length);
-  const priorityKeys=afterRegular?await popSetBatch(PRIORITY_PENDING_SET,Math.min(20,afterRegular)):[];
+  const priorityKeys=afterRegular?await popSetBatch(PRIORITY_PENDING_SET,Math.min(28,afterRegular)):[];
   const afterPriority=Math.max(0,afterRegular-priorityKeys.length);
   const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
   const keys=[...new Set([...freshKeys,...regularKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
@@ -1787,7 +1833,7 @@ async function enrichmentLoop(){
         emailExisting:Number(emailStats?.[0]||0),emailDuck:Number(emailStats?.[1]||0),emailBing:Number(emailStats?.[2]||0),
         emailZeroCost:Number(emailStats?.[3]||0),emailNoHit:Number(emailStats?.[4]||0),
         scraplingSourceHit:Number(emailStats?.[5]||0),scraplingSourceFail:Number(emailStats?.[6]||0),
-        emailVerifierUnavailable:Number(emailStats?.[7]||0),
+        emailVerifierUnavailable:Number(emailStats?.[7]||0),scraplingSearchHit:Number(emailStats?.[8]||0),
         bingSourceLinks:Number(emailStats?.[8]||0),bingSourcePagesMatched:Number(emailStats?.[9]||0),
         bingSourceEmailPages:Number(emailStats?.[10]||0)
       }));
