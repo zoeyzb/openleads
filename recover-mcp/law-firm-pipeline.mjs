@@ -2483,6 +2483,9 @@ async function seed(cities){
   return added;
 }
 
+console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"bootstrap_existing"}));
+await bootstrapExistingQualified();
+await normalizeEmailQueues();
 startLawLeadSheetSync({
   getRedis:async()=>redis,
   serviceAccountJson:GOOGLE_SERVICE_ACCOUNT_JSON,
@@ -2490,9 +2493,6 @@ startLawLeadSheetSync({
   enabled:LAW_LEADS_SHEET_SYNC_ENABLED,
   intervalMs:LAW_LEADS_SHEET_SYNC_INTERVAL_MS
 });
-console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"bootstrap_existing"}));
-await bootstrapExistingQualified();
-await normalizeEmailQueues();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_load"}));
 const cities=await loadCities();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_loaded",cities:cities.length}));
