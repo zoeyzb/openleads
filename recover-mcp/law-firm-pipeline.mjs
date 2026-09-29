@@ -17,6 +17,8 @@ const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
 const EMAIL_METHOD_VERSION="email-v36-bounded-recovery";
+const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
+const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -1628,8 +1630,8 @@ async function cleanupWebsiteRefreshReady(){
 
 async function bootstrapExistingQualified(){
   let scanned=0,qualifiedAdded=0,qualifiedRemoved=0,queuedForEnrichment=0,alreadyQualified=0,requalifyQueued=0,historicalQualifiedMarkers=0;
-  const fullRequalify=(await redis.get(REQUALIFY_VERSION_KEY))!==EMAIL_METHOD_VERSION;
-  const historicalRecovery=(await redis.get(HISTORICAL_RECOVERY_VERSION_KEY))!==EMAIL_METHOD_VERSION;
+  const fullRequalify=(await redis.get(REQUALIFY_VERSION_KEY))!==FULL_REQUAL_VERSION;
+  const historicalRecovery=(await redis.get(HISTORICAL_RECOVERY_VERSION_KEY))!==HISTORICAL_RECOVERY_VERSION;
   const readySet=new Set(await redis.sMembers(READY_SET));
   const requalSizeReady=[],requalRegular=[],requalPriority=[],requalRecoverable=[],requalAll=[];
 
@@ -1649,7 +1651,7 @@ async function bootstrapExistingQualified(){
         await redis.sAdd(PENDING_SET,chunk);
       }
     }
-    await redis.set(HISTORICAL_RECOVERY_VERSION_KEY,EMAIL_METHOD_VERSION);
+    await redis.set(HISTORICAL_RECOVERY_VERSION_KEY,HISTORICAL_RECOVERY_VERSION);
     console.log(JSON.stringify({event:"law_historical_recovery_queued",requested:historicalKeys.length,present:present.length}));
   }
 
@@ -1838,12 +1840,12 @@ async function bootstrapExistingQualified(){
       addChunks(PRIORITY_PENDING_SET,requalPriority),
       addChunks(RECOVERABLE_PENDING_SET,requalRecoverable)
     ]);
-    await redis.set(REQUALIFY_VERSION_KEY,EMAIL_METHOD_VERSION);
+    await redis.set(REQUALIFY_VERSION_KEY,FULL_REQUAL_VERSION);
     queuedForEnrichment+=requalifyQueued;
   }
 
   console.log(JSON.stringify({
-    event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,
+    event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,FULL_REQUAL_VERSION,HISTORICAL_RECOVERY_VERSION,EMAIL_METHOD_VERSION,
     queuedForEnrichment,requalifyQueued,fullRequalify,
     requalifySizeReady:requalSizeReady.length,requalifyRegular:requalRegular.length,requalifyPriority:requalPriority.length,requalifyRecoverable:requalRecoverable.length,
     historicalQualifiedMarkers
