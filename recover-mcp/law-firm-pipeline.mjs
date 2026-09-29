@@ -14,9 +14,9 @@ const TARGET_TOTAL=Math.max(100,Number(process.env.LAW_FIRM_TARGET_TOTAL||25000)
 const MAX_CITIES=Math.max(50,Number(process.env.LAW_FIRM_MAX_CITIES||1200));
 const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_HIGH_WATER||24)));
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
-const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
-const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
-const EMAIL_METHOD_VERSION="email-v18-historical-safe";
+const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
+const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
+const EMAIL_METHOD_VERSION="email-v19-throughput-safe";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -626,10 +626,10 @@ async function duckFallback(lead){
     `"${firmName}" "attorneys at law"`,
     `"${firmName}" partners associates`
   ]:[];
-  const queries=[...new Set(existingEmails.length?[...headcountQueries,...attorneyQueries,...baseQueries]:[...attorneyQueries,...baseQueries,...headcountQueries])];
-  if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
   const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
+  const queries=[...new Set(existingEmails.length?[...headcountQueries,...attorneyQueries,...baseQueries]:[...attorneyQueries,...baseQueries,...headcountQueries])];
+  if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
   const existingAttorneyCount=Number(lead.attorney_count_estimate||0);
   if(existingEmails.length&&existingAttorneyCount>=2&&existingAttorneyCount<=10){
     return {
