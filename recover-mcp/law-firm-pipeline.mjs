@@ -43,7 +43,7 @@ async function filterContactableEmails(emails=[],lead={}){
 async function keeleadVerifiedEmails(emails=[]){
   const unique=[...new Set(emails.map(x=>String(x||"").trim().toLowerCase()).filter(Boolean))];
   if(!unique.length)return [];
-  if(!KEELEAD_BASE_URL)return unique;
+  if(!KEELEAD_BASE_URL)throw new Error("keelead_not_configured");
   try{
     const response=await fetch(KEELEAD_BASE_URL+"/api/verify",{
       method:"POST",
@@ -64,9 +64,9 @@ async function keeleadVerifiedEmails(emails=[]){
     return unique.filter(email=>accepted.has(email));
   }catch(error){
     await redis.hIncrBy(STATS,"email_verifier_unavailable",1);
-    // KeeLead is a heuristic second opinion, not mailbox proof. Do not let a
-    // helper outage erase source+identity+MX-validated emails from the pipeline.
-    return unique;
+    // Paid-send safety: verifier outages must never silently downgrade quality.
+    // Throw so enrichBatch requeues the lead instead of exporting it or losing it.
+    throw new Error("keelead_unavailable:"+String(error?.message||error));
   }
 }
 async function detectOwnedWebsiteFromEmailDomains(emails=[],lead={}){
@@ -1685,7 +1685,7 @@ async function enrichLead(key,lead){
     law_email_enrich_version:EMAIL_METHOD_VERSION,
     law_email_method:emailMethod,law_email_source:source||"",
     law_email_source_verified:emailSourceVerified,
-    law_email_validation:emailSourceVerified?"published+identity+mx":"rejected",
+    law_email_validation:emailSourceVerified?"published+identity+mx+keelead":"rejected",
     law_bar_domain:stateBarDomain(lead),
     law_firm_enriched_at:new Date().toISOString()};
 
