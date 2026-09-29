@@ -1972,7 +1972,7 @@ async function lawAreaSaturated(area={}){
   const attempts=Number(attemptsRaw||0),netNew=Number(newRaw||0),duplicates=Number(dupRaw||0);
   const saturated=(attempts>=1&&netNew===0&&duplicates>=10) ||
     (attempts>=2&&netNew===0&&duplicates>=5) ||
-    (attempts>=4&&netNew/Math.max(1,attempts)<0.5&&duplicates>netNew*3);
+    (attempts>=4&&netNew/Math.max(1,attempts)<0.5&&duplicates>=10&&duplicates>netNew*3);
   return {saturated,attempts,netNew,duplicates,field};
 }
 
