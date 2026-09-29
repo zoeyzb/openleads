@@ -1058,6 +1058,7 @@ async function duckFallback(lead,key=""){
     text:combined.slice(0,48000),
     source:sources[0]||"",
     attorneyCount,
+    attorneyCountSource,
     personalFact,
     personalFactSource
   };
@@ -1577,14 +1578,38 @@ async function enrichLead(key,lead){
       `"${sizeName}" site:justia.com attorneys`
     ]:[];
     if(sizeQueries.length){
-      const sizeResearch=await bingFallback(lead,sizeQueries,10,key).catch(()=>null);
-      const verifiedCount=Number(sizeResearch?.attorneyCount||0);
-      const verifiedSource=String(sizeResearch?.attorneyCountSource||"");
-      if(verifiedCount>0&&isDirectPublishedEmailSource(verifiedSource)){
-        attorneyCount=verifiedCount;
+      const [bingSize,duckSize]=await Promise.allSettled([
+        bingFallback(lead,sizeQueries,12,key),
+        duckFallback({...lead,emails,law_email_source:source,website:""},key)
+      ]);
+      const candidates=[];
+      if(bingSize.status==="fulfilled"&&bingSize.value){
+        candidates.push({
+          count:Number(bingSize.value.attorneyCount||0),
+          source:String(bingSize.value.attorneyCountSource||""),
+          via:"bing"
+        });
+      }
+      if(duckSize.status==="fulfilled"&&duckSize.value){
+        candidates.push({
+          count:Number(duckSize.value.attorneyCount||0),
+          source:String(duckSize.value.attorneyCountSource||""),
+          via:"duck"
+        });
+      }
+      const verified=candidates
+        .filter(x=>x.count>0&&isDirectPublishedEmailSource(x.source))
+        .sort((a,b)=>{
+          const aTarget=a.count>=2&&a.count<=10?0:1;
+          const bTarget=b.count>=2&&b.count<=10?0:1;
+          return aTarget-bTarget||b.count-a.count;
+        })[0];
+      if(verified){
+        attorneyCount=verified.count;
         attorneyCountVerified=true;
-        attorneyCountSource=verifiedSource;
+        attorneyCountSource=verified.source;
         await redis.hIncrBy(STATS,"post_email_headcount_verified",1);
+        await redis.hIncrBy(STATS,`post_email_headcount_${verified.via}`,1);
       }else{
         await redis.hIncrBy(STATS,"post_email_headcount_miss",1);
       }
