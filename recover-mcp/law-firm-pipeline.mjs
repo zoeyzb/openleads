@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
-const EMAIL_METHOD_VERSION="email-v15-identity-mx";
+const EMAIL_METHOD_VERSION="email-v16-full-requal";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -72,6 +72,7 @@ const SEED_WAVE_KEY="recover:law-firm:seed-wave:v7";
 const ENRICHED_SET="recover:law-firm:enriched:v3";
 const READY_SET="recover:law-firm:qualified:v3";
 const EMAIL_CANDIDATE_SET="recover:law-firm:email-candidates:v1";
+const REQUALIFY_VERSION_KEY="recover:law-firm:full-requalify-version";
 const REJECTED_SET="recover:law-firm:rejected:v3";
 const PENDING_SET="recover:law-firm:enrich-pending:v3";
 const PRIORITY_PENDING_SET="recover:law-firm:enrich-priority:v3";
@@ -1264,7 +1265,8 @@ async function cleanupWebsiteRefreshReady(){
 }
 
 async function bootstrapExistingQualified(){
-  let scanned=0,qualifiedAdded=0,qualifiedRemoved=0,queuedForEnrichment=0,alreadyQualified=0;
+  let scanned=0,qualifiedAdded=0,qualifiedRemoved=0,queuedForEnrichment=0,alreadyQualified=0,requalifyQueued=0;
+  const fullRequalify=(await redis.get(REQUALIFY_VERSION_KEY))!==EMAIL_METHOD_VERSION;
   for await(const page of redis.hScanIterator(LEAD_HASH,{COUNT:500})){
     for(const entry of (Array.isArray(page)?page:[page])){
       if(!entry?.field||entry.value===undefined)continue;
@@ -1307,6 +1309,15 @@ async function bootstrapExistingQualified(){
           await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(updatedLead));
           await queueWebsiteRefreshCandidate(entry.field,{...updatedLead,emails,practice_keys:practiceKeys},discovered);
         }
+      }
+      if(fullRequalify&&!effectiveWebsite){
+        const name=String(lead.name||lead.title||"");
+        const existingUsable=emails.length>0;
+        const multiName=/\b(law offices|attorneys at law|law group|partners|associates|attorneys|&| and )\b/i.test(name);
+        const targetSet=existingUsable?PENDING_SET:(multiName||emailRecoveryPriority(lead)>=5?PRIORITY_PENDING_SET:RECOVERABLE_PENDING_SET);
+        await redis.sRem(ENRICHED_SET,entry.field);
+        await moveToEmailQueue(entry.field,targetSet);
+        requalifyQueued++;
       }
       if(!qualifiesNoWebsiteLawLead({
         website:effectiveWebsite,
@@ -1403,8 +1414,9 @@ async function bootstrapExistingQualified(){
       }
     }
   }
-  console.log(JSON.stringify({event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,queuedForEnrichment}));
-  return {scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,queuedForEnrichment};
+  if(fullRequalify)await redis.set(REQUALIFY_VERSION_KEY,EMAIL_METHOD_VERSION);
+  console.log(JSON.stringify({event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,queuedForEnrichment,requalifyQueued,fullRequalify}));
+  return {scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,queuedForEnrichment,requalifyQueued};
 }
 
 async function popSetBatch(setKey,count){
@@ -1451,19 +1463,17 @@ async function normalizeEmailQueues(){
   console.log(JSON.stringify({event:"law_email_queue_normalized",fresh:fresh.length,recoverable:recoverable.length,priority:priority.length}));
 }
 async function enrichBatch(){
-  // Revenue-path scheduling: fresh discoveries first, then high-recovery
-  // candidates. Old misses are allowed a small background slice only.
-  const historicalCap=Math.max(1,Math.min(8,Math.floor(ENRICH_BATCH*0.15)));
-  const freshKeys=await popSetBatch(SOURCE_PENDING_SET,ENRICH_BATCH);
+  // Full recovery mode: keep fresh work first, but use all remaining capacity
+  // on existing-email / high-signal / recoverable no-site law firms.
+  const freshCap=Math.min(16,ENRICH_BATCH);
+  const freshKeys=await popSetBatch(SOURCE_PENDING_SET,freshCap);
   const afterFresh=Math.max(0,ENRICH_BATCH-freshKeys.length);
-  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,afterFresh):[];
-  const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
-  const regularKeys=afterPriority?await popSetBatch(PENDING_SET,afterPriority):[];
-  const afterRegular=Math.max(0,afterPriority-regularKeys.length);
-  const recoverableKeys=afterRegular
-    ? await popSetBatch(RECOVERABLE_PENDING_SET,Math.min(historicalCap,afterRegular))
-    : [];
-  const keys=[...new Set([...freshKeys,...priorityKeys,...regularKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
+  const regularKeys=afterFresh?await popSetBatch(PENDING_SET,Math.min(20,afterFresh)):[];
+  const afterRegular=Math.max(0,afterFresh-regularKeys.length);
+  const priorityKeys=afterRegular?await popSetBatch(PRIORITY_PENDING_SET,Math.min(20,afterRegular)):[];
+  const afterPriority=Math.max(0,afterRegular-priorityKeys.length);
+  const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
+  const keys=[...new Set([...freshKeys,...regularKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
   await Promise.all(keys.map(k=>Promise.all([
     redis.sRem(SOURCE_PENDING_SET,k),
