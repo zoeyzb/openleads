@@ -1358,7 +1358,7 @@ async function enrichLead(key,lead){
       `"${exactEmail}" "${leadName}"`,
       `"${exactEmail}" attorney`
     ];
-    const exactResult=await bingFallback(lead,exactQueries,4,key,[exactEmail],1).catch(()=>null);
+    const exactResult=await bingFallback(lead,exactQueries,4,key,[exactEmail],0).catch(()=>null);
     if(exactResult?.emails?.length){
       emails.push(...exactResult.emails);
       combined+=" "+String(exactResult.text||"");
@@ -1920,14 +1920,14 @@ async function normalizeEmailQueues(){
 async function enrichBatch(){
   // Full recovery mode: keep fresh work first, but use all remaining capacity
   // on existing-email / high-signal / recoverable no-site law firms.
-  const freshCap=Math.min(8,ENRICH_BATCH);
+  const freshCap=Math.min(24,ENRICH_BATCH);
   const freshKeys=await popSetBatch(SOURCE_PENDING_SET,freshCap);
   const afterFresh=Math.max(0,ENRICH_BATCH-freshKeys.length);
-  const sizeReadyKeys=afterFresh?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(32,afterFresh)):[];
+  const sizeReadyKeys=afterFresh?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(24,afterFresh)):[];
   const afterSizeReady=Math.max(0,afterFresh-sizeReadyKeys.length);
-  const regularKeys=afterSizeReady?await popSetBatch(PENDING_SET,Math.min(16,afterSizeReady)):[];
+  const regularKeys=afterSizeReady?await popSetBatch(PENDING_SET,Math.min(8,afterSizeReady)):[];
   const afterRegular=Math.max(0,afterSizeReady-regularKeys.length);
-  const priorityKeys=afterRegular?await popSetBatch(PRIORITY_PENDING_SET,Math.min(16,afterRegular)):[];
+  const priorityKeys=afterRegular?await popSetBatch(PRIORITY_PENDING_SET,Math.min(8,afterRegular)):[];
   const afterPriority=Math.max(0,afterRegular-priorityKeys.length);
   const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
   const keys=[...new Set([...freshKeys,...sizeReadyKeys,...regularKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
@@ -1972,8 +1972,8 @@ async function seed(cities){
     redis.sCard(RECOVERABLE_PENDING_SET)
   ]);
   if(queue>=QUEUE_HIGH_WATER)return 0;
-  const totalEnrichmentBacklog=pendingPriority+pendingSource+pendingSizeReady+pendingRegular+pendingRecoverable;
-  if(shouldPauseLawDiscovery({pendingEnrichment:totalEnrichmentBacklog,limit:DISCOVERY_BACKLOG_LIMIT})){
+  const activeEnrichmentBacklog=pendingPriority+pendingSource+pendingSizeReady+pendingRegular;
+  if(shouldPauseLawDiscovery({pendingEnrichment:activeEnrichmentBacklog,limit:DISCOVERY_BACKLOG_LIMIT})){
     await redis.hIncrBy(STATS,"discovery_paused_for_enrichment",1);
     return 0;
   }
