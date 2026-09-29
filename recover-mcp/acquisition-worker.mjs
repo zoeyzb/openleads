@@ -528,7 +528,20 @@ async function persistPermanentQualified(redis, job, leads) {
   if(identities.length){
     await redis.sAdd(campaignLeadSetKey(job),identities);
     if(String(job.search_profile||"")==="law-firm"){
-      await redis.sAdd("recover:law-firm:enrich-pending:v2",identities);
+      // Fast-lane firms whose public name suggests a multi-attorney practice.
+      // Unknown/solo-looking names still remain discoverable, but do not consume
+      // the highest-cost email enrichment slots ahead of better 2-10 candidates.
+      const fast=[],background=[];
+      for(const key of identities){
+        const raw=await redis.hGet("recover:leadstore:qualified",key);
+        let lead={};try{lead=raw?JSON.parse(raw):{};}catch{}
+        const name=String(lead.name||lead.title||"");
+        const multi=/\b(law offices|attorneys at law|law group|partners|associates|attorneys|&| and )\b/i.test(name);
+        (multi?fast:background).push(key);
+      }
+      if(fast.length)await redis.sAdd("recover:law-firm:enrich-pending:v2",fast);
+      if(background.length)await redis.sAdd("recover:law-firm:enrich-recoverable:v1",background);
+      if(fast.length||background.length)console.log(JSON.stringify({event:"law_email_lane_split",fast:fast.length,background:background.length}));
     }
     if(/\\bny\\b|new york/i.test(String(job.location||"")) && isHomeComfortTarget(job.industry||"")){
       await redis.sAdd("recover:leadstore:ny-home-comfort",identities);
