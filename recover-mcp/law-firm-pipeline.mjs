@@ -709,6 +709,7 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
       const item=pages[i];
       if(item.status!=="fulfilled")continue;
       const page=item.value,target=links[i];
+      if(!page?.html)continue;
       const pageText=stripHtml(page.html).slice(0,22000);
       if(!pageMatchesLead(pageText,lead))continue;
       const pageEmails=contextualEmails(page.html,lead,page.final_url||target);
@@ -894,7 +895,7 @@ async function duckFallback(lead,key=""){
     const pages=await Promise.allSettled(pageCandidates.slice(0,8).map((target,pageIndex)=>fetchResearchPage(target,lead,key,pageIndex<2)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
-      if(item.status!=="fulfilled")continue;
+      if(item.status!=="fulfilled"||!item.value?.html)continue;
       absorbPage(item.value.html,item.value.final_url||pageCandidates[i]);
       if(emails.length>=3&&attorneyCount>=2&&attorneyCount<=10)break;
     }
