@@ -832,7 +832,7 @@ function bingResultLinks(html=""){
 async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepPageBudget=2){
   const emails=[],texts=[],sources=[];
   let attorneyCount=0,attorneyCountSource="",personalFact="",personalFactSource="";
-  const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,6);
+  // Keep enough email-specific searches to run; the previous six-query cap silently dropped later contact queries.\n  const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,10);
   try{
     const searchResults=await Promise.allSettled(queries.map(async (q,searchIndex)=>{
       const url="https://www.bing.com/search?q="+encodeURIComponent(q);
@@ -849,7 +849,9 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       }
       return {q,url,...(result||{html:"",final_url:url,status:0}),resultLinks};
     }));
-    const links=[];
+    // Round-robin links across queries so one generic/bar search cannot
+    // consume the whole source-page budget before email-specific searches run.
+    const perQueryLinks=[];
     for(const item of searchResults){
       if(item.status!=="fulfilled")continue;
       const result=item.value;
@@ -857,12 +859,24 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       // Search snippets are discovery hints only. Never qualify an email from a
       // Bing SERP itself; the address must be corroborated on a matched source page.
       texts.push(searchText);
-      for(const link of (result.resultLinks||bingResultLinks(result.html))
+      const ranked=(result.resultLinks||bingResultLinks(result.html))
         .filter(u=>lawSourceRank(u,lead)<90)
-        .sort((a,b)=>lawSourceRank(a,lead)-lawSourceRank(b,lead))){
-        if(!links.includes(link))links.push(link);
-        if(links.length>=pageBudget)break;
+        .sort((a,b)=>lawSourceRank(a,lead)-lawSourceRank(b,lead));
+      perQueryLinks.push(ranked);
+      if(ranked.length)await redis.hIncrBy(STATS,"bing_queries_with_links",1);
+    }
+    const links=[];
+    let depth=0,added=true;
+    while(links.length<pageBudget&&added){
+      added=false;
+      for(const ranked of perQueryLinks){
+        const link=ranked[depth];
+        if(link&&!links.includes(link)){
+          links.push(link);added=true;
+          if(links.length>=pageBudget)break;
+        }
       }
+      depth++;
     }
     // Fetch actual source pages for corroboration. Search-result snippets are
     // never treated as publish-source evidence.
@@ -1496,16 +1510,23 @@ async function enrichLead(key,lead){
       ]:[]),
       ...(person?[`"${person}" "notice to creditors" email`]:[])
     ];
+    const directoryEmailQueries=[
+      ...(name?[`site:allbiz.com "${name}" email`]:[]),
+      ...(name&&phone?[`site:allbiz.com "${name}" "${phone}"`]:[]),
+      ...(name?[`site:chamberofcommerce.com "${name}" email`]:[]),
+      ...(person?[`"${person}" attorney "Email:"`]:[])
+    ];
     const bingQueries=[...new Set([
-      ...(phone&&name?[`"${name}" "${phone}"`]:[]),
-      ...publicRecordQueries,
-      ...(barQueries[0]?[barQueries[0]]:[]),
-      ...(person?[`"${person}" ${region} attorney email`.trim()]:[]),
       ...(name?[`"${name}" ${city} ${region} email`.trim()]:[]),
       ...(name?[`"${name}" ${city} ${region} contact email`.trim()]:[]),
+      ...(person?[`"${person}" ${region} attorney email`.trim()]:[]),
+      ...(phone&&name?[`"${name}" "${phone}" "Email"`]:[]),
+      ...directoryEmailQueries,
+      ...publicRecordQueries,
+      ...(barQueries[0]?[barQueries[0]]:[]),
       ...(name?[`"${name}" ${region} "E-mail"`.trim()]:[]),
       ...(phone?[`"${phone}" attorney email`]:[]),
-      ...(phone&&name?[`"${name}" "${phone}" "Email"`]:[]),
+      ...(phone&&name?[`"${name}" "${phone}"`]:[]),
       ...(barQueries[1]?[barQueries[1]]:[]),
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ].filter(Boolean))];
