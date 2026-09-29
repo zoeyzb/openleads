@@ -546,9 +546,12 @@ async function persistPermanentQualified(redis, job, leads) {
         let lead={};try{lead=raw?JSON.parse(raw):{};}catch{}
         const shape=lawFirmNameShape(lead);
         if(shape==="multi"||shape==="firm")fast.push(key);
-        else{
+        else if(shape==="solo"){
+          // Campaign target is 2-10 attorneys. Keep obvious solos in storage,
+          // but do not spend paid-email enrichment capacity on them.
+          solo.push(key);
+        }else{
           background.push(key);
-          if(shape==="solo")solo.push(key);
         }
         if(lead&&typeof lead==="object"&&lead.law_name_shape!==shape){
           await redis.hSet("recover:leadstore:qualified",key,JSON.stringify({...lead,law_name_shape:shape}));
@@ -688,8 +691,19 @@ const queryVariants=(industry,location,practiceFocus="",coveragePass="")=>{
       .replace(/\b(?:lawyer|attorney)\b/gi,"law firm")
       .replace(/\blaw office\b/gi,"law firm")
       .replace(/\s+/g," ").trim();
-    const firmBase=[...new Set(base.map(firmize).filter(Boolean))];
-    const preferredByWave=["law firm","law group","attorneys at law","small law firm","law partners","law associates","law firm PLLC","law firm PC"];
+    const firmBase=[...new Set(base.map(firmize).filter(q=>q&&normalizeText(q)!=="law firm"))];
+    const preferredByWave=[
+      "small law firm",
+      "law group",
+      "attorneys at law",
+      "law partners",
+      "law associates",
+      "law firm PLLC",
+      "law firm PC",
+      "law firm LLP",
+      "law offices partners",
+      "law offices associates"
+    ];
     const g0=preferredByWave[(wave-1)%preferredByWave.length];
     const g1=preferredByWave[wave%preferredByWave.length];
     const g2=preferredByWave[(wave+2)%preferredByWave.length];
@@ -732,7 +746,7 @@ async function orderVariantsByNetNewYield(redis,variants=[]){
     const duplicates=Number(dupRows?.[i]||0);
     const avgNew=attempts?netNew/attempts:0;
     const dupRate=(netNew+duplicates)?duplicates/(netNew+duplicates):0;
-    const saturated=(attempts>=6 && avgNew<0.35 && dupRate>0.75) || (attempts>=12 && avgNew<0.75 && dupRate>0.90);
+    const saturated=(attempts>=4 && avgNew<0.5 && dupRate>0.70) || (attempts>=8 && avgNew<1 && dupRate>0.85);
     // Prefer demonstrated permanent net-new yield, while retiring search
     // families that have repeatedly produced almost nothing but duplicates.
     const score=attempts===0 ? 3.5 : (avgNew*20)-(dupRate*2)+(attempts<4?1:0);
