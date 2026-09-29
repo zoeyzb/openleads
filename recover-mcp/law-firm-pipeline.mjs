@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v37-dual-search-recovery";
+const EMAIL_METHOD_VERSION="email-v38-source-budget-recovery";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -1954,7 +1954,10 @@ async function bootstrapExistingQualified(){
               await redis.sRem(ENRICHED_SET,entry.field);
               await moveToEmailQueue(entry.field,SIZE_READY_PENDING_SET);
               queuedForEnrichment++;
-            }else if(emailRecoveryPriority(lead)>=5){
+            }else if(highValueLawResearchLead(lead)||emailRecoveryPriority(lead)>=5){
+              // Re-run promising no-website firms whenever the email method changes.
+              // Firm/multi names may not expose an attorney name, so relying only
+              // on emailRecoveryPriority previously skipped exactly the 2-10 cohort.
               await redis.sRem(ENRICHED_SET,entry.field);
               await moveToEmailQueue(entry.field,RECOVERABLE_PENDING_SET);
               queuedForEnrichment++;
