@@ -336,23 +336,78 @@ async function callScrapling(url){
     const sessionHeaders={...headers};
     const sessionId=initRes.headers.get("mcp-session-id");
     if(sessionId)sessionHeaders["mcp-session-id"]=sessionId;
-    await fetch(SCRAPLING_MCP_URL,{method:"POST",headers:sessionHeaders,body:JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"}),signal:AbortSignal.timeout(4000)});
-    const callRes=await fetch(SCRAPLING_MCP_URL,{
-      method:"POST",headers:sessionHeaders,signal:AbortSignal.timeout(12000),
-      body:JSON.stringify({jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"stealthy_fetch",arguments:{url,ai_targeted:false,headless:true,network_idle:false}}})
+    await fetch(SCRAPLING_MCP_URL,{
+      method:"POST",headers:sessionHeaders,
+      body:JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"}),
+      signal:AbortSignal.timeout(4000)
     });
-    const payload=parseRemoteMcpPayload(await callRes.text());
-    if(!callRes.ok)throw new Error("call "+callRes.status);
-    const structured=payload?.result?.structuredContent||{};
-    let content=structured?.content;
-    if(!content){
-      const rawText=payload?.result?.content?.[0]?.text;
-      if(rawText){try{content=JSON.parse(rawText)?.content;}catch{}}
+
+    const invoke=async(name,args,timeoutMs)=>{
+      const response=await fetch(SCRAPLING_MCP_URL,{
+        method:"POST",headers:sessionHeaders,signal:AbortSignal.timeout(timeoutMs),
+        body:JSON.stringify({jsonrpc:"2.0",id:name==="make_request"?2:3,method:"tools/call",params:{name,arguments:args}})
+      });
+      const payload=parseRemoteMcpPayload(await response.text());
+      if(!response.ok)throw new Error(name+" "+response.status);
+      const result=payload?.result||{};
+      const structured=result?.structuredContent||{};
+      if(result?.isError===true)return null;
+      let content=structured?.content;
+      if(!content){
+        const rawText=result?.content?.[0]?.text;
+        if(rawText){try{content=JSON.parse(rawText)?.content;}catch{}}
+      }
+      const text=Array.isArray(content)?content.filter(Boolean).join("\n"):String(content||"");
+      if(!text.trim())return null;
+      return {
+        html:text.slice(0,1000000),
+        elapsed_ms:0,
+        final_url:String(structured?.url||url),
+        status:Number(structured?.status||200)
+      };
+    };
+
+    // Use Scrapling's static browser-impersonating HTTP client first. It does not
+    // spawn Patchright/Chromium and therefore avoids Railway's thread ceiling.
+    try{
+      const staticResult=await invoke("make_request",{
+        url,
+        method:"GET",
+        impersonate:"chrome",
+        extraction_type:"html",
+        main_content_only:false,
+        timeout:12,
+        retries:2,
+        follow_redirects:"safe",
+        stealthy_headers:true
+      },16000);
+      if(staticResult?.html){
+        await redis.hIncrBy(STATS,"scrapling_static_hit",1);
+        return {...staticResult,via:"scrapling_static"};
+      }
+    }catch{
+      await redis.hIncrBy(STATS,"scrapling_static_fail",1);
     }
-    const text=Array.isArray(content)?content.filter(Boolean).join("\n"):String(content||"");
-    if(!text.trim())return null;
-    await redis.hIncrBy(STATS,"scrapling_source_hit",1);
-    return {html:text.slice(0,1000000),elapsed_ms:0,final_url:String(structured?.url||url),status:Number(structured?.status||200),via:"scrapling"};
+
+    // Browser stealth is a last resort only.
+    try{
+      const stealth=await invoke("stealthy_fetch",{
+        url,
+        extraction_type:"html",
+        main_content_only:false,
+        headless:true,
+        network_idle:false,
+        disable_resources:true,
+        timeout:12000
+      },16000);
+      if(stealth?.html){
+        await redis.hIncrBy(STATS,"scrapling_browser_hit",1);
+        return {...stealth,via:"scrapling_browser"};
+      }
+    }catch{
+      await redis.hIncrBy(STATS,"scrapling_browser_fail",1);
+    }
+    return null;
   }catch(error){
     const failures=await redis.hIncrBy(STATS,"scrapling_source_fail",1);
     if(failures<=3||failures%100===0)console.warn(JSON.stringify({event:"law_scrapling_fail",failures,error:String(error?.message||error).slice(0,220)}));
