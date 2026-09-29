@@ -131,23 +131,26 @@ async function collectRows(redis){
 
 async function collectVerifiedEmailCandidateRows(redis){
   const out=[];
+  const drops={missingRecord:0,notLaw:0,hasWebsite:0,noExportableEmail:0,sourceUnverified:0,sourceOwnedDomain:0};
   const candidateKeys=await redis.sMembers("recover:law-firm:email-candidates:v1");
   for(let offset=0;offset<candidateKeys.length;offset+=250){
     const keys=candidateKeys.slice(offset,offset+250);
     const values=await redis.hmGet("recover:leadstore:qualified",keys);
     for(let i=0;i<keys.length;i++){
-      if(!values[i])continue;
+      if(!values[i]){drops.missingRecord++;continue;}
       let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
       const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
-      if(!isLaw||!isLawFirmLead(lead))continue;
+      if(!isLaw||!isLawFirmLead(lead)){drops.notLaw++;continue;}
       const website=clean(lead.website||lead.website_url);
-      if(/^https?:\/\//i.test(website))continue;
+      if(/^https?:\/\//i.test(website)){drops.hasWebsite++;continue;}
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
         .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
       const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
       const source=clean(lead.law_email_source||lead.email_source||lead.email_evidence_url||lead.personalization_source||lead.google_maps_url||lead.maps_url);
-      if(!emails.length||!sourceVerified||sourceIsOwnedEmailDomain(source,emails[0]))continue;
+      if(!emails.length){drops.noExportableEmail++;continue;}
+      if(!sourceVerified){drops.sourceUnverified++;continue;}
+      if(sourceIsOwnedEmailDomain(source,emails[0])){drops.sourceOwnedDomain++;continue;}
 
       const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
       const sizeEvidenceVerified=lead.attorney_count_evidence_verified===true;
@@ -183,6 +186,7 @@ async function collectVerifiedEmailCandidateRows(redis){
     const ar=a.row[15]==="Ready"?0:1, br=b.row[15]==="Ready"?0:1;
     return ar-br||b.priority-a.priority||String(a.row[1]).localeCompare(String(b.row[1]));
   });
+  console.log(JSON.stringify({event:"law_sheet_candidate_filter",candidateSet: candidateKeys.length,exported:out.length,...drops}));
   return out;
 }
 
