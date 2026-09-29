@@ -1494,7 +1494,8 @@ function isDirectPublishedEmailSource(source=""){
   }catch{return false;}
 }
 
-async function enrichLead(key,lead){\n  const enrichStartedAt=Date.now();
+async function enrichLead(key,lead){
+  const enrichStartedAt=Date.now();
   if(String(lead.search_profile||"")!=="law-firm"&&normalize(lead.industry)!=="law firm")return false;
   if(!isLawFirmLead(lead)){
     await redis.sAdd(ENRICHED_SET,key);
