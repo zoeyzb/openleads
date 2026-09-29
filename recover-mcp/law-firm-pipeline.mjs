@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v27-explicit-size-evidence";
+const EMAIL_METHOD_VERSION="email-v28-bootstrap-keelead";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -1565,7 +1565,8 @@ async function bootstrapExistingQualified(){
       const emailChecks=identityEmails.length
         ? await Promise.all(identityEmails.map(async email=>({email,ok:await hasMailExchange(email)})))
         : [];
-      const emails=emailChecks.filter(x=>x.ok).map(x=>x.email);
+      const mxEmails=emailChecks.filter(x=>x.ok).map(x=>x.email);
+      const emails=await keeleadVerifiedEmails(mxEmails);
       const attorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
       const evidenceText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const observedKeys=lawFirmPracticeKeys(evidenceText);
@@ -1586,7 +1587,7 @@ async function bootstrapExistingQualified(){
 
       if(fullRequalify&&!effectiveWebsite){
         const name=String(lead.name||lead.title||"");
-        const existingUsable=emails.length>0;
+        const existingUsable=emails.length>0||mxEmails.length>0;
         const multiName=/\b(law offices|attorneys at law|law group|partners|associates|attorneys|&| and )\b/i.test(name);
         const historicalQualified=HISTORICAL_QUALIFIED_KEYS.has(entry.field)||lead.qualified_lead===true||Boolean(lead.law_firm_qualified_at)||lead.law_email_source_verified===true||/identity\+mx|source\+identity\+mx|published\+identity\+mx/i.test(String(lead.law_email_validation||""));
         if(historicalQualified)historicalQualifiedMarkers++;
