@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v35-exact-email-recovery";
+const EMAIL_METHOD_VERSION="email-v36-bounded-recovery";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -736,7 +736,7 @@ function bingResultLinks(html=""){
   }
   return [...new Set(out)].slice(0,12);
 }
-async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[]){
+async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepPageBudget=2){
   const emails=[],texts=[],sources=[];
   let attorneyCount=0,attorneyCountSource="",personalFact="",personalFactSource="";
   const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,6);
@@ -774,7 +774,7 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[]){
     // Fetch actual source pages for corroboration. Search-result snippets are
     // never treated as publish-source evidence.
     if(links.length)await redis.hIncrBy(STATS,"bing_source_links",links.length);
-    const pages=await Promise.allSettled(links.slice(0,pageBudget).map((target,pageIndex)=>fetchResearchPage(target,lead,key,pageIndex<2)));
+    const pages=await Promise.allSettled(links.slice(0,pageBudget).map((target,pageIndex)=>fetchResearchPage(target,lead,key,pageIndex<deepPageBudget)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
       if(item.status!=="fulfilled")continue;
@@ -1351,11 +1351,12 @@ async function enrichLead(key,lead){
   // The exact address must appear on a matched public page; SERP text never counts.
   if(emailMethod==="none"&&!existingSourceBacked&&existingCandidates.length){
     const leadName=String(lead.name||lead.title||"").replace(/"/g,"").trim();
-    const exactQueries=existingCandidates.slice(0,3).flatMap(email=>[
-      `"${email}" "${leadName}"`,
-      `"${email}" attorney`
-    ]);
-    const exactResult=await bingFallback(lead,exactQueries,10,key,existingCandidates).catch(()=>null);
+    const exactEmail=existingCandidates[0];
+    const exactQueries=[
+      `"${exactEmail}" "${leadName}"`,
+      `"${exactEmail}" attorney`
+    ];
+    const exactResult=await bingFallback(lead,exactQueries,4,key,[exactEmail],1).catch(()=>null);
     if(exactResult?.emails?.length){
       emails.push(...exactResult.emails);
       combined+=" "+String(exactResult.text||"");
