@@ -107,13 +107,17 @@ export function lawResearchQueries(lead={}){
   queries.push(
     `"${name}" ${where} email`.trim(),
     `"${name}" ${where} attorney contact`.trim(),
-    `"${name}" ${where} site:allbiz.com`.trim(),
-    `"${name}" ${where} site:chamberofcommerce.com`.trim(),
+    `"${name}" ${where} site:allbiz.com email`.trim(),
+    `"${name}" ${where} site:chamberofcommerce.com email`.trim(),
+    `"${name}" ${where} site:manta.com email`.trim(),
+    `"${name}" ${where} site:bbb.org email`.trim(),
+    `"${name}" ${where} site:mapquest.com email`.trim(),
     `"${name}" ${region} site:justia.com`.trim(),
     `"${name}" ${region} site:lawyers.com`.trim(),
-    `"${name}" ${region} state bar`.trim()
+    `"${name}" ${region} state bar`.trim(),
+    `"${name}" ${region} attorney email filetype:pdf`.trim()
   );
-  return [...new Set(queries)].slice(0,9);
+  return [...new Set(queries)].slice(0,14);
 }
 
 export function isLawFirmLead(lead={}){
