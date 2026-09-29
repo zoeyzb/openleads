@@ -386,7 +386,8 @@ function areaConsumeBudget(job={}) {
   return 4;
 }
 async function preflightAreaSkip(redis,job) {
-  if(String(job.search_profile||"")!=="core-home-service") return {skip:false};
+  const profile=String(job.search_profile||"");
+  if(profile!=="core-home-service"&&profile!=="law-firm") return {skip:false};
   const consumeField=areaConsumeField(job);
   const yieldFields=[...new Set([baseAreaYieldField(job),areaYieldField(job)])].filter(Boolean);
   let saturation={attempts:0,netNew:0,duplicates:0,field:""};
@@ -405,6 +406,10 @@ async function preflightAreaSkip(redis,job) {
     if (saturated) { saturation={attempts,netNew,duplicates,field:yieldField}; break; }
   }
   if(saturation.field) return {skip:true,reason:"area_saturated",...saturation};
+
+  // Law coverage rotates practice queries by city. Duplicate-yield saturation is
+  // enough to move on; do not share the home-service ZIP attempt budget.
+  if(profile==="law-firm")return {skip:false};
 
   if(!job.area_budget_claimed){
     const slot=await redis.hIncrBy("recover:coverage:area:consumed:v1",consumeField,1);
