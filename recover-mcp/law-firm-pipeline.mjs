@@ -5,9 +5,14 @@ import { resolveMx } from "node:dns/promises";
 import { orchestrate as enrichProfessionalEmail } from "email-enrich";
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isLawFirmLead } from "./law-firm-targeting.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
+import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||"";
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
+const LAW_LEADS_SHEET_SYNC_ENABLED=String(process.env.LAW_LEADS_SHEET_SYNC_ENABLED||"").toLowerCase()==="true";
+const LAW_LEADS_SPREADSHEET_ID=String(process.env.LAW_LEADS_SPREADSHEET_ID||"").trim();
+const GOOGLE_SERVICE_ACCOUNT_JSON=String(process.env.GOOGLE_SERVICE_ACCOUNT_JSON||"");
+const LAW_LEADS_SHEET_SYNC_INTERVAL_MS=Math.max(60000,Number(process.env.LAW_LEADS_SHEET_SYNC_INTERVAL_MS||120000));
 
 const ZIP_SOURCE_URL=process.env.US_ZIP_SOURCE_URL||"https://raw.githubusercontent.com/ReadyAPIs-com/curated-us-zips/main/data/us-zips.csv";
 const TARGET_TOTAL=Math.max(100,Number(process.env.LAW_FIRM_TARGET_TOTAL||25000));
@@ -2286,6 +2291,13 @@ async function seed(cities){
   return added;
 }
 
+startLawLeadSheetSync({
+  getRedis:async()=>redis,
+  serviceAccountJson:GOOGLE_SERVICE_ACCOUNT_JSON,
+  spreadsheetId:LAW_LEADS_SPREADSHEET_ID,
+  enabled:LAW_LEADS_SHEET_SYNC_ENABLED,
+  intervalMs:LAW_LEADS_SHEET_SYNC_INTERVAL_MS
+});
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"bootstrap_existing"}));
 await bootstrapExistingQualified();
 await normalizeEmailQueues();
