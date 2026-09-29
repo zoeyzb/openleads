@@ -1541,13 +1541,19 @@ async function enrichBatch(){
   return done;
 }
 async function seed(cities){
-  const [queue,pendingEmail,pendingSource]=await Promise.all([
+  const [queue,pendingPriority,pendingSource,pendingRegular,pendingRecoverable]=await Promise.all([
     redis.lLen(ACTIVE_QUEUE),
     redis.sCard(PRIORITY_PENDING_SET),
-    redis.sCard(SOURCE_PENDING_SET)
+    redis.sCard(SOURCE_PENDING_SET),
+    redis.sCard(PENDING_SET),
+    redis.sCard(RECOVERABLE_PENDING_SET)
   ]);
   if(queue>=QUEUE_HIGH_WATER)return 0;
-  if(shouldPauseLawDiscovery({pendingEnrichment:pendingEmail+pendingSource,limit:DISCOVERY_BACKLOG_LIMIT}))return 0;
+  const totalEnrichmentBacklog=pendingPriority+pendingSource+pendingRegular+pendingRecoverable;
+  if(shouldPauseLawDiscovery({pendingEnrichment:totalEnrichmentBacklog,limit:DISCOVERY_BACKLOG_LIMIT})){
+    await redis.hIncrBy(STATS,"discovery_paused_for_enrichment",1);
+    return 0;
+  }
 
   const capacity=Math.max(0,Math.min(SEED_BATCH,QUEUE_HIGH_WATER-queue));
   if(!capacity||!cities.length||!PRACTICE_FOCI.length)return 0;
