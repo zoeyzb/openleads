@@ -1,4 +1,4 @@
-// deployment trigger: qualified law sheet cleanup 2026-09-28
+// deployment trigger: law email-v37 current-head snapshot 2026-09-30
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { resolveMx } from "node:dns/promises";
