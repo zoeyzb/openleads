@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v24-bing-link-decode";
+const EMAIL_METHOD_VERSION="email-v25-browser-budget";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -164,8 +164,8 @@ function lawFirmNameShape(lead={}){
   return "unknown";
 }
 function highValueLawResearchLead(lead={}){
-  const shape=lawFirmNameShape(lead);
-  return shape==="multi"||shape==="firm"||emailRecoveryPriority(lead)>=5;
+  const shape=lawFirmNameShape(lead), score=emailRecoveryPriority(lead);
+  return score>=5||((shape==="multi"||shape==="firm")&&score>=4);
 }
 function parseCsvLine(line){
   const out=[];let cell="",quoted=false;
@@ -314,11 +314,12 @@ async function callScrapling(url){
     await redis.hIncrBy(STATS,"scrapling_source_hit",1);
     return {html:text.slice(0,1000000),elapsed_ms:0,final_url:String(structured?.url||url),status:Number(structured?.status||200),via:"scrapling"};
   }catch(error){
-    await redis.hIncrBy(STATS,"scrapling_source_fail",1);
+    const failures=await redis.hIncrBy(STATS,"scrapling_source_fail",1);
+    if(failures<=3||failures%100===0)console.warn(JSON.stringify({event:"law_scrapling_fail",failures,error:String(error?.message||error).slice(0,220)}));
     return null;
   }finally{clearTimeout(initTimer);}
 }
-async function fetchResearchPage(url,lead={},key=""){
+async function fetchResearchPage(url,lead={},key="",allowStealth=true){
   let direct=null;
   try{direct=await fetchText(url,4500);}catch{}
   const directText=direct?.html?stripHtml(direct.html).slice(0,24000):"";
@@ -329,7 +330,7 @@ async function fetchResearchPage(url,lead={},key=""){
   );
   if(directEvidence)return direct;
   const shouldStealth=HISTORICAL_QUALIFIED_KEYS.has(key)||highValueLawResearchLead(lead);
-  if(shouldStealth){
+  if(allowStealth&&shouldStealth){
     const stealth=await callScrapling(url);
     if(stealth?.html){
       const stealthText=stripHtml(stealth.html).slice(0,24000);
@@ -662,12 +663,12 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
   let attorneyCount=0,personalFact="",personalFactSource="";
   const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,6);
   try{
-    const searchResults=await Promise.allSettled(queries.map(async q=>{
+    const searchResults=await Promise.allSettled(queries.map(async (q,searchIndex)=>{
       const url="https://www.bing.com/search?q="+encodeURIComponent(q);
       let result=null;
       try{result=await fetchText(url,5000);}catch{}
       let resultLinks=result?.html?bingResultLinks(result.html):[];
-      if(!resultLinks.length&&highValueLawResearchLead(lead)){
+      if(!resultLinks.length&&searchIndex===0&&highValueLawResearchLead(lead)){
         const stealth=await callScrapling(url);
         if(stealth?.html){
           result=stealth;
@@ -696,7 +697,7 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
     // Fetch actual source pages for corroboration. Search-result snippets are
     // never treated as publish-source evidence.
     if(links.length)await redis.hIncrBy(STATS,"bing_source_links",links.length);
-    const pages=await Promise.allSettled(links.slice(0,pageBudget).map(target=>fetchResearchPage(target,lead,key)));
+    const pages=await Promise.allSettled(links.slice(0,pageBudget).map((target,pageIndex)=>fetchResearchPage(target,lead,key,pageIndex<2)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
       if(item.status!=="fulfilled")continue;
@@ -765,7 +766,7 @@ function specificFactFromText(text="",lead={}){
   }
   return "";
 }
-async function duckFallback(lead){
+async function duckFallback(lead,key=""){
   const baseQueries=lawResearchQueries(lead);
   const people=attorneyNameVariants(lead);
   const primaryPerson=people[0]||"";
@@ -848,12 +849,12 @@ async function duckFallback(lead){
   const waves=[queries.slice(0,4),queries.slice(4,8)];
   for(const wave of waves){
     if(!wave.length||(emails.length&&attorneyCount>=2&&attorneyCount<=10))break;
-    const searchResults=await Promise.allSettled(wave.map(async q=>{
+    const searchResults=await Promise.allSettled(wave.map(async (q,searchIndex)=>{
       const url="https://html.duckduckgo.com/html/?q="+encodeURIComponent(q);
       let result=null;
       try{result=await fetchText(url,4500);}catch{}
       let resultLinks=result?.html?duckResultLinks(result.html):[];
-      if(!resultLinks.length&&highValueLawResearchLead(lead)){
+      if(!resultLinks.length&&searchIndex===0&&highValueLawResearchLead(lead)){
         const stealth=await callScrapling(url);
         if(stealth?.html){
           result=stealth;
@@ -884,7 +885,7 @@ async function duckFallback(lead){
     }
     if(emails.length&&attorneyCount>=2&&attorneyCount<=10)break;
 
-    const pages=await Promise.allSettled(pageCandidates.slice(0,8).map(target=>fetchResearchPage(target,lead)));
+    const pages=await Promise.allSettled(pageCandidates.slice(0,8).map((target,pageIndex)=>fetchResearchPage(target,lead,key,pageIndex<2)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
       if(item.status!=="fulfilled")continue;
@@ -1297,7 +1298,7 @@ async function enrichLead(key,lead){
   let fb={emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
   const needsHeadcount=emails.length>0&&!(attorneyCount>=2&&attorneyCount<=10);
   if((!emails.length&&emailRecoveryPriority(lead)>=5)||needsHeadcount){
-    fb=await duckFallback({...lead,emails,attorney_count_estimate:attorneyCount,law_email_source:source,website:""});
+    fb=await duckFallback({...lead,emails,attorney_count_estimate:attorneyCount,law_email_source:source,website:""},key);
     emails.push(...fb.emails);
     combined+=" "+fb.text;
     if(fb.source)source=fb.source;
