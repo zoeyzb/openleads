@@ -21,7 +21,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v63-strict-page-identity";
+const EMAIL_METHOD_VERSION="email-v64-legal-record-site-targeting";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -1679,8 +1679,8 @@ function lawSourceRank(url="",lead={}){
   const expected=expectedBarHost(lead);
   if(expected&&(host===expected||host.endsWith("."+expected)))return 0;
   if(trustedLawSource(url,lead))return 1;
-  if(/govinfo\.gov|docs\.justia\.com|floridapublicnotices\.com|publicnotices/i.test(host))return 2;
-  if(/justia\.com|lawyers\.com|martindale\.com|findlaw\.com|avvo\.com|superlawyers\.com/i.test(host))return 3;
+  if(/govinfo\.gov|docs\.justia\.com|floridapublicnotices\.com|publicnotices|docketalarm\.com|trellis\.law/i.test(host))return 2;
+  if(/justia\.com|lawyers\.com|martindale\.com|findlaw\.com|avvo\.com|superlawyers\.com|attorneydir\.com|lawyer-map\.com/i.test(host))return 3;
   if(/allbiz\.com|chamberofcommerce\.com|manta\.com|bbb\.org/i.test(host))return 4;
   if(/facebook\.com|linkedin\.com|instagram\.com|tiktok\.com|youtube\.com|x\.com|twitter\.com|pinterest\.com|mapquest\.com/i.test(host))return 90;
   return 6;
@@ -1691,7 +1691,7 @@ function legalRecordUrlLikely(url=""){
   const path=(u.pathname+" "+u.search).toLowerCase();
   if(/(?:court|courts|uscourts|judicial|judiciary|bar|disciplin|attorney|lawyer|legal|bankrupt|docket|case|publicnotice|public-notice|notice)/i.test(host))return true;
   if(/\/(?:attorney|lawyer|legal|court|case|docket|bankrupt|notice|public[-_]?notice|creditor|disciplin)/i.test(path))return true;
-  if(/floridapublicnotices\.com|govinfo\.gov|docs\.justia\.com/i.test(host))return true;
+  if(/floridapublicnotices\.com|govinfo\.gov|docs\.justia\.com|docketalarm\.com|trellis\.law|attorneydir\.com|lawyer-map\.com/i.test(host))return true;
   return false;
 }
 
@@ -1860,11 +1860,15 @@ async function enrichLead(key,lead){
       ]:[])
     ];
     const directoryEmailQueries=[
+      ...(name?[`site:trellis.law "${name}" "Email:"`]:[]),
+      ...(name?[`site:docketalarm.com "${name}" "Email:"`]:[]),
+      ...(person?[`site:trellis.law "${person}" "Email:"`]:[]),
+      ...(person?[`site:docketalarm.com "${person}" "Email:"`]:[]),
+      ...(name?[`site:lawyers.com "${name}"`]:[]),
+      ...(name?[`site:findlaw.com "${name}"`]:[]),
+      ...(name?[`site:attorneydir.com "${name}"`]:[]),
+      ...(name?[`site:lawyer-map.com "${name}"`]:[]),
       ...(name?[`"${name}" email filetype:pdf`]:[]),
-      ...(name?[`"${name}" "E-mail" filetype:pdf`]:[]),
-      ...(name?[`site:allbiz.com "${name}" email`]:[]),
-      ...(name&&phone?[`site:allbiz.com "${name}" "${phone}"`]:[]),
-      ...(name?[`site:chamberofcommerce.com "${name}" email`]:[]),
       ...(person?[`"${person}" attorney "Email:"`]:[])
     ];
     const bingQueries=[...new Set([
@@ -1873,12 +1877,13 @@ async function enrichLead(key,lead){
       ...(person?[`"${person}" ${region} attorney email`.trim()]:[]),
       ...(phone&&name?[`"${name}" "${phone}" "Email"`]:[]),
       ...barQueries,
+      ...directoryEmailQueries.slice(0,4),
       ...publicRecordQueries,
       ...(name?[`"${name}" email filetype:pdf`]:[]),
       ...(name?[`"${name}" "E-mail" filetype:pdf`]:[]),
       // Wave 2: broader contact/directory recovery.
       ...(name?[`"${name}" ${city} ${region} contact email`.trim()]:[]),
-      ...directoryEmailQueries,
+      ...directoryEmailQueries.slice(4),
       ...(name?[`"${name}" ${region} "E-mail"`.trim()]:[]),
       ...(phone?[`"${phone}" attorney email`]:[]),
       ...(phone&&name?[`"${name}" "${phone}"`]:[]),
