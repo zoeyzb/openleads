@@ -400,9 +400,13 @@ async function preflightAreaSkip(redis,job) {
     const attempts=Number(attemptsRaw||0);
     const netNew=Number(newRaw||0);
     const duplicates=Number(dupRaw||0);
-    const saturated=(attempts>=1&&netNew===0&&duplicates>=5) ||
-      (attempts>=2&&netNew===0&&duplicates>=2) ||
-      (attempts>=4&&netNew/Math.max(1,attempts)<0.5&&duplicates>netNew*3);
+    const saturated=profile==="law-firm"
+      ? ((attempts>=1&&netNew===0&&duplicates>=10) ||
+         (attempts>=2&&netNew===0&&duplicates>=5) ||
+         (attempts>=4&&netNew/Math.max(1,attempts)<0.5&&duplicates>netNew*3))
+      : ((attempts>=1&&netNew===0&&duplicates>=5) ||
+         (attempts>=2&&netNew===0&&duplicates>=2) ||
+         (attempts>=4&&netNew/Math.max(1,attempts)<0.5&&duplicates>netNew*3));
     if (saturated) { saturation={attempts,netNew,duplicates,field:yieldField}; break; }
   }
   if(saturation.field) return {skip:true,reason:"area_saturated",...saturation};
