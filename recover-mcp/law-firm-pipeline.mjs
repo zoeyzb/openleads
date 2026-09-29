@@ -21,7 +21,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v59-early-owned-website-gate";
+const EMAIL_METHOD_VERSION="email-v60-concurrent-search-context-audit";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -1116,7 +1116,17 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       const rawPageEmails=emailsFrom(page.html).filter(x=>!isThirdPartyEmailDomain(x));
       if(rawPageEmails.length)await redis.hIncrBy(STATS,"bing_source_raw_email_pages",1);
       const discoveredEmails=contextualEmails(page.html,lead,page.final_url||target);
-      if(rawPageEmails.length&&!discoveredEmails.length)await redis.hIncrBy(STATS,"bing_source_context_reject_email_pages",1);
+      if(rawPageEmails.length&&!discoveredEmails.length){
+        await redis.hIncrBy(STATS,"bing_source_context_reject_email_pages",1);
+        console.log(JSON.stringify({
+          event:"law_email_context_reject_page",
+          key,
+          name:String(lead.name||lead.title||""),
+          source:String(page.final_url||target),
+          rawEmails:rawPageEmails.slice(0,4),
+          sourceRank:lawSourceRank(page.final_url||target,lead)
+        }));
+      }
       const wantedSet=new Set((wantedEmails||[]).map(x=>String(x||"").trim().toLowerCase()));
       const pageEmails=wantedSet.size?discoveredEmails.filter(x=>wantedSet.has(String(x).toLowerCase())):discoveredEmails;
       emails.push(...pageEmails);texts.push(pageText);
@@ -1261,7 +1271,10 @@ async function duckFallback(lead,key=""){
     const rawPageEmails=emailsFrom(html).filter(x=>!isThirdPartyEmailDomain(x));
     if(rawPageEmails.length)void redis.hIncrBy(STATS,"duck_source_raw_email_pages",1);
     const pageEmails=contextualEmails(html,lead,finalUrl);
-    if(rawPageEmails.length&&!pageEmails.length)void redis.hIncrBy(STATS,"duck_source_context_reject_email_pages",1);
+    if(rawPageEmails.length&&!pageEmails.length){
+      void redis.hIncrBy(STATS,"duck_source_context_reject_email_pages",1);
+      console.log(JSON.stringify({event:"law_email_context_reject_page",key,name:String(lead.name||lead.title||""),source:String(finalUrl||""),rawEmails:rawPageEmails.slice(0,4),sourceRank:lawSourceRank(finalUrl,lead),engine:"duck"}));
+    }
     if(pageEmails.length){
       emails.push(...pageEmails);
       if(finalUrl&&!sources.includes(finalUrl))sources.unshift(finalUrl);
@@ -1818,24 +1831,25 @@ async function enrichLead(key,lead){
       ...(phone&&name?[`"${name}" "${phone}"`]:[]),
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ].filter(Boolean))];
-    const preferDuck=highValueLawResearchLead(lead);
-    // High-value 2-10 candidates must not choose one search engine over the other.
-    // Run Bing + Duck concurrently so one sparse/blocked index cannot zero out
-    // contact discovery for the most promising cohort.
+    const highValue=highValueLawResearchLead(lead);
+    const dualSearch=highValue||emailRecoveryPriority(lead)>=5;
+    // Strong-identity prospects used to run Bing and then a full Duck pass
+    // sequentially, regularly exhausting the 75s lead budget. Run both engines
+    // concurrently; keep the non-high-value Bing page budget bounded.
     const [bingResult,duckResult]=await Promise.allSettled([
       bingFallback(
         lead,
         bingQueries,
-        preferDuck?10:(emailRecoveryPriority(lead)>=5?9:7),
+        highValue?10:(dualSearch?8:7),
         key,
         [],
-        preferDuck?2:1
+        highValue?2:1
       ),
-      preferDuck
+      dualSearch
         ? duckFallback({...lead,website:""},key)
-        : Promise.resolve({emails:[],text:"",source:"",attorneyCount:0,attorneyCountSource:"",personalFact:"",personalFactSource:""})
+        : Promise.resolve({emails:[],emailSources:{},text:"",source:"",attorneyCount:0,attorneyCountSource:"",personalFact:"",personalFactSource:""})
     ]);
-    if(preferDuck&&duckResult.status==="fulfilled"){
+    if(dualSearch&&duckResult.status==="fulfilled"){
       const targetedDuck=duckResult.value;
       emails.push(...targetedDuck.emails);
       combined+=" "+targetedDuck.text;
@@ -1879,28 +1893,8 @@ async function enrichLead(key,lead){
   emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
 
-  let fb={emails:[],text:"",source:"",attorneyCount:0,attorneyCountSource:"",personalFact:"",personalFactSource:""};
-  // Do not run a second Duck pass merely because size is unknown. The dedicated
-  // post-verification headcount pass below owns that job.
-  if(!emails.length&&!highValueLawResearchLead(lead)&&emailRecoveryPriority(lead)>=5){
-    fb=await duckFallback({...lead,emails,attorney_count_estimate:attorneyCount,law_email_source:source,website:""},key);
-    emails.push(...fb.emails);
-    combined+=" "+fb.text;
-    if(fb.source)source=fb.source;
-    for(const email of fb.emails||[]){const e=String(email).toLowerCase();emailEvidenceSources[e]=String(fb.emailSources?.[e]||fb.source||"");}
-    if(fb.ownedWebsite)researchOwnedWebsite=fb.ownedWebsite;
-    const fbCount=Number(fb.attorneyCount||0);
-    const fbCountSource=String(fb.attorneyCountSource||"");
-    if(fbCount>0&&isDirectPublishedEmailSource(fbCountSource)){
-      attorneyCountVerified=true;
-      if(fbCount>=attorneyCount){attorneyCount=fbCount;attorneyCountSource=fbCountSource;}
-    }
-    if(fb.personalFact){personalFact=fb.personalFact;personalFactSource=fb.personalFactSource||fb.source||"";}
-    if(fb.emails.length){
-      emailMethod="duck";
-      await redis.hIncrBy(STATS,"email_duck_hit",1);
-    }
-  }
+  // Strong-priority Duck research already ran concurrently with Bing above.
+  // Do not run a second full Duck pass here.
 
   emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
