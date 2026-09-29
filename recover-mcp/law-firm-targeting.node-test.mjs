@@ -5,6 +5,8 @@ assert.equal(isLawFirmLead({category:"Personal injury attorney",name:"Smith & Do
 assert.equal(isLawFirmLead({category:"Criminal defense attorney",name:"Jones Defense Law"}),true);
 assert.equal(isLawFirmLead({category:"Divorce attorney",name:"Miller Family Law"}),true);
 assert.equal(isLawFirmLead({category:"Bail bonds service",name:"Fast Bail"}),false);
+assert.equal(isLawFirmLead({category:"Attorney",name:"County Prosecuting Attorney"}),false);
+assert.equal(isLawFirmLead({category:"Attorney",name:"Chapter 13 Trustee"}),false);
 
 assert.deepEqual(lawFirmPracticeAreas("Personal injury car accident law firm"),["personal injury"]);
 assert.deepEqual(lawFirmPracticeAreas("Divorce and child custody attorney"),["family/divorce"]);
@@ -30,6 +32,7 @@ const qualifiedBase={
   emails:["realfirm@gmail.com"],
   practice_keys:["personal_injury"],
   attorney_count_estimate:4,
+  attorney_count_evidence_verified:true,
   email_source_verified:true
 };
 assert.equal(qualifiesNoWebsiteLawLead(qualifiedBase),true);
@@ -39,6 +42,7 @@ assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,practice_keys:[]}),true
 assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:1}),false);
 assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:11}),false);
 assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,email_source_verified:false}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_evidence_verified:false}),false);
 
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:1500,limit:1000}),true);
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:999,limit:1000}),false);
