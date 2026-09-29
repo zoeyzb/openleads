@@ -201,10 +201,11 @@ function lawFirmNameShape(lead={}){
   return "unknown";
 }
 function highValueLawResearchLead(lead={}){
-  const shape=lawFirmNameShape(lead), score=emailRecoveryPriority(lead);
-  // Paid cohort is 2-10 attorneys. Expensive browser/reader fallbacks are
-  // reserved for firms whose public name actually suggests multiple lawyers.
-  return (shape==="multi"||shape==="firm")&&score>=4;
+  const shape=lawFirmNameShape(lead);
+  // Paid cohort is 2-10 attorneys. Multi/firm-shaped names are the highest-value
+  // candidates even when Maps metadata is sparse, so they always qualify for
+  // the deeper public-page/browser research lane.
+  return shape==="multi"||shape==="firm";
 }
 function parseCsvLine(line){
   const out=[];let cell="",quoted=false;
