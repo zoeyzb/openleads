@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v25-name-shape-repartition";
+const EMAIL_METHOD_VERSION="email-v26-owned-site-evidence";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -81,6 +81,33 @@ async function detectOwnedWebsiteFromEmailDomains(emails=[],lead={}){
       }catch{}
     }
   }
+  return "";
+}
+function sourceLinksToEmailDomain(html="",domain=""){
+  let raw=String(html||"");
+  try{raw+=" "+decodeURIComponent(raw.replace(/&amp;/g,"&"));}catch{}
+  const urls=raw.match(/(?:https?:)?\/\/[a-z0-9.-]+(?::\d+)?(?:\/[^\s"'<>)]*)?/ig)||[];
+  for(let value of urls){
+    try{
+      if(value.startsWith("//"))value="https:"+value;
+      const host=new URL(value).hostname.toLowerCase().replace(/^www\./,"");
+      if(host===String(domain||"").toLowerCase().replace(/^www\./,""))return true;
+    }catch{}
+  }
+  return false;
+}
+async function detectOwnedWebsiteFromEvidenceSource(source="",emails=[],lead={},key=""){
+  if(!isDirectPublishedEmailSource(source))return "";
+  const domains=[...new Set(emails.map(x=>String(x||"").split("@")[1]?.toLowerCase()||"")
+    .filter(d=>d&&!FREE_MAIL_DOMAINS.has(d)&&!isThirdPartyEmailDomain("x@"+d)))].slice(0,3);
+  if(!domains.length)return "";
+  try{
+    const page=await fetchResearchPage(source,lead,key);
+    if(!page?.html)return "";
+    for(const domain of domains){
+      if(sourceLinksToEmailDomain(page.html,domain))return "https://"+domain;
+    }
+  }catch{}
   return "";
 }
 async function queueWebsiteRefreshCandidate(key,lead={},website=""){
@@ -1378,7 +1405,12 @@ async function enrichLead(key,lead){
   const sizeTier=firmSizeTier(attorneyCount);
   const preferredSize=attorneyCount>=2&&attorneyCount<=10;
   const painPoint="No website";
-  const discoveredOwnedWebsite=!website&&emails.length?await detectOwnedWebsiteFromEmailDomains(emails,lead):"";
+  const evidenceOwnedWebsite=!website&&emailSourceVerified&&emails.length
+    ? await detectOwnedWebsiteFromEvidenceSource(source,emails,lead,key)
+    : "";
+  const discoveredOwnedWebsite=!website&&emails.length
+    ? (evidenceOwnedWebsite||await detectOwnedWebsiteFromEmailDomains(emails,lead))
+    : "";
   const effectiveWebsite=website||discoveredOwnedWebsite;
   const emailCandidate=!effectiveWebsite&&emailSourceVerified&&emails.length>0;
   if(emailCandidate)await redis.sAdd(EMAIL_CANDIDATE_SET,key);
@@ -1548,10 +1580,11 @@ async function bootstrapExistingQualified(){
 
       let effectiveWebsite=website;
       if(wasQualified&&!website&&emails.length){
-        const discovered=await detectOwnedWebsiteFromEmailDomains(emails,lead);
+        const fromSource=await detectOwnedWebsiteFromEvidenceSource(existingSource,emails,lead,entry.field);
+        const discovered=fromSource||await detectOwnedWebsiteFromEmailDomains(emails,lead);
         if(discovered){
           effectiveWebsite=discovered;
-          const updatedLead={...lead,website:discovered,website_opportunity:"website_refresh"};
+          const updatedLead={...lead,website:discovered,website_opportunity:"website_refresh",owned_website_evidence_source:fromSource?existingSource:"email_domain_http"};
           await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(updatedLead));
         }
       }
