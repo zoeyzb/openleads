@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v20-strict-recovery";
+const EMAIL_METHOD_VERSION="email-v21-verifier-gated";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -37,6 +37,34 @@ async function filterContactableEmails(emails=[],lead={}){
     ok:emailIdentityStrong(email,lead)&&await hasMailExchange(email)
   })));
   return checks.filter(x=>x.ok).map(x=>x.email);
+}
+async function keeleadVerifiedEmails(emails=[]){
+  const unique=[...new Set(emails.map(x=>String(x||"").trim().toLowerCase()).filter(Boolean))];
+  if(!unique.length)return [];
+  if(!KEELEAD_BASE_URL)return unique;
+  try{
+    const response=await fetch(KEELEAD_BASE_URL+"/api/verify",{
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify({emails:unique}),
+      signal:AbortSignal.timeout(12000)
+    });
+    if(!response.ok)throw new Error("http "+response.status);
+    const json=await response.json();
+    const results=Array.isArray(json?.results)?json.results:[];
+    const accepted=new Set(results.filter(item=>{
+      const d=item?.details||{};
+      return String(item?.status||"").toLowerCase()==="valid" &&
+        Number(item?.score||0)>=90 &&
+        d.mx===true && d.smtp===true &&
+        d.disposable!==true && d.spamTrap!==true;
+    }).map(item=>String(item.email||"").trim().toLowerCase()));
+    return unique.filter(email=>accepted.has(email));
+  }catch(error){
+    await redis.hIncrBy(STATS,"email_verifier_unavailable",1);
+    // Fail closed when the paid-send verifier is configured but unavailable.
+    return [];
+  }
 }
 async function detectOwnedWebsiteFromEmailDomains(emails=[],lead={}){
   const domains=[...new Set(emails.map(x=>String(x||"").split("@")[1]?.toLowerCase()||"")
@@ -61,6 +89,7 @@ async function queueWebsiteRefreshCandidate(key,lead={},website=""){
   await redis.hSet(WEBSITE_CANDIDATE_HASH,key,JSON.stringify(candidate));
   await redis.sAdd(WEBSITE_AUDIT_PENDING_SET,key);
 }
+const KEELEAD_BASE_URL=String(process.env.KEELEAD_BASE_URL||process.env.RAILWAY_SERVICE_KEELEAD_URL||"").replace(/\/$/,"");
 const LOOP_MS=Math.max(1500,Number(process.env.LAW_FIRM_LOOP_MS||5000));
 const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_FETCH_TIMEOUT_MS||7000)));
 const JOB_TTL=Math.max(86400,Number(process.env.ACQUISITION_TTL_SECONDS||604800));
@@ -1148,6 +1177,7 @@ async function enrichLead(key,lead){
   emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
   emails=await filterContactableEmails(emails,lead);
+  emails=await keeleadVerifiedEmails(emails);
   const emailSourceVerified=emails.length>0&&isDirectPublishedEmailSource(source);
   if(!emails.length||!emailSourceVerified){
     emails=[];
@@ -1212,7 +1242,7 @@ async function enrichLead(key,lead){
     law_email_enrich_version:EMAIL_METHOD_VERSION,
     law_email_method:emailMethod,law_email_source:source||"",
     law_email_source_verified:emailSourceVerified,
-    law_email_validation:emailSourceVerified?"source+identity+mx":"rejected",
+    law_email_validation:emailSourceVerified?"published+identity+mx+keelead":"rejected",
     law_bar_domain:stateBarDomain(lead),
     law_firm_enriched_at:new Date().toISOString()};
 
