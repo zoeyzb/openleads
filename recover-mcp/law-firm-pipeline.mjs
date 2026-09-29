@@ -21,7 +21,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v55-bing-relative-link-fix";
+const EMAIL_METHOD_VERSION="email-v56-per-email-source-binding";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -1014,7 +1014,7 @@ async function findOwnedWebsitePreflight(lead,key=""){
   return "";
 }
 async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepPageBudget=2){
-  const emails=[],texts=[],sources=[];
+  const emails=[],texts=[],sources=[],emailSources={};
   let attorneyCount=0,attorneyCountSource="",personalFact="",personalFactSource="",ownedWebsite="";
   // Keep enough email-specific searches to run; the previous six-query cap silently dropped later contact queries.
   const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,18);
@@ -1111,16 +1111,20 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       }
       await redis.hIncrBy(STATS,"bing_source_pages_matched",1);
       if(pageEmails.length){
-        sources.unshift(page.final_url||target);
+        const evidenceSource=page.final_url||target;
+        sources.unshift(evidenceSource);
+        for(const email of pageEmails){
+          if(!emailSources[String(email).toLowerCase()])emailSources[String(email).toLowerCase()]=evidenceSource;
+        }
         await redis.hIncrBy(STATS,"bing_source_email_pages",1);
-        if(lawSourceRank(page.final_url||target,lead)<=1)await redis.hIncrBy(STATS,"bar_email_page",1);
+        if(lawSourceRank(evidenceSource,lead)<=1)await redis.hIncrBy(STATS,"bar_email_page",1);
       }
     }
   }catch(error){
     await redis.hIncrBy(STATS,"bing_fallback_error",1);
     console.warn(JSON.stringify({event:"law_bing_fallback_error",key,error:String(error?.message||error).slice(0,240)}));
   }
-  return {emails:[...new Set(emails)],text:texts.join(" ").slice(0,24000),source:sources[0]||"",attorneyCount,attorneyCountSource,personalFact,personalFactSource,ownedWebsite};
+  return {emails:[...new Set(emails)],emailSources,text:texts.join(" ").slice(0,24000),source:sources[0]||"",attorneyCount,attorneyCountSource,personalFact,personalFactSource,ownedWebsite};
 }
 function duckResultLinks(html=""){
   const out=[];
@@ -1227,7 +1231,9 @@ async function duckFallback(lead,key=""){
 
   // Keep a good existing email, but continue research when firm size is
   // unknown/outside target so headcount can be proved before paid outreach.
-  const emails=[...existingEmails],texts=[],sources=[];
+  const emails=[...existingEmails],texts=[],sources=[],emailSources={};
+  const existingEvidenceSource=String(lead.law_email_source||lead.email_source||lead.personalization_source||"");
+  for(const email of existingEmails){if(existingEvidenceSource)emailSources[String(email).toLowerCase()]=existingEvidenceSource;}
   let attorneyCount=existingAttorneyCount,attorneyCountSource=String(lead.attorney_count_source||""),personalFact="",personalFactSource="",ownedWebsite="";
   const visited=new Set();
 
@@ -1239,6 +1245,9 @@ async function duckFallback(lead,key=""){
     if(pageEmails.length){
       emails.push(...pageEmails);
       if(finalUrl&&!sources.includes(finalUrl))sources.unshift(finalUrl);
+      for(const email of pageEmails){
+        if(finalUrl&&!emailSources[String(email).toLowerCase()])emailSources[String(email).toLowerCase()]=finalUrl;
+      }
     }
     texts.push(pageText);
     const estimate=attorneyEstimate(html,pageText);
@@ -1254,7 +1263,7 @@ async function duckFallback(lead,key=""){
     try{
       const direct=await fetchText(profileUrl,4500);
       absorbPage(direct.html,direct.final_url||profileUrl);
-      if(emails.length&&attorneyCount>=2&&attorneyCount<=10)return {emails:rankLawEmails(emails),text:texts.join(" ").slice(0,48000),source:sources[0]||"",attorneyCount,attorneyCountSource,personalFact,personalFactSource};
+      if(emails.length&&attorneyCount>=2&&attorneyCount<=10)return {emails:rankLawEmails(emails),emailSources,text:texts.join(" ").slice(0,48000),source:sources[0]||"",attorneyCount,attorneyCountSource,personalFact,personalFactSource};
     }catch{}
   }
 
@@ -1316,6 +1325,7 @@ async function duckFallback(lead,key=""){
 
   return {
     emails:rankLawEmails(emails).slice(0,5),
+    emailSources,
     text:combined.slice(0,48000),
     source:sources[0]||"",
     attorneyCount,
@@ -1694,6 +1704,8 @@ async function enrichLead(key,lead){
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
   const existingSourceBacked=isDirectPublishedEmailSource(existingSource);
   let emails=existingSourceBacked?existingCandidates:[], combined="",source=existingSourceBacked?existingSource:"",attorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
+  const emailEvidenceSources={};
+  if(existingSourceBacked){for(const email of existingCandidates)emailEvidenceSources[email]=existingSource;}
   let attorneyCountVerified=lead.attorney_count_evidence_verified===true&&attorneyCount>0,attorneyCountSource=attorneyCountVerified?String(lead.attorney_count_source||""):"";
   let personalFact="",personalFactSource="";
   let emailMethod=emails.length?"existing_source_backed":"none";
@@ -1713,6 +1725,7 @@ async function enrichLead(key,lead){
       emails.push(...exactResult.emails);
       combined+=" "+String(exactResult.text||"");
       source=String(exactResult.source||source||"");
+      for(const email of exactResult.emails||[]){emailEvidenceSources[String(email).toLowerCase()]=String(exactResult.emailSources?.[String(email).toLowerCase()]||exactResult.source||source||"");}
       const exactCount=Number(exactResult.attorneyCount||0);
       const exactCountSource=String(exactResult.attorneyCountSource||"");
       if(exactCount>0&&isDirectPublishedEmailSource(exactCountSource)){
@@ -1807,6 +1820,7 @@ async function enrichLead(key,lead){
       emails.push(...targetedDuck.emails);
       combined+=" "+targetedDuck.text;
       if(targetedDuck.source)source=targetedDuck.source;
+      for(const email of targetedDuck.emails||[]){const e=String(email).toLowerCase();emailEvidenceSources[e]=String(targetedDuck.emailSources?.[e]||targetedDuck.source||"");}
       if(targetedDuck.ownedWebsite)researchOwnedWebsite=targetedDuck.ownedWebsite;
       const tdCount=Number(targetedDuck.attorneyCount||0);
       const tdSource=String(targetedDuck.attorneyCountSource||"");
@@ -1826,6 +1840,7 @@ async function enrichLead(key,lead){
       emails.push(...bf.emails);
       combined+=" "+bf.text;
       if(bf.source)source=bf.source;
+      for(const email of bf.emails||[]){const e=String(email).toLowerCase();emailEvidenceSources[e]=String(bf.emailSources?.[e]||bf.source||"");}
       if(bf.ownedWebsite)researchOwnedWebsite=bf.ownedWebsite;
       const bfCount=Number(bf.attorneyCount||0);
       const bfCountSource=String(bf.attorneyCountSource||"");
@@ -1852,6 +1867,7 @@ async function enrichLead(key,lead){
     emails.push(...fb.emails);
     combined+=" "+fb.text;
     if(fb.source)source=fb.source;
+    for(const email of fb.emails||[]){const e=String(email).toLowerCase();emailEvidenceSources[e]=String(fb.emailSources?.[e]||fb.source||"");}
     if(fb.ownedWebsite)researchOwnedWebsite=fb.ownedWebsite;
     const fbCount=Number(fb.attorneyCount||0);
     const fbCountSource=String(fb.attorneyCountSource||"");
@@ -1878,6 +1894,7 @@ async function enrichLead(key,lead){
       if(zeroCost.emails.length){
         emails.push(...zeroCost.emails);
         if(zeroCost.source)source=zeroCost.source;
+        for(const email of zeroCost.emails||[])emailEvidenceSources[String(email).toLowerCase()]=String(zeroCost.source||"");
         emailMethod="zero_cost";
         await redis.hIncrBy(STATS,"email_zero_cost_hit",1);
       }
@@ -1905,13 +1922,23 @@ async function enrichLead(key,lead){
   if(identityMxCount)await redis.hIncrBy(STATS,"email_identity_mx_pass_leads",1);
   else if(rawCandidateCount)await redis.hIncrBy(STATS,"email_identity_mx_reject_leads",1);
 
-  // A source URL and an email string are not enough independently: the exact
-  // surviving address must be present on the matched source page.
-  const sourceBoundEmails=await publishedEmailsOnExactSource(source,emails,lead,key);
+  // Bind each candidate to the exact page that produced that address.
+  // A single shared source URL caused valid emails from one engine/page to be
+  // checked against a different page discovered later.
+  const sourceBoundEmails=[],boundSourceByEmail={};
+  for(const email of emails){
+    const candidateSource=String(emailEvidenceSources[String(email).toLowerCase()]||source||"");
+    const matched=await publishedEmailsOnExactSource(candidateSource,[email],lead,key);
+    if(matched.length){
+      sourceBoundEmails.push(email);
+      boundSourceByEmail[String(email).toLowerCase()]=candidateSource;
+    }
+  }
   if(emails.length&&!sourceBoundEmails.length)await redis.hIncrBy(STATS,"email_source_binding_reject_leads",1);
   emails=sourceBoundEmails;
 
   emails=await keeleadVerifiedEmails(emails);
+  if(emails.length)source=String(boundSourceByEmail[String(emails[0]).toLowerCase()]||source||"");
   if(emails.length)await redis.hIncrBy(STATS,"email_keelead_pass_leads",1);
   else if(sourceBoundEmails.length)await redis.hIncrBy(STATS,"email_keelead_reject_leads",1);
   const emailSourceVerified=emails.length>0&&isDirectPublishedEmailSource(source);
