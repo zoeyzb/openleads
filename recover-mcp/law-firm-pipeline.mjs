@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v26-owned-site-evidence";
+const EMAIL_METHOD_VERSION="email-v27-explicit-size-evidence";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -615,43 +615,33 @@ function linksFrom(base,html=""){
   return [...new Set(out)].slice(0,4);
 }
 function attorneyEstimate(html="",text=""){
-  const raw=String(html||"");
-  const urls=[...raw.matchAll(/href\s*=\s*["']([^"']*(?:attorney|lawyer|people|team|our-team|professionals)[^"']*)["']/gi)]
-    .map(m=>m[1].replace(/[?#].*$/,"").replace(/\/$/,"")).filter(x=>x.length>3);
-  const unique=[...new Set(urls)];
-  const profileLike=unique.filter(x=>/(attorney|lawyer|professional)\//i.test(x)||/\/(people|team|our-team|professionals)\/[^/]+$/i.test(x));
-  let estimate=profileLike.length;
+  const plain=String(text||stripHtml(String(html||""))).replace(/\s+/g," ").trim();
+  if(!plain)return 0;
 
-  const plain=String(text||stripHtml(raw));
-  const explicit=[
-    ...plain.matchAll(/\b(?:team of|our team of|firm of|more than|over)\s+(\d{1,3})\s+(?:attorneys|lawyers)\b/gi),
-    ...plain.matchAll(/\b(\d{1,3})\s+(?:attorneys|lawyers)\s+(?:serving|across|with|at|in)\b/gi),
-    ...plain.matchAll(/\b(?:attorneys|lawyers)\s*\(?\s*(\d{1,3})\s*\)?/gi)
+  // Only explicit numerical firm-size evidence is allowed to qualify 2-10.
+  // Never count unrelated profile links/headings on directory/search pages.
+  const exact=[
+    ...plain.matchAll(/\b(?:team of|our team of|firm of)\s+(\d{1,3})\s+(?:attorneys|lawyers)\b/gi),
+    ...plain.matchAll(/\b(?:number of attorneys|attorney count|number of lawyers|lawyer count)\s*[:#-]?\s*(\d{1,3})\b/gi),
+    ...plain.matchAll(/\b(?:attorneys|lawyers)\s*\(\s*(\d{1,3})\s*\)/gi),
+    ...plain.matchAll(/\bfirm\s+size\s*:?\s*(\d{1,3})\s+(?:attorneys|lawyers)?\b/gi)
   ].map(m=>Number(m[1])).filter(n=>n>0&&n<=500);
-  if(explicit.length) estimate=Math.max(estimate,Math.min(...explicit));
 
-  // Bar/directories often expose a range instead of profile cards, e.g.
-  // "Firm Size: 2 to 5" or "Firm Size 6-10". Use the upper bound so a
-  // 2–10 classification is conservative.
-  const sizeRanges=[...plain.matchAll(/\bfirm\s+size\s*:?\s*(\d{1,2})\s*(?:to|[-–])\s*(\d{1,2})\b/gi)]
+  const ranges=[...plain.matchAll(/\bfirm\s+size\s*:?\s*(\d{1,2})\s*(?:to|[-–])\s*(\d{1,2})\b/gi)]
     .map(m=>[Number(m[1]),Number(m[2])])
     .filter(([lo,hi])=>lo>0&&hi>=lo&&hi<=100);
-  if(sizeRanges.length) estimate=Math.max(estimate,...sizeRanges.map(([,hi])=>hi));
-  if(/\bfirm\s+size\s*:?\s*solo\b/i.test(plain)) estimate=Math.max(estimate,1);
 
-  // Some legal directories render a labeled count such as "Lawyers (4)".
-  const labeledCounts=[...plain.matchAll(/\b(?:lawyers|attorneys)\s*\(\s*(\d{1,2})\s*\)/gi)]
-    .map(m=>Number(m[1])).filter(n=>n>0&&n<=100);
-  if(labeledCounts.length) estimate=Math.max(estimate,...labeledCounts);
-
-  const headingNames=[...raw.matchAll(/<(?:h2|h3|h4|a)[^>]*>([^<]{2,80})<\/(?:h2|h3|h4|a)>/gi)]
-    .map(m=>stripHtml(m[1]).trim())
-    .filter(name=>/^[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,3}$/.test(name));
-  const uniqueNames=[...new Set(headingNames.map(x=>x.toLowerCase()))];
-  if(/\b(attorney|lawyer|our team|meet the team|professionals)\b/i.test(plain) && uniqueNames.length>=2 && uniqueNames.length<=50){
-    estimate=Math.max(estimate,uniqueNames.length);
+  const candidates=[...exact];
+  for(const [lo,hi] of ranges){
+    // A 1-5 bucket is not enough to prove the firm has at least 2 attorneys.
+    candidates.push(lo>=2?hi:1);
   }
-  return Math.min(100,estimate);
+  if(/\bfirm\s+size\s*:?\s*solo\b/i.test(plain))candidates.push(1);
+  if(!candidates.length)return 0;
+
+  // Be conservative across conflicting explicit evidence: use the largest count,
+  // so any 11+ evidence prevents an accidental 2-10 qualification.
+  return Math.min(500,Math.max(...candidates));
 }
 function decodeBingRedirect(raw=""){
   try{
@@ -696,7 +686,7 @@ function bingResultLinks(html=""){
 }
 async function bingFallback(lead,query,pageBudget=6,key=""){
   const emails=[],texts=[],sources=[];
-  let attorneyCount=0,personalFact="",personalFactSource="";
+  let attorneyCount=0,attorneyCountSource="",personalFact="",personalFactSource="";
   const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,6);
   try{
     const searchResults=await Promise.allSettled(queries.map(async (q,searchIndex)=>{
@@ -743,7 +733,7 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
       const pageEmails=contextualEmails(page.html,lead,page.final_url||target);
       emails.push(...pageEmails);texts.push(pageText);
       const estimate=attorneyEstimate(page.html,pageText);
-      if(estimate>attorneyCount)attorneyCount=estimate;
+      if(estimate>attorneyCount){attorneyCount=estimate;attorneyCountSource=page.final_url||target;}
       if(!personalFact){
         const fact=specificFactFromText(pageText,lead);
         if(fact){personalFact=fact;personalFactSource=page.final_url||target;}
@@ -755,7 +745,7 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
       }
     }
   }catch{}
-  return {emails:[...new Set(emails)],text:texts.join(" ").slice(0,24000),source:sources[0]||"",attorneyCount,personalFact,personalFactSource};
+  return {emails:[...new Set(emails)],text:texts.join(" ").slice(0,24000),source:sources[0]||"",attorneyCount,attorneyCountSource,personalFact,personalFactSource};
 }
 function duckResultLinks(html=""){
   const out=[];
@@ -837,13 +827,14 @@ async function duckFallback(lead,key=""){
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
   const queries=[...new Set(existingEmails.length?[...headcountQueries,...attorneyQueries,...baseQueries]:[...attorneyQueries,...baseQueries,...headcountQueries])];
   if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
-  const existingAttorneyCount=Number(lead.attorney_count_estimate||0);
+  const existingAttorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
   if(existingEmails.length&&existingAttorneyCount>=2&&existingAttorneyCount<=10){
     return {
       emails:rankLawEmails(existingEmails).slice(0,5),
       text:"",
       source:String(lead.law_email_source||lead.email_source||lead.personalization_source||lead.google_maps_url||""),
       attorneyCount:existingAttorneyCount,
+      attorneyCountSource:String(lead.attorney_count_source||""),
       personalFact:String(lead.personalization_fact||""),
       personalFactSource:String(lead.personalization_source||"")
     };
@@ -852,7 +843,7 @@ async function duckFallback(lead,key=""){
   // Keep a good existing email, but continue research when firm size is
   // unknown/outside target so headcount can be proved before paid outreach.
   const emails=[...existingEmails],texts=[],sources=[];
-  let attorneyCount=existingAttorneyCount,personalFact="",personalFactSource="";
+  let attorneyCount=existingAttorneyCount,attorneyCountSource:String(lead.attorney_count_source||""),personalFact="",personalFactSource="";
   const visited=new Set();
 
   const absorbPage=(html="",finalUrl="")=>{
@@ -865,7 +856,7 @@ async function duckFallback(lead,key=""){
     }
     texts.push(pageText);
     const estimate=attorneyEstimate(html,pageText);
-    if(estimate>attorneyCount)attorneyCount=estimate;
+    if(estimate>attorneyCount){attorneyCount=estimate;attorneyCountSource=finalUrl;}
     if(!personalFact){
       const fact=specificFactFromText(pageText,lead);
       if(fact){personalFact=fact;personalFactSource=finalUrl;}
@@ -1292,7 +1283,8 @@ async function enrichLead(key,lead){
     .map(x=>String(x||"").trim().toLowerCase())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
   const existingSourceBacked=isDirectPublishedEmailSource(existingSource);
-  let emails=existingSourceBacked?existingCandidates:[], combined="",source=existingSourceBacked?existingSource:"",attorneyCount=Number(lead.attorney_count_estimate||0);
+  let emails=existingSourceBacked?existingCandidates:[], combined="",source=existingSourceBacked?existingSource:"",attorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
+  let attorneyCountVerified=lead.attorney_count_evidence_verified===true&&attorneyCount>0,attorneyCountSource=attorneyCountVerified?String(lead.attorney_count_source||""):"";
   let personalFact="",personalFactSource="";
   let emailMethod=emails.length?"existing_source_backed":"none";
   if(emailMethod!=="none")await redis.hIncrBy(STATS,"email_existing_hit",1);
@@ -1329,7 +1321,8 @@ async function enrichLead(key,lead){
       emails.push(...bf.emails);
       combined+=" "+bf.text;
       if(bf.source)source=bf.source;
-      attorneyCount=Math.max(attorneyCount,Number(bf.attorneyCount||0));
+      const bfCount=Number(bf.attorneyCount||0);
+      if(bfCount>0){attorneyCountVerified=true;if(bfCount>=attorneyCount){attorneyCount=bfCount;attorneyCountSource=String(bf.attorneyCountSource||bf.source||"");}}
       if(bf.personalFact){personalFact=bf.personalFact;personalFactSource=bf.personalFactSource||bf.source||"";}
       if(bf.emails.length){
         emailMethod="bing";
@@ -1348,14 +1341,15 @@ async function enrichLead(key,lead){
   emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
 
-  let fb={emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
+  let fb={emails:[],text:"",source:"",attorneyCount:0,attorneyCountSource:"",personalFact:"",personalFactSource:""};
   const needsHeadcount=emails.length>0&&!(attorneyCount>=2&&attorneyCount<=10);
   if((!emails.length&&emailRecoveryPriority(lead)>=5)||needsHeadcount){
     fb=await duckFallback({...lead,emails,attorney_count_estimate:attorneyCount,law_email_source:source,website:""},key);
     emails.push(...fb.emails);
     combined+=" "+fb.text;
     if(fb.source)source=fb.source;
-    attorneyCount=Math.max(attorneyCount,Number(fb.attorneyCount||0));
+    const fbCount=Number(fb.attorneyCount||0);
+    if(fbCount>0){attorneyCountVerified=true;if(fbCount>=attorneyCount){attorneyCount=fbCount;attorneyCountSource=String(fb.attorneyCountSource||fb.source||"");}}
     if(fb.personalFact){personalFact=fb.personalFact;personalFactSource=fb.personalFactSource||fb.source||"";}
     if(fb.emails.length){
       emailMethod="duck";
@@ -1403,7 +1397,7 @@ async function enrichLead(key,lead){
     p={fact:personalFact,source:personalFactSource||source||String(lead.google_maps_url||"Google Maps"),quality:"specific"};
   }
   const sizeTier=firmSizeTier(attorneyCount);
-  const preferredSize=attorneyCount>=2&&attorneyCount<=10;
+  const preferredSize=attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10;
   const painPoint="No website";
   const evidenceOwnedWebsite=!website&&emailSourceVerified&&emails.length
     ? await detectOwnedWebsiteFromEvidenceSource(source,emails,lead,key)
@@ -1420,6 +1414,7 @@ async function enrichLead(key,lead){
     emails,
     practice_keys:practiceKeys,
     attorney_count_estimate:attorneyCount,
+    attorney_count_evidence_verified:attorneyCountVerified,
     email_source_verified:emailSourceVerified
   });
   const priority=priorityScore({
@@ -1435,7 +1430,7 @@ async function enrichLead(key,lead){
     ? `Saw ${lead.name||"your firm"} while looking at ${targetLabel} firms${city?` in ${city}`:""}.${p.fact?` ${p.fact}.`:""} Couldn't find a firm website, so I reached out.`
     : "";
 
-  const enriched={...lead,website:effectiveWebsite,emails,attorney_count_estimate:attorneyCount||null,preferred_firm_size:preferredSize,
+  const enriched={...lead,website:effectiveWebsite,emails,attorney_count_estimate:attorneyCount||null,attorney_count_evidence_verified:attorneyCountVerified,attorney_count_source:attorneyCountSource||"",preferred_firm_size:preferredSize,
     firm_size_tier:sizeTier,practice_areas:practices,practice_keys:practiceKeys,
     lead_type:practices.join(" + "),personalization_fact:p.fact,personalization_source:p.source,
     personalization_quality:p.quality,website_opportunity:"website_build",website_audit:null,primary_pain_point:painPoint,
@@ -1571,7 +1566,7 @@ async function bootstrapExistingQualified(){
         ? await Promise.all(identityEmails.map(async email=>({email,ok:await hasMailExchange(email)})))
         : [];
       const emails=emailChecks.filter(x=>x.ok).map(x=>x.email);
-      const attorneyCount=Number(lead.attorney_count_estimate||0);
+      const attorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
       const evidenceText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const observedKeys=lawFirmPracticeKeys(evidenceText);
       const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
@@ -1608,6 +1603,7 @@ async function bootstrapExistingQualified(){
         emails,
         practice_keys:practiceKeys,
         attorney_count_estimate:attorneyCount,
+        attorney_count_evidence_verified:lead.attorney_count_evidence_verified===true,
         email_source_verified:sourceBacked&&emails.length>0
       });
 
