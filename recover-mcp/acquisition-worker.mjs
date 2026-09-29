@@ -545,35 +545,9 @@ async function persistPermanentQualified(redis, job, leads) {
   return {unique:identities.length,newAdded,duplicates:existingCount,historicalSheetDuplicates};
 }
 async function persistLawWebsiteCandidates(redis,job,records=[]){
-  if(String(job.search_profile||"")!=="law-firm"||!Array.isArray(records)||!records.length)return {seen:0,queued:0};
-  const candidates=locationCandidateSet(records,job)
-    .filter(lead=>matchesRequestedIndustry(lead,job.industry))
-    .filter(lead=>isLawFirmLead(lead))
-    .filter(lead=>isOwnedBusinessWebsite(lead.website))
-    .slice(0,60);
-  if(!candidates.length)return {seen:0,queued:0};
-  const entries=[],keys=[];
-  for(const lead of candidates){
-    const compact=compactLead(lead);
-    const key=permanentLeadIdentity(compact);
-    if(!key)continue;
-    keys.push(key);
-    entries.push(key,JSON.stringify({
-      ...compact,
-      acquisition_id:job.id,
-      acquisition_location:job.location||"",
-      industry:"LAW_FIRM",
-      search_profile:"law-firm",
-      practice_focus:job.practice_focus||"",
-      website_opportunity:"website_refresh",
-      website_candidate_at:new Date().toISOString()
-    }));
-  }
-  if(entries.length)await redis.hSet("recover:law-firm:website-candidates:v1",entries);
-  let queued=0;
-  if(keys.length)queued=Number(await redis.sAdd("recover:law-firm:website-audit-pending:v1",keys)||0);
-  if(keys.length)console.log(JSON.stringify({event:"law_website_candidates",acquisition_id:job.id,seen:keys.length,queued}));
-  return {seen:keys.length,queued};
+  // Strict campaign is no-owned-website only. Do not spend Redis, crawl, or
+  // audit capacity on firms that already have websites.
+  return {seen:0,queued:0};
 }
 function mapsStatus(job) {
   return String(job?.status||job?.Status||job?.state||job?.State||job?.job?.status||job?.job?.Status||"").toLowerCase();
@@ -668,7 +642,7 @@ const LAW_FIRM_QUERIES={
   workers_comp:["workers compensation lawyer","workers comp attorney","work injury lawyer","workers compensation law office","workplace injury attorney"],
   disability:["social security disability lawyer","SSDI attorney","disability benefits lawyer","SSI lawyer","disability law office"],
   civil_litigation:["civil litigation lawyer","trial lawyer","litigation attorney","civil lawyer","litigation law firm"],
-  general:["law office","attorney at law","solo attorney","small law firm","law offices","general practice attorney","law firm"]
+  general:["small law firm","law firm","law offices","attorneys at law","law group","law partners","law associates"]
 };
 const queryVariants=(industry,location,practiceFocus="",coveragePass="")=>{
   if (/\blaw\s*firm\b|\battorney\b|\blawyer\b/.test(normalizeText(industry))){
@@ -676,11 +650,9 @@ const queryVariants=(industry,location,practiceFocus="",coveragePass="")=>{
     const base=LAW_FIRM_QUERIES[key]||LAW_FIRM_QUERIES.general;
     const general=LAW_FIRM_QUERIES.general;
     const wave=Math.max(1,Number(String(coveragePass||"").match(/-w(\d+)/i)?.[1]||1));
-    // Empirical no-site yield is strongest for "law office", then
-    // "law offices", then "attorney at law". Use nationwide wave number
-    // to rotate those first instead of wasting first-pass capacity on
-    // low-yield "solo attorney"/"small law firm" searches.
-    const preferredByWave=["law office","law offices","attorney at law","general practice attorney"];
+    // The sales cohort is 2-10 attorneys, so first-pass discovery should
+    // bias toward multi-attorney firm language instead of solo-heavy "law office".
+    const preferredByWave=["small law firm","law firm","law offices","attorneys at law","law group","law partners","law associates"];
     const g0=preferredByWave[(wave-1)%preferredByWave.length];
     const g1=preferredByWave[wave%preferredByWave.length];
     const mixed=[
