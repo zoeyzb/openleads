@@ -1712,12 +1712,11 @@ async function enrichLead(key,lead){
       ...(phone&&name?[`"${name}" "${phone}"`]:[]),
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ].filter(Boolean))];
-    const useDeepIdentity=false;
     const preferDuck=highValueLawResearchLead(lead);
     // High-value 2-10 candidates must not choose one search engine over the other.
     // Run Bing + Duck concurrently so one sparse/blocked index cannot zero out
     // contact discovery for the most promising cohort.
-    const [bingResult,duckResult,zeroResult]=await Promise.allSettled([
+    const [bingResult,duckResult]=await Promise.allSettled([
       bingFallback(
         lead,
         bingQueries,
@@ -1728,8 +1727,7 @@ async function enrichLead(key,lead){
       ),
       preferDuck
         ? duckFallback({...lead,website:""},key)
-        : Promise.resolve({emails:[],text:"",source:"",attorneyCount:0,attorneyCountSource:"",personalFact:"",personalFactSource:""}),
-      useDeepIdentity?zeroCostEmailFallback(lead):Promise.resolve({emails:[],source:"",name_variant:""})
+        : Promise.resolve({emails:[],text:"",source:"",attorneyCount:0,attorneyCountSource:"",personalFact:"",personalFactSource:""})
     ]);
     if(preferDuck&&duckResult.status==="fulfilled"){
       const targetedDuck=duckResult.value;
@@ -1768,13 +1766,6 @@ async function enrichLead(key,lead){
         await redis.hIncrBy(STATS,"email_bing_hit",1);
       }
     }
-    if(zeroResult.status==="fulfilled"&&zeroResult.value.emails.length){
-      const zeroCost=zeroResult.value;
-      emails.push(...zeroCost.emails);
-      if(!source)source=zeroCost.source||"";
-      if(emailMethod==="none")emailMethod="zero_cost";
-      await redis.hIncrBy(STATS,"email_zero_cost_hit",1);
-    }
   }
 
   emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
@@ -1804,6 +1795,26 @@ async function enrichLead(key,lead){
 
   emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
+
+  // Independent last-resort discovery lane. Run only after search engines miss,
+  // and only when we have a plausible attorney identity. Any result still has
+  // to survive exact-source binding below, so this cannot export guessed mail.
+  if(!emails.length&&!researchOwnedWebsite&&attorneyNameVariants(lead).length&&emailRecoveryPriority(lead)>=5){
+    try{
+      const zeroCost=await zeroCostEmailFallback(lead);
+      if(zeroCost.emails.length){
+        emails.push(...zeroCost.emails);
+        if(zeroCost.source)source=zeroCost.source;
+        emailMethod="zero_cost";
+        await redis.hIncrBy(STATS,"email_zero_cost_hit",1);
+      }
+    }catch{
+      await redis.hIncrBy(STATS,"email_zero_cost_fail",1);
+    }
+  }
+  emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
+    .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
+
   if(researchOwnedWebsite){
     const updated={...lead,website:researchOwnedWebsite,website_opportunity:"website_refresh",owned_website_evidence_source:"research_identity_match",law_email_enrich_version:EMAIL_METHOD_VERSION};
     await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
@@ -2487,7 +2498,7 @@ async function enrichmentLoop(){
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
         redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
         redis.sCard(WEBSITE_AUDIT_PENDING_SET),redis.sCard(WEBSITE_REFRESH_READY_SET),redis.sCard(EMAIL_CANDIDATE_SET),
-        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","scrapling_search_hit","bing_source_links","bing_source_pages_matched","bing_source_email_pages","email_raw_candidate_leads","email_identity_mx_pass_leads","email_identity_mx_reject_leads","email_keelead_pass_leads","email_keelead_reject_leads","email_source_verified_leads","jina_source_hit","jina_source_fail","email_existing_recorroborated","email_existing_recorroboration_miss","post_email_headcount_verified","post_email_headcount_miss","post_email_headcount_bing","post_email_headcount_duck","rejected_no_verified_email","rejected_unverified_attorney_count","rejected_wrong_size","rejected_has_website","scrapling_static_hit","scrapling_static_fail","bing_queries_with_links","bing_source_page_fetch_reject","bing_rss_query_hit","bing_query_fetch_reject","bing_fallback_error","email_source_binding_reject_leads","scrapling_generic_skip","owned_website_research_hit","website_preflight_hit","website_preflight_miss","bar_query_hit","bar_source_page_matched","bar_email_page"])
+        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","scrapling_search_hit","bing_source_links","bing_source_pages_matched","bing_source_email_pages","email_raw_candidate_leads","email_identity_mx_pass_leads","email_identity_mx_reject_leads","email_keelead_pass_leads","email_keelead_reject_leads","email_source_verified_leads","jina_source_hit","jina_source_fail","email_existing_recorroborated","email_existing_recorroboration_miss","post_email_headcount_verified","post_email_headcount_miss","post_email_headcount_bing","post_email_headcount_duck","rejected_no_verified_email","rejected_unverified_attorney_count","rejected_wrong_size","rejected_has_website","scrapling_static_hit","scrapling_static_fail","bing_queries_with_links","bing_source_page_fetch_reject","bing_rss_query_hit","bing_query_fetch_reject","bing_fallback_error","email_source_binding_reject_leads","scrapling_generic_skip","owned_website_research_hit","website_preflight_hit","website_preflight_miss","bar_query_hit","bar_source_page_matched","bar_email_page","email_zero_cost_fail"])
       ]);
       console.log(JSON.stringify({
         event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,
@@ -2503,7 +2514,7 @@ async function enrichmentLoop(){
         postEmailHeadcountBing:Number(emailStats?.[24]||0),postEmailHeadcountDuck:Number(emailStats?.[25]||0),
         rejectedNoVerifiedEmail:Number(emailStats?.[26]||0),rejectedUnverifiedAttorneyCount:Number(emailStats?.[27]||0),
         rejectedWrongSize:Number(emailStats?.[28]||0),rejectedHasWebsite:Number(emailStats?.[29]||0),
-        scraplingStaticHit:Number(emailStats?.[30]||0),scraplingStaticFail:Number(emailStats?.[31]||0),bingQueriesWithLinks:Number(emailStats?.[32]||0),bingSourcePageFetchReject:Number(emailStats?.[33]||0),bingRssQueryHit:Number(emailStats?.[34]||0),bingQueryFetchReject:Number(emailStats?.[35]||0),bingFallbackError:Number(emailStats?.[36]||0),emailSourceBindingRejectLeads:Number(emailStats?.[37]||0),scraplingGenericSkip:Number(emailStats?.[38]||0),ownedWebsiteResearchHit:Number(emailStats?.[39]||0),websitePreflightHit:Number(emailStats?.[40]||0),websitePreflightMiss:Number(emailStats?.[41]||0),barQueryHit:Number(emailStats?.[42]||0),barSourcePageMatched:Number(emailStats?.[43]||0),barEmailPage:Number(emailStats?.[44]||0)
+        scraplingStaticHit:Number(emailStats?.[30]||0),scraplingStaticFail:Number(emailStats?.[31]||0),bingQueriesWithLinks:Number(emailStats?.[32]||0),bingSourcePageFetchReject:Number(emailStats?.[33]||0),bingRssQueryHit:Number(emailStats?.[34]||0),bingQueryFetchReject:Number(emailStats?.[35]||0),bingFallbackError:Number(emailStats?.[36]||0),emailSourceBindingRejectLeads:Number(emailStats?.[37]||0),scraplingGenericSkip:Number(emailStats?.[38]||0),ownedWebsiteResearchHit:Number(emailStats?.[39]||0),websitePreflightHit:Number(emailStats?.[40]||0),websitePreflightMiss:Number(emailStats?.[41]||0),barQueryHit:Number(emailStats?.[42]||0),barSourcePageMatched:Number(emailStats?.[43]||0),barEmailPage:Number(emailStats?.[44]||0),emailZeroCostFail:Number(emailStats?.[45]||0)
       }));
     }catch(error){console.error("law_firm_enrich_loop_error",error?.stack||error?.message||error);}
     await sleep(LOOP_MS);
