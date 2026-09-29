@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
-const EMAIL_METHOD_VERSION="email-v17-headcount-recovery";
+const EMAIL_METHOD_VERSION="email-v18-historical-safe";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -73,6 +73,7 @@ const ENRICHED_SET="recover:law-firm:enriched:v3";
 const READY_SET="recover:law-firm:qualified:v3";
 const EMAIL_CANDIDATE_SET="recover:law-firm:email-candidates:v1";
 const REQUALIFY_VERSION_KEY="recover:law-firm:full-requalify-version";
+const HISTORICAL_QUALIFIED_KEYS=new Set(["place:ChIJ-U4jzLpzaYgRiuVOJexcUts","place:ChIJ-cZwjdl814kR3naYgZCQKWI","place:ChIJ205yYu_UyFQRWo9oRpd3T-M","place:ChIJ2ROk0Extq4kRBT2E7-tRYlw","place:ChIJ32Qgyr7wtocRGWTUwdhYGTk","place:ChIJ3QySmg_HmoARkctGxRlocHU","place:ChIJ3W-ACwxx44kR2rru4m1yG4A","place:ChIJ4W_J98Jv54gRGvAwT50QYxA","place:ChIJ4fF-dR4YhYARuNJj2qaVxFc","place:ChIJ5WPlZJCNwokRIEUL9eDQOZw","place:ChIJ5wdWFlsyMYYRWPy3nw0m03A","place:ChIJ5z3GsvfFvIcRO0k17OFS-74","place:ChIJ71pJNPiKR4gRLhF2R_ErKEk","place:ChIJ7cSewURXwokRJYKLE-zxnBw","place:ChIJ7wsutdx4bIcR6p_AksLnRyw","place:ChIJ95gGZEgg6IgRZsn5pby6rpE","place:ChIJ9zP3h5kSAIkRdWMOrKTPeI8","place:ChIJA9HEiW7rJIYR95Qpcp4Lgvg","place:ChIJAQBkSoYo3YARpPJt5RHVTWY","place:ChIJAyCOMGLOw4kR7YvAi7XZ_H4","place:ChIJBVc_u6i2hYARiPAijtV8dAY","place:ChIJD6vum6RfQogRdNScZ6vQ5Zs","place:ChIJDyWvCZZXwokRTcTR4Oj1oKQ","place:ChIJE4PSX6raxokR91IKiYlqp9k","place:ChIJF31O_YIEU4cRpSPVKS9wwtY","place:ChIJFU2oKxYzMYYRebQBKdNNm0g","place:ChIJG1VBA1HxNIgRGAJy-YLCIhI","place:ChIJGWLs2eTQhIARV7GeoY81EcE","place:ChIJH8ORLCxfVFMRiTs-1FsCUGk","place:ChIJHfJFQjomwokRSql3ngElZ5M","place:ChIJIXOHPySX-IgRBKF_bc-rke0","place:ChIJJzoh2FyGmYcRN71FnFcpY00","place:ChIJK7eQx4j5Y4gRb9qliaeIfQg","place:ChIJKYY8pmLnmoARE4mULG2YnNs","place:ChIJKer573eoZYYRC-qFdZ_Eg3A","place:ChIJKw02pnLRhIARPEIfaW4NNg0","place:ChIJLTBYQhSrw4kRMnKH-0QzcG8","place:ChIJLyxfboWMk4cRf66FH6ritxo","place:ChIJM02Gea1YXIYRyvJ5ZwPhoQw","place:ChIJM6BqOO0wq4kRTae0vIkDBVo","place:ChIJM_1lHE5ZVFMRwH1fHLVGt34","place:ChIJMbp75upAwFQRe2uTudVjsow","place:ChIJN7r7r72awoARjAesAtfbDLw","place:ChIJNycr3iOHmYcRXquelBr03KE","place:ChIJO7QVTAluAHwRVsaeyJtxK7A","place:ChIJO7lK00vF54gRQ8j3zzWyLwU","place:ChIJPRt57X_d9YgRI5UYwRJE_2U","place:ChIJQ3oMBtrRUIgR65BnUyVPft4","place:ChIJRVH9a48Tt4cR6SOOdv3Edck","place:ChIJRW1H7r3VFogRlFoHqpncZ0I","place:ChIJRYrj7X3pwogRdG_E9PJYcf0","place:ChIJTa7FEGNQ4IYRSydBoKqsl2o","place:ChIJUYXwNCnaNYgRjAdaoH_ogLw","place:ChIJVYdWQ-4Cw4kRr4bAd6NLQVY","place:ChIJVxw7O9jeJIgR1FiEkRQhZLI","place:ChIJY6aHQLRcfYcRKiqiFK5w0do","place:ChIJayky0_XFvIcRjdDZMkHLRD8","place:ChIJb2hcRZsU3okR_EKIIlGOyw8","place:ChIJb3hWSBZv_4gROY_ApeSM8wU","place:ChIJbxKvvzbu2YkRMdteRtp7klE","place:ChIJd1aP8_KVlocR8_cIhc_Dsd0","place:ChIJdTzQCQJ5hYARdGR1UtB9dkE","place:ChIJeXm0tUXM3IARGzqfb3eOmCY","place:ChIJf2DHHpm3D4gRXfghePyBLmk","place:ChIJfyFrYXdVwIcRYhnjhZT1owA","place:ChIJgx6wDyjpaIgRAC-jEra5Hjw","place:ChIJi87TdvdvwokRjr-8f8K3FG0","place:ChIJjcnM45EgnYgREsRlrRsiyGg","place:ChIJkTUAzFFwzoARxKluSnPRdWQ","place:ChIJl6VxtjJBZIgRBc4VIABoDiw","place:ChIJmbFHSgiQhYAR0v11xfpj4bw","place:ChIJn5Qcag_1UocRtfKl2ZxDBug","place:ChIJnQ8ijF_v44kRFNChrD1otkQ","place:ChIJo-hS02IU7IARMFpv8tr4RTY","place:ChIJpWJorhCs0IkRRcYffMNkoeI","place:ChIJqSz5ytfMwoARZvRZn84vWmI","place:ChIJr104108HYIgRkJT9GlF7xKw","place:ChIJs4frIbQakFQRQPUW66WTiH4","place:ChIJsRDfI5BBZIgR4v0gkMlYNgA","place:ChIJsewYiPRp6oAR6fKhe5QIWcY","place:ChIJt4aEWsHfyFYRT_jYSgVRVw4","place:ChIJt9fh31NZ54YR5ZyCFBn9ock","place:ChIJtRjaRPXgtYcR2V6WyoGvW6g","place:ChIJuzD2vZYT2YkR7dqgvdWC6DY","place:ChIJxUWzCxINkIARDdm6uFNIS-E","place:ChIJzWyZs58FU4gR5-_YQva8wr4"]);
 const REJECTED_SET="recover:law-firm:rejected:v3";
 const PENDING_SET="recover:law-firm:enrich-pending:v3";
 const PRIORITY_PENDING_SET="recover:law-firm:enrich-priority:v3";
@@ -625,7 +626,7 @@ async function duckFallback(lead){
     `"${firmName}" "attorneys at law"`,
     `"${firmName}" partners associates`
   ]:[];
-  const queries=[...new Set([...attorneyQueries,...headcountQueries,...baseQueries])];
+  const queries=[...new Set(existingEmails.length?[...headcountQueries,...attorneyQueries,...baseQueries]:[...attorneyQueries,...baseQueries,...headcountQueries])];
   if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
   const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
@@ -669,7 +670,7 @@ async function duckFallback(lead){
     try{
       const direct=await fetchText(profileUrl,4500);
       absorbPage(direct.html,direct.final_url||profileUrl);
-      if(emails.length)return {emails:rankLawEmails(emails),text:texts.join(" ").slice(0,48000),source:sources[0]||"",attorneyCount,personalFact,personalFactSource};
+      if(emails.length&&attorneyCount>=2&&attorneyCount<=10)return {emails:rankLawEmails(emails),text:texts.join(" ").slice(0,48000),source:sources[0]||"",attorneyCount,personalFact,personalFactSource};
     }catch{}
   }
 
@@ -689,11 +690,6 @@ async function duckFallback(lead){
       const result=item.value;
       const searchText=stripHtml(result.html).slice(0,9000);
       texts.push(searchText);
-      const snippetEmails=contextualEmails(result.html,lead);
-      if(snippetEmails.length){
-        emails.push(...snippetEmails);
-        sources.unshift(result.url);
-      }
       const links=duckResultLinks(result.html).sort((a,b)=>{
         const rank=u=>/govinfo\.gov|docs\.justia\.com|statebar|barassociation|bar\.org|supremecourt|disciplinaryboard|allbiz|chamberofcommerce|justia/i.test(u)?0:1;
         return rank(a)-rank(b);
@@ -1055,7 +1051,7 @@ async function enrichLead(key,lead){
   const existingCandidates=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
     .map(x=>String(x||"").trim().toLowerCase())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
-  const existingSourceBacked=/^https?:\/\//i.test(existingSource);
+  const existingSourceBacked=isDirectPublishedEmailSource(existingSource);
   let emails=existingSourceBacked?existingCandidates:[], combined="",source=existingSourceBacked?existingSource:"",attorneyCount=Number(lead.attorney_count_estimate||0);
   let personalFact="",personalFactSource="";
   let emailMethod=emails.length?"existing_source_backed":"none";
@@ -1071,16 +1067,7 @@ async function enrichLead(key,lead){
     const person=people[0]||"";
     const alternate=people[1]||"";
     const barDomain=stateBarDomain(lead);
-    const headcountQueries=name?[
-      `"${name}" ${city} ${region} attorneys team`.trim(),
-      `"${name}" ${region} site:justia.com attorneys`.trim(),
-      `"${name}" ${region} site:lawyers.com attorneys`.trim(),
-      `"${name}" ${region} site:findlaw.com attorneys`.trim(),
-      `"${name}" ${region} site:martindale.com attorneys`.trim()
-    ]:[];
     const bingQueries=[
-      ...stateBarQueries(lead,people).slice(0,2),
-      ...headcountQueries,
       ...(phone?[
         `"${phone}" "${name}" email`,
         `"${phone}" attorney email`,
@@ -1091,6 +1078,7 @@ async function enrichLead(key,lead){
         `"${person}" ${region} state bar email`.trim(),
         `"${person}" attorney email filetype:pdf`.trim()
       ]:[]),
+      ...stateBarQueries(lead,people).slice(0,2),
       `"${name}" ${city} ${region} email`.trim(),
       `"${name}" ${city} ${region} site:manta.com email`.trim(),
       `"${name}" ${city} ${region} site:bbb.org email`.trim(),
@@ -1144,7 +1132,7 @@ async function enrichLead(key,lead){
   emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
   emails=await filterContactableEmails(emails,lead);
-  const emailSourceVerified=emails.length>0&&/^https?:\/\//i.test(source);
+  const emailSourceVerified=emails.length>0&&isDirectPublishedEmailSource(source);
   if(!emails.length||!emailSourceVerified){
     emails=[];
     emailMethod="none";
@@ -1306,7 +1294,7 @@ async function bootstrapExistingQualified(){
 
       const website=String(lead.website||"").trim();
       const existingSource=String(lead.law_email_source||lead.email_source||lead.email_evidence_url||"").trim();
-      const sourceBacked=/^https?:\/\//i.test(existingSource);
+      const sourceBacked=isDirectPublishedEmailSource(existingSource);
       const identityEmails=sourceBacked?[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>String(x||"").trim().toLowerCase())
         .filter(x=>emailIdentityStrong(x,lead)):[];
@@ -1335,7 +1323,7 @@ async function bootstrapExistingQualified(){
         const name=String(lead.name||lead.title||"");
         const existingUsable=emails.length>0;
         const multiName=/\b(law offices|attorneys at law|law group|partners|associates|attorneys|&| and )\b/i.test(name);
-        const historicalQualified=lead.qualified_lead===true||Boolean(lead.law_firm_qualified_at)||lead.law_email_source_verified===true||/identity\+mx|source\+identity\+mx|published\+identity\+mx/i.test(String(lead.law_email_validation||""));
+        const historicalQualified=HISTORICAL_QUALIFIED_KEYS.has(entry.field)||lead.qualified_lead===true||Boolean(lead.law_firm_qualified_at)||lead.law_email_source_verified===true||/identity\+mx|source\+identity\+mx|published\+identity\+mx/i.test(String(lead.law_email_validation||""));
         if(historicalQualified)historicalQualifiedMarkers++;
         requalAll.push(entry.field);
         if(historicalQualified||existingUsable)requalRegular.push(entry.field);
