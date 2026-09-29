@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_FIRM_ENRICH_BATCH||24)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(20,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||8)));
-const EMAIL_METHOD_VERSION="email-v16-full-requal";
+const EMAIL_METHOD_VERSION="email-v17-headcount-recovery";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -1273,7 +1273,7 @@ async function cleanupWebsiteRefreshReady(){
 }
 
 async function bootstrapExistingQualified(){
-  let scanned=0,qualifiedAdded=0,qualifiedRemoved=0,queuedForEnrichment=0,alreadyQualified=0,requalifyQueued=0;
+  let scanned=0,qualifiedAdded=0,qualifiedRemoved=0,queuedForEnrichment=0,alreadyQualified=0,requalifyQueued=0,historicalQualifiedMarkers=0;
   const fullRequalify=(await redis.get(REQUALIFY_VERSION_KEY))!==EMAIL_METHOD_VERSION;
   const readySet=new Set(await redis.sMembers(READY_SET));
   const requalRegular=[],requalPriority=[],requalRecoverable=[],requalAll=[];
@@ -1335,8 +1335,10 @@ async function bootstrapExistingQualified(){
         const name=String(lead.name||lead.title||"");
         const existingUsable=emails.length>0;
         const multiName=/\b(law offices|attorneys at law|law group|partners|associates|attorneys|&| and )\b/i.test(name);
+        const historicalQualified=lead.qualified_lead===true||Boolean(lead.law_firm_qualified_at)||lead.law_email_source_verified===true||/identity\+mx|source\+identity\+mx|published\+identity\+mx/i.test(String(lead.law_email_validation||""));
+        if(historicalQualified)historicalQualifiedMarkers++;
         requalAll.push(entry.field);
-        if(existingUsable)requalRegular.push(entry.field);
+        if(historicalQualified||existingUsable)requalRegular.push(entry.field);
         else if(multiName||emailRecoveryPriority(lead)>=5)requalPriority.push(entry.field);
         else requalRecoverable.push(entry.field);
         requalifyQueued++;
@@ -1450,7 +1452,8 @@ async function bootstrapExistingQualified(){
   console.log(JSON.stringify({
     event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,
     queuedForEnrichment,requalifyQueued,fullRequalify,
-    requalifyRegular:requalRegular.length,requalifyPriority:requalPriority.length,requalifyRecoverable:requalRecoverable.length
+    requalifyRegular:requalRegular.length,requalifyPriority:requalPriority.length,requalifyRecoverable:requalRecoverable.length,
+    historicalQualifiedMarkers
   }));
   return {scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,queuedForEnrichment,requalifyQueued};
 }
