@@ -2005,19 +2005,23 @@ async function normalizeEmailQueues(){
   console.log(JSON.stringify({event:"law_email_queue_normalized",fresh:fresh.length,sizeReady:sizeReady.length,recoverable:recoverable.length,priority:priority.length}));
 }
 async function enrichBatch(){
-  // Full recovery mode: keep fresh work first, but use all remaining capacity
-  // on existing-email / high-signal / recoverable no-site law firms.
-  const freshCap=Math.min(24,ENRICH_BATCH);
-  const freshKeys=await popSetBatch(SOURCE_PENDING_SET,freshCap);
-  const afterFresh=Math.max(0,ENRICH_BATCH-freshKeys.length);
-  const sizeReadyKeys=afterFresh?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(24,afterFresh)):[];
-  const afterSizeReady=Math.max(0,afterFresh-sizeReadyKeys.length);
-  const regularKeys=afterSizeReady?await popSetBatch(PENDING_SET,Math.min(8,afterSizeReady)):[];
-  const afterRegular=Math.max(0,afterSizeReady-regularKeys.length);
-  const priorityKeys=afterRegular?await popSetBatch(PRIORITY_PENDING_SET,Math.min(8,afterRegular)):[];
-  const afterPriority=Math.max(0,afterRegular-priorityKeys.length);
+  // Conversion-first scheduling:
+  // 1) existing/source-backed email but missing size proof,
+  // 2) already-size-verified leads missing an email,
+  // 3) fresh discoveries,
+  // 4) cold recovery backlog.
+  // This maximizes send-ready conversions instead of spending most capacity on
+  // low-probability rediscovery while near-ready leads wait.
+  const regularKeys=await popSetBatch(PENDING_SET,Math.min(28,ENRICH_BATCH));
+  const afterRegular=Math.max(0,ENRICH_BATCH-regularKeys.length);
+  const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(16,afterRegular)):[];
+  const afterSizeReady=Math.max(0,afterRegular-sizeReadyKeys.length);
+  const freshKeys=afterSizeReady?await popSetBatch(SOURCE_PENDING_SET,Math.min(12,afterSizeReady)):[];
+  const afterFresh=Math.max(0,afterSizeReady-freshKeys.length);
+  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(6,afterFresh)):[];
+  const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
   const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
-  const keys=[...new Set([...freshKeys,...sizeReadyKeys,...regularKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
+  const keys=[...new Set([...regularKeys,...sizeReadyKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
   await Promise.all(keys.map(k=>Promise.all([
     redis.sRem(SOURCE_PENDING_SET,k),
