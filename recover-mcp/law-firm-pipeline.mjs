@@ -843,7 +843,7 @@ async function duckFallback(lead,key=""){
   // Keep a good existing email, but continue research when firm size is
   // unknown/outside target so headcount can be proved before paid outreach.
   const emails=[...existingEmails],texts=[],sources=[];
-  let attorneyCount=existingAttorneyCount,attorneyCountSource:String(lead.attorney_count_source||""),personalFact="",personalFactSource="";
+  let attorneyCount=existingAttorneyCount,attorneyCountSource=String(lead.attorney_count_source||""),personalFact="",personalFactSource="";
   const visited=new Set();
 
   const absorbPage=(html="",finalUrl="")=>{
