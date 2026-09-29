@@ -21,7 +21,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v56-per-email-source-binding";
+const EMAIL_METHOD_VERSION="email-v57-consistent-source-binding";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -142,14 +142,24 @@ async function publishedEmailsOnExactSource(source="",emails=[],lead={},key=""){
       await redis.hIncrBy(STATS,"email_source_binding_page_miss",1);
       return [];
     }
-    const pageText=stripHtml(page.html).slice(0,30000);
-    if(!sourcePageMatchesFirmIdentity(pageText,lead,page.final_url||source)){
-      await redis.hIncrBy(STATS,"email_source_binding_identity_reject",1);
-      return [];
-    }
+    // contextualEmails is the identity gate: it only emits an address when the
+    // surrounding page/email context proves firm/person ownership via exact
+    // identity, phone, trusted legal source, or owned-domain affinity.
+    // Requiring a second whole-page geo rule here contradicted discovery and
+    // rejected valid court/legal-record emails that omit Maps city/state text.
     const published=new Set(contextualEmails(page.html,lead,page.final_url||source).map(x=>String(x).toLowerCase()));
     const matched=emails.filter(email=>published.has(String(email).toLowerCase()));
-    if(!matched.length)await redis.hIncrBy(STATS,"email_source_binding_exact_email_miss",1);
+    if(!matched.length){
+      await redis.hIncrBy(STATS,"email_source_binding_exact_email_miss",1);
+      console.log(JSON.stringify({
+        event:"law_email_source_binding_reject",
+        key,
+        name:String(lead.name||lead.title||""),
+        source:String(page.final_url||source),
+        candidateCount:emails.length,
+        publishedContextCount:published.size
+      }));
+    }
     return matched;
   }catch(error){
     await redis.hIncrBy(STATS,"email_source_binding_fetch_error",1);
@@ -1916,11 +1926,24 @@ async function enrichLead(key,lead){
     return true;
   }
   const rawCandidateCount=emails.length;
-  if(rawCandidateCount)await redis.hIncrBy(STATS,"email_raw_candidate_leads",1);
+  if(rawCandidateCount){
+    await redis.hIncrBy(STATS,"email_raw_candidate_leads",1);
+    console.log(JSON.stringify({
+      event:"law_email_candidate_stage",
+      key,
+      name:String(lead.name||lead.title||""),
+      stage:"raw",
+      count:rawCandidateCount,
+      domains:[...new Set(emails.map(x=>String(x).split("@")[1]||""))],
+      sources:[...new Set(emails.map(x=>emailEvidenceSources[String(x).toLowerCase()]||source||"").filter(Boolean))].slice(0,5)
+    }));
+  }
   emails=await filterContactableEmails(emails,lead);
   const identityMxCount=emails.length;
-  if(identityMxCount)await redis.hIncrBy(STATS,"email_identity_mx_pass_leads",1);
-  else if(rawCandidateCount)await redis.hIncrBy(STATS,"email_identity_mx_reject_leads",1);
+  if(identityMxCount){
+    await redis.hIncrBy(STATS,"email_identity_mx_pass_leads",1);
+    console.log(JSON.stringify({event:"law_email_candidate_stage",key,name:String(lead.name||lead.title||""),stage:"identity_mx",count:identityMxCount}));
+  }else if(rawCandidateCount)await redis.hIncrBy(STATS,"email_identity_mx_reject_leads",1);
 
   // Bind each candidate to the exact page that produced that address.
   // A single shared source URL caused valid emails from one engine/page to be
