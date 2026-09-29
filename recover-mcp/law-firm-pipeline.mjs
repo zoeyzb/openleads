@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v25-browser-budget";
+const EMAIL_METHOD_VERSION="email-v26-funnel-metrics";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -1312,9 +1312,17 @@ async function enrichLead(key,lead){
 
   emails=rankLawEmails(emails.map(x=>String(x).toLowerCase().trim())
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x))).slice(0,5);
+  const rawCandidateCount=emails.length;
+  if(rawCandidateCount)await redis.hIncrBy(STATS,"email_raw_candidate_leads",1);
   emails=await filterContactableEmails(emails,lead);
+  const identityMxCount=emails.length;
+  if(identityMxCount)await redis.hIncrBy(STATS,"email_identity_mx_pass_leads",1);
+  else if(rawCandidateCount)await redis.hIncrBy(STATS,"email_identity_mx_reject_leads",1);
   emails=await keeleadVerifiedEmails(emails);
+  if(emails.length)await redis.hIncrBy(STATS,"email_keelead_pass_leads",1);
+  else if(identityMxCount)await redis.hIncrBy(STATS,"email_keelead_reject_leads",1);
   const emailSourceVerified=emails.length>0&&isDirectPublishedEmailSource(source);
+  if(emailSourceVerified)await redis.hIncrBy(STATS,"email_source_verified_leads",1);
   if(!emails.length||!emailSourceVerified){
     emails=[];
     emailMethod="none";
@@ -1827,7 +1835,7 @@ async function enrichmentLoop(){
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
         redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
         redis.sCard(WEBSITE_AUDIT_PENDING_SET),redis.sCard(WEBSITE_REFRESH_READY_SET),
-        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","bing_source_links","bing_source_pages_matched","bing_source_email_pages"])
+        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","bing_source_links","bing_source_pages_matched","bing_source_email_pages","email_raw_candidate_leads","email_identity_mx_pass_leads","email_identity_mx_reject_leads","email_keelead_pass_leads","email_keelead_reject_leads","email_source_verified_leads"])
       ]);
       console.log(JSON.stringify({
         event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,
@@ -1836,7 +1844,10 @@ async function enrichmentLoop(){
         scraplingSourceHit:Number(emailStats?.[5]||0),scraplingSourceFail:Number(emailStats?.[6]||0),
         emailVerifierUnavailable:Number(emailStats?.[7]||0),scraplingSearchHit:Number(emailStats?.[8]||0),
         bingSourceLinks:Number(emailStats?.[8]||0),bingSourcePagesMatched:Number(emailStats?.[9]||0),
-        bingSourceEmailPages:Number(emailStats?.[10]||0)
+        bingSourceEmailPages:Number(emailStats?.[10]||0),
+        emailRawCandidateLeads:Number(emailStats?.[11]||0),emailIdentityMxPassLeads:Number(emailStats?.[12]||0),
+        emailIdentityMxRejectLeads:Number(emailStats?.[13]||0),emailKeeleadPassLeads:Number(emailStats?.[14]||0),
+        emailKeeleadRejectLeads:Number(emailStats?.[15]||0),emailSourceVerifiedLeads:Number(emailStats?.[16]||0)
       }));
     }catch(error){console.error("law_firm_enrich_loop_error",error?.stack||error?.message||error);}
     await sleep(LOOP_MS);
