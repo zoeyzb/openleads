@@ -4035,7 +4035,8 @@ httpServer.listen(PORT, "0.0.0.0", () => {
         const isLaw=String(lead.search_profile||"")==="law-firm"||String(lead.industry||"").toUpperCase()==="LAW_FIRM";
         const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
         const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
-        const size2to10=attorneyCount>=2&&attorneyCount<=10;
+        const sizeEvidenceVerified=lead.attorney_count_evidence_verified===true;
+        const size2to10=sizeEvidenceVerified&&attorneyCount>=2&&attorneyCount<=10;
         if(nw) noWebsite++; else withWebsite++;
         if(hasContact) contactable++;
         if(nw&&hasContact) noWebsiteContactable++;
