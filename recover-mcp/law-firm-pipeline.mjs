@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v22-scrapling-fallback";
+const EMAIL_METHOD_VERSION="email-v23-evidence-escalation";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -308,13 +308,21 @@ async function fetchResearchPage(url,lead={},key=""){
   let direct=null;
   try{direct=await fetchText(url,4500);}catch{}
   const directText=direct?.html?stripHtml(direct.html).slice(0,24000):"";
-  if(direct?.html&&pageMatchesLead(directText,lead))return direct;
+  const directMatches=Boolean(direct?.html&&pageMatchesLead(directText,lead));
+  const directEvidence=directMatches&&(
+    contextualEmails(direct.html,lead).length>0 ||
+    attorneyEstimate(direct.html,directText)>0
+  );
+  if(directEvidence)return direct;
   const shouldStealth=HISTORICAL_QUALIFIED_KEYS.has(key)||emailRecoveryPriority(lead)>=5;
   if(shouldStealth){
     const stealth=await callScrapling(url);
-    if(stealth?.html)return stealth;
+    if(stealth?.html){
+      const stealthText=stripHtml(stealth.html).slice(0,24000);
+      if(pageMatchesLead(stealthText,lead))return stealth;
+    }
   }
-  return direct;
+  return directMatches?direct:null;
 }
 function stripHtml(html=""){
   return String(html).replace(/<script[\s\S]*?<\/script>/gi," ").replace(/<style[\s\S]*?<\/style>/gi," ")
@@ -1749,12 +1757,14 @@ async function enrichmentLoop(){
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
         redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
         redis.sCard(WEBSITE_AUDIT_PENDING_SET),redis.sCard(WEBSITE_REFRESH_READY_SET),
-        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit"])
+        redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable"])
       ]);
       console.log(JSON.stringify({
         event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,
         emailExisting:Number(emailStats?.[0]||0),emailDuck:Number(emailStats?.[1]||0),emailBing:Number(emailStats?.[2]||0),
-        emailZeroCost:Number(emailStats?.[3]||0),emailNoHit:Number(emailStats?.[4]||0)
+        emailZeroCost:Number(emailStats?.[3]||0),emailNoHit:Number(emailStats?.[4]||0),
+        scraplingSourceHit:Number(emailStats?.[5]||0),scraplingSourceFail:Number(emailStats?.[6]||0),
+        emailVerifierUnavailable:Number(emailStats?.[7]||0)
       }));
     }catch(error){console.error("law_firm_enrich_loop_error",error?.stack||error?.message||error);}
     await sleep(LOOP_MS);
