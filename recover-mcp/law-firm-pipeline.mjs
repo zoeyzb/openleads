@@ -942,16 +942,16 @@ async function duckFallback(lead,key=""){
     `"${firmName}" "Firm Size"`,
     `"${firmName}" site:lawyers.com "Firm Size"`,
     `"${firmName}" site:martindale.com "Firm Size"`,
-    `"${firmName}" "Lawyers ("`,
-    `"${firmName}" "Attorneys ("`,
-    `"${firmName}" "team of" attorneys`
+    `"${firmName}" site:lawyers.com "Lawyers:"`,
+    `"${firmName}" site:findlaw.com attorneys`,
+    `"${firmName}" site:justia.com attorneys`
   ]:[];
   const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
   const shape=lawFirmNameShape(lead);
   const prioritizeSize=existingEmails.length>0||shape==="multi"||shape==="firm"||HISTORICAL_QUALIFIED_KEYS.has(key);
   const queries=[...new Set(prioritizeSize
-    ? [...headcountQueries.slice(0,4),...attorneyQueries.slice(0,4),...baseQueries,...headcountQueries.slice(4)]
+    ? [...headcountQueries,...attorneyQueries.slice(0,2),...baseQueries,...attorneyQueries.slice(2)]
     : [...attorneyQueries,...baseQueries,...headcountQueries])];
   if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
   const existingAttorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
