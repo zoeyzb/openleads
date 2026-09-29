@@ -4,7 +4,7 @@ import { matchesRequestedLocation, mergeLeadRecords, upsertQualifiedLeads } from
 import { geoBiasForJob } from './geo-coverage.mjs';
 import { markCoverage, campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead, isCoreHomeServiceIndustry, isOwnedBusinessWebsite } from "./home-service-targeting.mjs";
-import { isLawFirmLead, scoreLawFirmLead, matchesLawPractice } from "./law-firm-targeting.mjs";
+import { isLawFirmLead, scoreLawFirmLead, matchesLawPractice, lawFirmNameShape } from "./law-firm-targeting.mjs";
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
@@ -531,17 +531,26 @@ async function persistPermanentQualified(redis, job, leads) {
       // Fast-lane firms whose public name suggests a multi-attorney practice.
       // Unknown/solo-looking names still remain discoverable, but do not consume
       // the highest-cost email enrichment slots ahead of better 2-10 candidates.
-      const fast=[],background=[];
+      const fast=[],background=[],solo=[];
       for(const key of identities){
         const raw=await redis.hGet("recover:leadstore:qualified",key);
         let lead={};try{lead=raw?JSON.parse(raw):{};}catch{}
-        const name=String(lead.name||lead.title||"");
-        const multi=/\b(law offices|attorneys at law|law group|partners|associates|attorneys|&| and )\b/i.test(name);
-        (multi?fast:background).push(key);
+        const shape=lawFirmNameShape(lead);
+        if(shape==="multi"||shape==="firm")fast.push(key);
+        else{
+          background.push(key);
+          if(shape==="solo")solo.push(key);
+        }
+        if(lead&&typeof lead==="object"&&lead.law_name_shape!==shape){
+          await redis.hSet("recover:leadstore:qualified",key,JSON.stringify({...lead,law_name_shape:shape}));
+        }
       }
       if(fast.length)await redis.sAdd("recover:law-firm:enrich-pending:v2",fast);
       if(background.length)await redis.sAdd("recover:law-firm:enrich-recoverable:v1",background);
-      if(fast.length||background.length)console.log(JSON.stringify({event:"law_email_lane_split",fast:fast.length,background:background.length}));
+      if(fast.length||background.length)console.log(JSON.stringify({
+        event:"law_email_lane_split",fast:fast.length,background:background.length,solo:solo.length,
+        fastShare:Number((fast.length/Math.max(1,fast.length+background.length)).toFixed(3))
+      }));
     }
     if(/\\bny\\b|new york/i.test(String(job.location||"")) && isHomeComfortTarget(job.industry||"")){
       await redis.sAdd("recover:leadstore:ny-home-comfort",identities);
@@ -665,7 +674,7 @@ const queryVariants=(industry,location,practiceFocus="",coveragePass="")=>{
     const wave=Math.max(1,Number(String(coveragePass||"").match(/-w(\d+)/i)?.[1]||1));
     // The sales cohort is 2-10 attorneys, so first-pass discovery should
     // bias toward multi-attorney firm language instead of solo-heavy "law office".
-    const preferredByWave=["small law firm","law firm","law offices","attorneys at law","law group","law partners","law associates"];
+    const preferredByWave=["law firm","law group","attorneys at law","small law firm","law partners","law associates","law firm PLLC","law firm PC"];
     const g0=preferredByWave[(wave-1)%preferredByWave.length];
     const g1=preferredByWave[wave%preferredByWave.length];
     const mixed=[
