@@ -635,7 +635,7 @@ function ownedWebsiteFromMatchedPage(url="",text="",lead={}){
   const tokens=leadNameTokens(lead).filter(x=>x.length>=4);
   const hostStem=host.replace(/[^a-z0-9]/g,"");
   const domainAffinity=tokens.some(t=>tokenAffinity(hostStem,t));
-  if(phoneMatch&&exactName)return "https://"+host;
+  if(phoneMatch&&exactName&&domainAffinity)return "https://"+host;
   if(exactName&&geoMatch&&domainAffinity)return "https://"+host;
   return "";
 }
