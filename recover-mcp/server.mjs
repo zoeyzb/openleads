@@ -3981,11 +3981,43 @@ const httpServer = createHttpServer((req, res) => {
   res.end(JSON.stringify({error:"not_found",mcp:"/mcp",health:"/health"}));
 });
 
+
+async function purgeLegacyHomeServiceRedis(redis){
+  if(String(process.env.LAW_ONLY_MODE||"").toLowerCase()!=="true")return {scanned:0,deleted:0};
+  let scanned=0,deleted=0,batch=[];
+  for await(const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
+    for(const entry of (Array.isArray(page)?page:[page])){
+      if(!entry?.field||entry.value===undefined)continue;
+      scanned++;
+      let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
+      const isLaw=String(lead.search_profile||"")==="law-firm"||String(lead.industry||"").toUpperCase()==="LAW_FIRM";
+      if(!isLaw&&isCoreHomeServiceLead(lead)){
+        batch.push(entry.field);
+        if(batch.length>=500){
+          await redis.hDel("recover:leadstore:qualified",batch);
+          deleted+=batch.length;batch=[];
+        }
+      }
+    }
+  }
+  if(batch.length){
+    await redis.hDel("recover:leadstore:qualified",batch);
+    deleted+=batch.length;
+  }
+  await Promise.all([
+    redis.del("recover:leadstore:ny-home-comfort"),
+    redis.del("recover:acquisition:queue:ny-priority")
+  ]);
+  console.log(JSON.stringify({event:"law_only_legacy_home_service_purge",scanned,deleted}));
+  return {scanned,deleted};
+}
+
 httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`Recover Scrape MCP listening on 0.0.0.0:${PORT}`);
   void (async () => {
     try {
       const redis = await getAcquisitionRedis();
+      await purgeLegacyHomeServiceRedis(redis);
       const values = await redis.hVals("recover:leadstore:qualified");
       let parsed=0, noWebsite=0, contactable=0, noWebsiteContactable=0, coreNoWebsiteContactable=0, withWebsite=0;
       let lawNoWebsite=0, lawNoWebsiteWithAnyEmail=0, lawNoWebsiteUsableEmail=0, lawNoWebsiteSourceVerifiedEmail=0;
