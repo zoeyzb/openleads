@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v21-verifier-gated";
+const EMAIL_METHOD_VERSION="email-v22-scrapling-fallback";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -72,8 +72,8 @@ async function detectOwnedWebsiteFromEmailDomains(emails=[],lead={}){
   for(const domain of domains){
     for(const url of [`https://${domain}`,`https://www.${domain}`]){
       try{
-        const page=await fetchText(url,4000);
-        if(!page.html)continue;
+        const page=await fetchResearchPage(url,lead,String(lead.place_id||lead.key||"")?("place:"+String(lead.place_id||"")):"");
+        if(!page?.html)continue;
         const text=stripHtml(page.html).slice(0,24000);
         if(pageMatchesLead(text,lead)||contextHasExactPhone(text,lead)){
           return page.final_url||url;
@@ -90,6 +90,8 @@ async function queueWebsiteRefreshCandidate(key,lead={},website=""){
   await redis.sAdd(WEBSITE_AUDIT_PENDING_SET,key);
 }
 const KEELEAD_BASE_URL=String(process.env.KEELEAD_BASE_URL||process.env.RAILWAY_SERVICE_KEELEAD_URL||"").replace(/\/$/,"");
+const SCRAPLING_MCP_URL=String(process.env.SCRAPLING_MCP_URL||"").replace(/\/$/,"");
+const SCRAPLING_MCP_TOKEN=String(process.env.SCRAPLING_MCP_TOKEN||"");
 const LOOP_MS=Math.max(1500,Number(process.env.LAW_FIRM_LOOP_MS||5000));
 const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_FETCH_TIMEOUT_MS||7000)));
 const JOB_TTL=Math.max(86400,Number(process.env.ACQUISITION_TTL_SECONDS||604800));
@@ -256,6 +258,63 @@ async function fetchText(url,timeout=FETCH_TIMEOUT_MS){
     if(type&&!/html|text/i.test(type))return {html:"",elapsed_ms:Date.now()-started,final_url:r.url||url,status:r.status};
     return {html:(await r.text()).slice(0,1000000),elapsed_ms:Date.now()-started,final_url:r.url||url,status:r.status};
   }finally{clearTimeout(timer);}
+}
+function parseRemoteMcpPayload(text=""){
+  try{return JSON.parse(text);}catch{}
+  const lines=String(text).split("\n").filter(line=>line.startsWith("data:"));
+  for(const line of lines.reverse()){
+    try{return JSON.parse(line.slice(5).trim());}catch{}
+  }
+  return {raw:text};
+}
+async function callScrapling(url){
+  if(!SCRAPLING_MCP_URL||!url)return null;
+  const headers={"content-type":"application/json","accept":"application/json, text/event-stream"};
+  if(SCRAPLING_MCP_TOKEN)headers.authorization=`Bearer ${SCRAPLING_MCP_TOKEN}`;
+  const initCtl=new AbortController(), initTimer=setTimeout(()=>initCtl.abort(),8000);
+  try{
+    const initRes=await fetch(SCRAPLING_MCP_URL,{
+      method:"POST",headers,signal:initCtl.signal,
+      body:JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"recover-law-controller",version:"1.0"}}})
+    });
+    const initText=await initRes.text();
+    if(!initRes.ok)throw new Error("initialize "+initRes.status+" "+initText.slice(0,120));
+    const sessionHeaders={...headers};
+    const sessionId=initRes.headers.get("mcp-session-id");
+    if(sessionId)sessionHeaders["mcp-session-id"]=sessionId;
+    await fetch(SCRAPLING_MCP_URL,{method:"POST",headers:sessionHeaders,body:JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"}),signal:AbortSignal.timeout(4000)});
+    const callRes=await fetch(SCRAPLING_MCP_URL,{
+      method:"POST",headers:sessionHeaders,signal:AbortSignal.timeout(12000),
+      body:JSON.stringify({jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"stealthy_fetch",arguments:{url,ai_targeted:false,headless:true,network_idle:false}}})
+    });
+    const payload=parseRemoteMcpPayload(await callRes.text());
+    if(!callRes.ok)throw new Error("call "+callRes.status);
+    const structured=payload?.result?.structuredContent||{};
+    let content=structured?.content;
+    if(!content){
+      const rawText=payload?.result?.content?.[0]?.text;
+      if(rawText){try{content=JSON.parse(rawText)?.content;}catch{}}
+    }
+    const text=Array.isArray(content)?content.filter(Boolean).join("\n"):String(content||"");
+    if(!text.trim())return null;
+    await redis.hIncrBy(STATS,"scrapling_source_hit",1);
+    return {html:text.slice(0,1000000),elapsed_ms:0,final_url:String(structured?.url||url),status:Number(structured?.status||200),via:"scrapling"};
+  }catch(error){
+    await redis.hIncrBy(STATS,"scrapling_source_fail",1);
+    return null;
+  }finally{clearTimeout(initTimer);}
+}
+async function fetchResearchPage(url,lead={},key=""){
+  let direct=null;
+  try{direct=await fetchText(url,4500);}catch{}
+  const directText=direct?.html?stripHtml(direct.html).slice(0,24000):"";
+  if(direct?.html&&pageMatchesLead(directText,lead))return direct;
+  const shouldStealth=HISTORICAL_QUALIFIED_KEYS.has(key)||emailRecoveryPriority(lead)>=5;
+  if(shouldStealth){
+    const stealth=await callScrapling(url);
+    if(stealth?.html)return stealth;
+  }
+  return direct;
 }
 function stripHtml(html=""){
   return String(html).replace(/<script[\s\S]*?<\/script>/gi," ").replace(/<style[\s\S]*?<\/style>/gi," ")
@@ -547,7 +606,7 @@ function bingResultLinks(html=""){
   }
   return [...new Set(out)].slice(0,8);
 }
-async function bingFallback(lead,query,pageBudget=6){
+async function bingFallback(lead,query,pageBudget=6,key=""){
   const emails=[],texts=[],sources=[];
   let attorneyCount=0,personalFact="",personalFactSource="";
   const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,6);
@@ -575,7 +634,7 @@ async function bingFallback(lead,query,pageBudget=6){
     }
     // Fetch actual source pages for corroboration. Search-result snippets are
     // never treated as publish-source evidence.
-    const pages=await Promise.allSettled(links.slice(0,pageBudget).map(target=>fetchText(target,4500)));
+    const pages=await Promise.allSettled(links.slice(0,pageBudget).map(target=>fetchResearchPage(target,lead,key)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
       if(item.status!=="fulfilled")continue;
@@ -1131,7 +1190,7 @@ async function enrichLead(key,lead){
     ];
     const useDeepIdentity=emailRecoveryPriority(lead)>=4;
     const [bingResult,zeroResult]=await Promise.allSettled([
-      bingFallback(lead,bingQueries,emailRecoveryPriority(lead)>=5?10:8),
+      bingFallback(lead,bingQueries,emailRecoveryPriority(lead)>=5?10:8,key),
       useDeepIdentity?zeroCostEmailFallback(lead):Promise.resolve({emails:[],source:"",name_variant:""})
     ]);
 
