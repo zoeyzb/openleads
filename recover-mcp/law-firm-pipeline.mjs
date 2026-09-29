@@ -484,15 +484,7 @@ function stripHtml(html=""){
     .replace(/<[^>]+>/g," ").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/\s+/g," ").trim();
 }
 function emailsFrom(text=""){
-  let source=String(text||"");
-  try{source=decodeURIComponent(source.replace(/\+/g,"%20"));}catch{}
-  source=source
-    .replace(/&#64;|&commat;/gi,"@")
-    .replace(/&#46;|&period;/gi,".")
-    .replace(/\s*(?:\[at\]|\(at\)|\{at\})\s*/gi,"@")
-    .replace(/\s+(?:at)\s+/gi,"@")
-    .replace(/\s*(?:\[dot\]|\(dot\)|\{dot\})\s*/gi,".")
-    .replace(/\s+(?:dot)\s+/gi,".");
+  const source=normalizePublishedEmailText(text);
   return [...new Set((source.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)||[])
     .map(x=>x.toLowerCase().replace(/[),.;:]+$/,""))
     .filter(isUsableLawEmail))].slice(0,8);
@@ -677,8 +669,38 @@ function contextHasExactPhone(text="",lead={}){
   const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
   return !!(phone&&String(text).replace(/\D/g,"").includes(phone));
 }
+function decodeCloudflareEmail(encoded=""){
+  const hex=String(encoded||"").trim();
+  if(!hex||hex.length<4||hex.length%2!==0)return "";
+  try{
+    const key=parseInt(hex.slice(0,2),16);
+    if(!Number.isFinite(key))return "";
+    let out="";
+    for(let i=2;i<hex.length;i+=2){
+      const value=parseInt(hex.slice(i,i+2),16);
+      if(!Number.isFinite(value))return "";
+      out+=String.fromCharCode(value^key);
+    }
+    return out;
+  }catch{return "";}
+}
+function normalizePublishedEmailText(value=""){
+  let text=String(value||"");
+  text=text.replace(/data-cfemail=["']([0-9a-f]+)["']/ig,(m,hex)=>{
+    const decoded=decodeCloudflareEmail(hex);
+    return decoded?`${m} ${decoded}`:m;
+  });
+  try{text=decodeURIComponent(text.replace(/\+/g,"%20"));}catch{}
+  return text
+    .replace(/&#64;|&commat;/gi,"@")
+    .replace(/&#46;|&period;/gi,".")
+    .replace(/\s*(?:\[at\]|\(at\)|\{at\})\s*/gi,"@")
+    .replace(/\s+(?:at)\s+/gi,"@")
+    .replace(/\s*(?:\[dot\]|\(dot\)|\{dot\})\s*/gi,".")
+    .replace(/\s+(?:dot)\s+/gi,".");
+}
 function contextualEmails(text="",lead={},sourceUrl=""){
-  const raw=String(text||""),out=[];
+  const raw=normalizePublishedEmailText(text),out=[];
   const re=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
   const all=[...raw.matchAll(re)]
     .map(m=>({email:String(m[0]||"").toLowerCase().replace(/[),.;:]+$/,""),index:m.index||0}))
