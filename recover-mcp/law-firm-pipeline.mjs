@@ -832,7 +832,8 @@ function bingResultLinks(html=""){
 async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepPageBudget=2){
   const emails=[],texts=[],sources=[];
   let attorneyCount=0,attorneyCountSource="",personalFact="",personalFactSource="";
-  // Keep enough email-specific searches to run; the previous six-query cap silently dropped later contact queries.\n  const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,10);
+  // Keep enough email-specific searches to run; the previous six-query cap silently dropped later contact queries.
+  const queries=[...new Set((Array.isArray(query)?query:[query]).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,10);
   try{
     const searchResults=await Promise.allSettled(queries.map(async (q,searchIndex)=>{
       const url="https://www.bing.com/search?q="+encodeURIComponent(q);
