@@ -21,7 +21,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v46-website-preflight";
+const EMAIL_METHOD_VERSION="email-v47-domain-first-preflight";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -627,17 +627,25 @@ function ownedWebsiteFromMatchedPage(url="",text="",lead={}){
   const plain=normalize(text);
   const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
   const phoneMatch=Boolean(phone&&String(text).replace(/\D/g,"").includes(phone));
-  const fullName=normalize(lead.name||lead.title||"");
-  const exactName=Boolean(fullName.length>=8&&plain.includes(fullName));
   const city=normalize(lead.city||"");
   const state=normalize(lead.region||lead.state||lead.state_code||"");
   const geoMatch=Boolean((city&&plain.includes(city))||(state&&state.length>=2&&plain.includes(state)));
   const tokens=leadNameTokens(lead).filter(x=>x.length>=4);
   const hostStem=host.replace(/[^a-z0-9]/g,"");
   const domainAffinity=tokens.some(t=>tokenAffinity(hostStem,t));
-  if(phoneMatch&&exactName&&domainAffinity)return "https://"+host;
-  if(exactName&&geoMatch&&domainAffinity)return "https://"+host;
+  const tokenHits=tokens.filter(t=>plain.includes(t)).length;
+  const identityTokens=tokens.length===1?tokenHits>=1:tokenHits>=Math.min(2,tokens.length);
+  // A directory can copy name/phone, but it will not normally have a domain
+  // derived from the firm's distinctive name. Require both.
+  if(domainAffinity&&identityTokens&&phoneMatch)return "https://"+host;
+  if(domainAffinity&&identityTokens&&geoMatch)return "https://"+host;
   return "";
+}
+function ownedDomainAffinity(url="",lead={}){
+  const host=hostOf(url).replace(/[^a-z0-9]/g,"");
+  if(!host)return false;
+  const tokens=leadNameTokens(lead).filter(x=>x.length>=4);
+  return tokens.some(t=>tokenAffinity(host,t));
 }
 const FREE_MAIL_DOMAINS=new Set([
   "gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","me.com","msn.com",
@@ -917,22 +925,19 @@ async function findOwnedWebsitePreflight(lead,key=""){
   ].filter(Boolean))].slice(0,2);
   const searchResults=await Promise.allSettled(queries.map(async q=>{
     const url="https://www.bing.com/search?q="+encodeURIComponent(q);
-    let html="";
-    try{html=(await fetchText(url,4200)).html||"";}catch{}
-    let links=bingResultLinks(html);
-    if(!links.length){
-      try{
-        const rss=await fetchText("https://www.bing.com/search?format=rss&q="+encodeURIComponent(q),4200);
-        links=bingRssResultLinks(rss?.html||"");
-      }catch{}
-    }
-    return links;
+    const [htmlResult,rssResult]=await Promise.allSettled([
+      fetchText(url,4200),
+      fetchText("https://www.bing.com/search?format=rss&q="+encodeURIComponent(q),4200)
+    ]);
+    const html=htmlResult.status==="fulfilled"?htmlResult.value?.html||"":"";
+    const rss=rssResult.status==="fulfilled"?rssResult.value?.html||"":"";
+    return [...new Set([...bingResultLinks(html),...bingRssResultLinks(rss)])];
   }));
   const links=[];
   for(const result of searchResults){
     if(result.status!=="fulfilled")continue;
     for(const url of result.value||[]){
-      if(lawSourceRank(url,lead)!==6)continue;
+      if(lawSourceRank(url,lead)!==6||!ownedDomainAffinity(url,lead))continue;
       if(!links.includes(url))links.push(url);
       if(links.length>=6)break;
     }
