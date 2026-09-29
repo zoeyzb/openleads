@@ -21,7 +21,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v51-public-record-throughput";
+const EMAIL_METHOD_VERSION="email-v52-legal-record-first";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -1034,7 +1034,7 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
     }));
     // Guarantee source diversity: bar/court/government and PDFs get reserved
     // slots before directories or generic results can consume the page budget.
-    const authoritative=[],pdfs=[],directories=[],other=[];
+    const authoritative=[],legalRecords=[],pdfs=[],directories=[],other=[];
     for(const item of searchResults){
       if(item.status!=="fulfilled"){
         await redis.hIncrBy(STATS,"bing_query_fetch_reject",1);
@@ -1048,9 +1048,13 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
         .sort((a,b)=>lawSourceRank(a,lead)-lawSourceRank(b,lead));
       if(ranked.some(u=>lawSourceRank(u,lead)<=1))await redis.hIncrBy(STATS,"bar_query_hit",1);
       if(ranked.length)await redis.hIncrBy(STATS,"bing_queries_with_links",1);
+      const legalIntent=/notice to creditors|attorney for|represented by|bankruptcy|legal notice|email court|email bar/i.test(String(result.q||""));
       for(const link of ranked){
         const rank=lawSourceRank(link,lead);
-        const bucket=rank<=2?authoritative:/\.pdf(?:$|[?#])/i.test(link)?pdfs:rank<=4?directories:other;
+        const bucket=rank<=2?authoritative:
+          /\.pdf(?:$|[?#])/i.test(link)?pdfs:
+          legalIntent?legalRecords:
+          rank<=4?directories:other;
         if(!bucket.includes(link))bucket.push(link);
       }
     }
@@ -1061,10 +1065,11 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
         if(!links.includes(link)){links.push(link);count--;}
       }
     };
-    take(authoritative,Math.max(1,Math.ceil(pageBudget*0.4)));
-    take(pdfs,Math.max(1,Math.ceil(pageBudget*0.25)));
-    take(directories,Math.max(1,Math.ceil(pageBudget*0.2)));
-    take([...authoritative,...pdfs,...directories,...other],pageBudget-links.length);
+    take(authoritative,Math.max(1,Math.ceil(pageBudget*0.3)));
+    take(legalRecords,Math.max(1,Math.ceil(pageBudget*0.3)));
+    take(pdfs,Math.max(1,Math.ceil(pageBudget*0.2)));
+    take(directories,Math.max(1,Math.ceil(pageBudget*0.1)));
+    take([...authoritative,...legalRecords,...pdfs,...directories,...other],pageBudget-links.length);
     // Fetch actual source pages for corroboration. Search-result snippets are
     // never treated as publish-source evidence.
     if(links.length)await redis.hIncrBy(STATS,"bing_source_links",links.length);
@@ -1631,7 +1636,7 @@ function stateBarQueries(lead={},people=[]){
     out.push(`"${name}" "${state}" email court`);
     out.push(`"${name}" "${state}" email filetype:pdf`);
   }
-  return [...new Set(out)].slice(0,10);
+  return [...new Set(out)].slice(0,8);
 }
 
 
@@ -1725,13 +1730,23 @@ async function enrichLead(key,lead){
     const state=String(lead.region||lead.state||lead.state_code||"").trim().toUpperCase();
     const publicRecordQueries=[
       ...(person&&phone?[`"${person}" "${phone}" email filetype:pdf`]:[]),
+      ...(name&&phone?[`"${name}" "${phone}" email`]:[]),
       ...(person?[`"${person}" "${region}" "E-mail address" filetype:pdf`]:[]),
-      ...(name&&phone?[`"${name}" "${phone}" email filetype:pdf`]:[]),
+      ...(name?[
+        `"${name}" "notice to creditors" email`,
+        `"${name}" "Attorney for" email`,
+        `"${name}" "represented by" email`,
+        `"${name}" bankruptcy email`,
+        `"${name}" "legal notice" email`
+      ]:[]),
+      ...(person?[
+        `"${person}" "notice to creditors" email`,
+        `"${person}" "Attorney for" email`
+      ]:[]),
       ...(state==="FL"&&person?[
         `site:floridapublicnotices.com "${person}" email`,
         `"${person}" Florida "Conflict Attorney" email filetype:pdf`
-      ]:[]),
-      ...(person?[`"${person}" "notice to creditors" email`]:[])
+      ]:[])
     ];
     const directoryEmailQueries=[
       ...(name?[`"${name}" email filetype:pdf`]:[]),
@@ -2086,6 +2101,28 @@ async function cleanupWebsiteRefreshReady(){
   }
   console.log(JSON.stringify({event:"law_website_refresh_cleanup",kept:rows.length-remove.length,removed:remove.length}));
   return {kept:rows.length-remove.length,removed:remove.length};
+}
+
+async function cleanupEmailCandidateSet(){
+  const keys=await redis.sMembers(EMAIL_CANDIDATE_SET);
+  if(!keys.length)return {scanned:0,removed:0,kept:0};
+  let removed=0,kept=0;
+  for(let offset=0;offset<keys.length;offset+=250){
+    const chunk=keys.slice(offset,offset+250);
+    const values=await redis.hmGet(LEAD_HASH,chunk);
+    for(let i=0;i<chunk.length;i++){
+      let lead={};try{lead=values[i]?JSON.parse(values[i]):{};}catch{}
+      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+        .map(x=>String(x||"").trim().toLowerCase())
+        .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
+      const invalid=!values[i]||!isLawFirmLead(lead)||/^https?:\/\//i.test(String(lead.website||lead.website_url||"").trim())||
+        !emails.length||lead.law_email_source_verified!==true;
+      if(invalid){await redis.sRem(EMAIL_CANDIDATE_SET,chunk[i]);removed++;}
+      else kept++;
+    }
+  }
+  console.log(JSON.stringify({event:"law_email_candidate_cleanup",scanned:keys.length,removed,kept}));
+  return {scanned:keys.length,removed,kept};
 }
 
 async function bootstrapExistingQualified(){
@@ -2517,6 +2554,7 @@ async function seed(cities){
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"bootstrap_existing"}));
 await bootstrapExistingQualified();
 await normalizeEmailQueues();
+await cleanupEmailCandidateSet();
 startLawLeadSheetSync({
   getRedis:async()=>redis,
   serviceAccountJson:GOOGLE_SERVICE_ACCOUNT_JSON,
