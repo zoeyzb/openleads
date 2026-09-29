@@ -325,7 +325,7 @@ async function fetchResearchPage(url,lead={},key="",allowStealth=true){
   const directText=direct?.html?stripHtml(direct.html).slice(0,24000):"";
   const directMatches=Boolean(direct?.html&&pageMatchesLead(directText,lead));
   const directEvidence=directMatches&&(
-    contextualEmails(direct.html,lead).length>0 ||
+    contextualEmails(direct.html,lead,url).length>0 ||
     attorneyEstimate(direct.html,directText)>0
   );
   if(directEvidence)return direct;
@@ -429,6 +429,11 @@ function pageMatchesLead(text="",lead={}){
   if(!plain)return false;
   const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
   if(phone&&String(text).replace(/\D/g,"").includes(phone))return true;
+  const fullName=normalize(lead.name||lead.title||"");
+  if(fullName.length>=8&&plain.includes(fullName))return true;
+  const person=likelyAttorneyName(lead);
+  const personTokens=person?normalize(person).split(" ").filter(x=>x.length>=3):[];
+  if(personTokens.length>=2&&personTokens.filter(x=>plain.includes(x)).length>=2)return true;
   const tokens=leadNameTokens(lead);
   if(!tokens.length)return false;
   const hits=tokens.filter(x=>plain.includes(x)).length;
@@ -532,7 +537,7 @@ function contextHasExactPhone(text="",lead={}){
   const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
   return !!(phone&&String(text).replace(/\D/g,"").includes(phone));
 }
-function contextualEmails(text="",lead={}){
+function contextualEmails(text="",lead={},sourceUrl=""){
   const raw=String(text||""),out=[];
   const re=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
   const all=[...raw.matchAll(re)]
@@ -541,6 +546,7 @@ function contextualEmails(text="",lead={}){
   const uniqueAll=[...new Set(all.map(x=>x.email))];
   const fullPageMatch=pageMatchesLead(raw,lead);
   const fullPhoneMatch=contextHasExactPhone(raw,lead);
+  const trustedSource=trustedLawSource(sourceUrl,lead);
 
   for(const m of all){
     const start=Math.max(0,m.index-900),end=Math.min(raw.length,m.index+m.email.length+900);
@@ -556,12 +562,14 @@ function contextualEmails(text="",lead={}){
     if(!freeMail&&nearbyIdentity&&emailLooksOwnedByLead(m.email,lead)){
       out.push(m.email);continue;
     }
-    if(freeMail&&exactNearby&&(nearbyPhone||fullPhoneMatch)){
+    if(freeMail&&exactNearby&&(nearbyPhone||fullPhoneMatch||trustedSource)){
       out.push(m.email);continue;
     }
     // For split-layout bar/court profiles, require exact whole-page phone AND
     // either firm-domain affinity or an exact attorney/firm identity match.
-    if(fullPageMatch&&fullPhoneMatch&&uniqueAll.length<=3&&(!freeMail?emailLooksOwnedByLead(m.email,lead):exactIdentityNearEmail(raw,lead))){
+    if(fullPageMatch&&uniqueAll.length<=3&&
+      ((!freeMail&&fullPhoneMatch&&emailLooksOwnedByLead(m.email,lead))||
+       (freeMail&&exactIdentityNearEmail(raw,lead)&&(fullPhoneMatch||trustedSource)))){
       out.push(m.email);
     }
   }
@@ -704,7 +712,7 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
       const page=item.value,target=links[i];
       const pageText=stripHtml(page.html).slice(0,22000);
       if(!pageMatchesLead(pageText,lead))continue;
-      const pageEmails=contextualEmails(page.html,lead);
+      const pageEmails=contextualEmails(page.html,lead,page.final_url||target);
       emails.push(...pageEmails);texts.push(pageText);
       const estimate=attorneyEstimate(page.html,pageText);
       if(estimate>attorneyCount)attorneyCount=estimate;
@@ -822,7 +830,7 @@ async function duckFallback(lead,key=""){
   const absorbPage=(html="",finalUrl="")=>{
     const pageText=stripHtml(html).slice(0,22000);
     if(!pageMatchesLead(pageText,lead))return;
-    const pageEmails=contextualEmails(html,lead);
+    const pageEmails=contextualEmails(html,lead,finalUrl);
     if(pageEmails.length){
       emails.push(...pageEmails);
       if(finalUrl&&!sources.includes(finalUrl))sources.unshift(finalUrl);
@@ -1160,6 +1168,30 @@ const STATE_BAR_DOMAINS={
 function stateBarDomain(lead={}){
   const state=String(lead.region||lead.state||lead.state_code||"").trim().toUpperCase();
   return STATE_BAR_DOMAINS[state]||"";
+}
+function expectedBarHost(lead={}){
+  const raw=stateBarDomain(lead);
+  if(!raw)return "";
+  try{return new URL("https://"+raw).hostname.toLowerCase().replace(/^www\./,"");}
+  catch{return String(raw).split("/")[0].toLowerCase().replace(/^www\./,"");}
+}
+function trustedLawSource(url="",lead={}){
+  let host="";try{host=new URL(String(url||"")).hostname.toLowerCase().replace(/^www\./,"");}catch{return false;}
+  const expected=expectedBarHost(lead);
+  if(expected&&(host===expected||host.endsWith("."+expected)))return true;
+  return /texasbar\.com|floridabar\.org|calbar\.ca\.gov|nycourts\.gov|iardc\.org|supremecourt|disciplinaryboard|statebar|barassociation/i.test(host)||
+    host.endsWith(".gov");
+}
+function lawSourceRank(url="",lead={}){
+  let host="";try{host=new URL(String(url||"")).hostname.toLowerCase().replace(/^www\./,"");}catch{return 99;}
+  const expected=expectedBarHost(lead);
+  if(expected&&(host===expected||host.endsWith("."+expected)))return 0;
+  if(trustedLawSource(url,lead))return 1;
+  if(/govinfo\.gov|docs\.justia\.com/i.test(host))return 2;
+  if(/justia\.com|lawyers\.com|martindale\.com|findlaw\.com|avvo\.com|superlawyers\.com/i.test(host))return 3;
+  if(/allbiz\.com|chamberofcommerce\.com|manta\.com|bbb\.org/i.test(host))return 4;
+  if(/facebook\.com|linkedin\.com|instagram\.com|tiktok\.com|youtube\.com|x\.com|twitter\.com|pinterest\.com|mapquest\.com/i.test(host))return 90;
+  return 6;
 }
 function emailRecoveryPriority(lead={}){
   let score=0;
