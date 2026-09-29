@@ -2027,21 +2027,22 @@ async function bootstrapExistingQualified(){
           qualifiedRemoved++;
         }
         if(!fullRequalify){
-          if(!effectiveWebsite&&(!emails.length||!sourceBacked)&&String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION){
-            if(bootstrapSizeReady){
-              await redis.sRem(ENRICHED_SET,entry.field);
-              await moveToEmailQueue(entry.field,SIZE_READY_PENDING_SET);
-              queuedForEnrichment++;
-            }else{
-              // Every no-website law record missing a source-verified email gets
-              // the current research method once. Priority controls order only.
-              await redis.sRem(ENRICHED_SET,entry.field);
-              const retrySet=(highValueLawResearchLead(lead)||emailRecoveryPriority(lead)>=5)
-                ? PRIORITY_PENDING_SET
-                : RECOVERABLE_PENDING_SET;
-              await moveToEmailQueue(entry.field,retrySet);
-              queuedForEnrichment++;
-            }
+          const methodStale=String(lead.law_email_enrich_version||"")!==EMAIL_METHOD_VERSION;
+          if(!effectiveWebsite&&methodStale){
+            // Method upgrades are integrity migrations, not just missing-email
+            // retries. Existing "verified" candidates must be re-audited too.
+            await Promise.all([
+              redis.sRem(ENRICHED_SET,entry.field),
+              redis.sRem(EMAIL_CANDIDATE_SET,entry.field)
+            ]);
+            let retrySet;
+            if(emails.length)retrySet=PENDING_SET;
+            else if(bootstrapSizeReady)retrySet=SIZE_READY_PENDING_SET;
+            else retrySet=(highValueLawResearchLead(lead)||emailRecoveryPriority(lead)>=5)
+              ? PRIORITY_PENDING_SET
+              : RECOVERABLE_PENDING_SET;
+            await moveToEmailQueue(entry.field,retrySet);
+            queuedForEnrichment++;
           }else if(!effectiveWebsite&&emails.length&&(!practiceKeys.length||!attorneyCount)){
             await redis.sRem(ENRICHED_SET,entry.field);
             await moveToEmailQueue(entry.field,PENDING_SET);
