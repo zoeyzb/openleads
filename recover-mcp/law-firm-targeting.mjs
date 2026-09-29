@@ -1,7 +1,7 @@
 function normalize(value=""){return String(value||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
 
 const LAW_SIGNAL=/\b(law firm|law office|law offices|attorney|attorneys|lawyer|lawyers|legal counsel)\b/;
-const NON_FIRM=/\b(bail bonds?|court reporter|process server|notary|paralegal service|legal document preparer|legal aid society|bar association|courthouse|district attorney|public defender|government office|police department|sheriff(?:'s)? office|law enforcement|realty|realtors?|real estate brokerage|property management|title company|mortgage broker|insurance agency|tax preparation)\b/;
+const NON_FIRM=/\b(bail bonds?|court reporter|process server|notary|paralegal service|legal document preparer|legal aid society|legal services? plan|legal svc plan|law library|lawyers? building|lawyer referral|bar association|courthouse|district attorney|u s attorney|united states attorney|attorney general|city attorney|county attorney|state attorney|prosecutor(?:'s)? office|public defender|government office|government agency|police department|sheriff(?:'s)? office|law enforcement|realty|realtors?|real estate brokerage|property management|title company|mortgage broker|insurance agency|tax preparation)\b/;
 
 export const LAW_PRACTICES=[
   {key:"personal_injury",label:"personal injury",target:true,re:/\b(personal injury|injury lawyer|injury attorney|accident lawyer|accident attorney|car accident|truck accident|wrongful death|slip and fall|premises liability|medical malpractice)\b/},
@@ -66,6 +66,19 @@ export function isUsableLawEmail(value=""){
   const blockedContactDomains=["amazon.com","craigslist.org","linktr.ee","zoo.org","apus.edu","wallace.edu","piercecollege.edu","mcafee.com","axacore.com","cfma.org"];
   if(blockedContactDomains.some(d=>domain===d||domain.endsWith("."+d)))return false;
   return true;
+}
+
+export function lawFirmNameShape(value={}){
+  const raw=typeof value==="string"?value:String(value?.name||value?.title||"");
+  const name=raw.replace(/\s+/g," ").trim();
+  if(!name)return "unknown";
+  if(/\b(?:attorneys at law|attorneys|lawyers|partners|associates|law group|legal group)\b/i.test(name)||
+     /\s(?:&|and)\s/i.test(name))return "multi";
+  if(/\b(?:law firm|pllc|p\.c\.|pc|p\.a\.|pa|llp|professional corporation)\b/i.test(name))return "firm";
+  if(/^the?\s*law office of\s+[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4}$/i.test(name)||
+     /\battorney(?:\s+at\s+law)?\b/i.test(name)||
+     /^[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,3}(?:,?\s+Esq\.?)?$/i.test(name))return "solo";
+  return "unknown";
 }
 
 export function isPreferredLawFirmSize(value=0){
