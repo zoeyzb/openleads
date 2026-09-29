@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v26-funnel-metrics";
+const EMAIL_METHOD_VERSION="email-v24-trusted-source-mix";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -694,10 +694,9 @@ async function bingFallback(lead,query,pageBudget=6,key=""){
       // Search snippets are discovery hints only. Never qualify an email from a
       // Bing SERP itself; the address must be corroborated on a matched source page.
       texts.push(searchText);
-      for(const link of (result.resultLinks||bingResultLinks(result.html)).sort((a,b)=>{
-        const rank=u=>/govinfo\.gov|docs\.justia\.com|statebar|barassociation|bar\.org|supremecourt|disciplinaryboard|trellis|allbiz|chamberofcommerce|justia/i.test(u)?0:1;
-        return rank(a)-rank(b);
-      })){
+      for(const link of (result.resultLinks||bingResultLinks(result.html))
+        .filter(u=>lawSourceRank(u,lead)<90)
+        .sort((a,b)=>lawSourceRank(a,lead)-lawSourceRank(b,lead))){
         if(!links.includes(link))links.push(link);
         if(links.length>=pageBudget)break;
       }
@@ -879,10 +878,9 @@ async function duckFallback(lead,key=""){
       const result=item.value;
       const searchText=stripHtml(result.html).slice(0,9000);
       texts.push(searchText);
-      const links=(result.resultLinks||duckResultLinks(result.html)).sort((a,b)=>{
-        const rank=u=>/govinfo\.gov|docs\.justia\.com|statebar|barassociation|bar\.org|supremecourt|disciplinaryboard|allbiz|chamberofcommerce|justia/i.test(u)?0:1;
-        return rank(a)-rank(b);
-      });
+      const links=(result.resultLinks||duckResultLinks(result.html))
+        .filter(u=>lawSourceRank(u,lead)<90)
+        .sort((a,b)=>lawSourceRank(a,lead)-lawSourceRank(b,lead));
       for(const link of links){
         if(visited.has(link))continue;
         visited.add(link);
@@ -1280,23 +1278,17 @@ async function enrichLead(key,lead){
     const person=people[0]||"";
     const alternate=people[1]||"";
     const barDomain=stateBarDomain(lead);
-    const bingQueries=[
-      ...(phone?[
-        `"${phone}" "${name}" email`,
-        `"${phone}" attorney email`,
-        `"${phone}" site:allbiz.com`,
-        `"${phone}" site:chamberofcommerce.com`
-      ]:[]),
-      ...(person?[
-        `"${person}" ${region} state bar email`.trim(),
-        `"${person}" attorney email filetype:pdf`.trim()
-      ]:[]),
-      ...stateBarQueries(lead,people).slice(0,2),
-      `"${name}" ${city} ${region} email`.trim(),
-      `"${name}" ${city} ${region} site:manta.com email`.trim(),
-      `"${name}" ${city} ${region} site:bbb.org email`.trim(),
+    const barQueries=stateBarQueries(lead,people);
+    const bingQueries=[...new Set([
+      ...(phone&&name?[`"${name}" "${phone}"`]:[]),
+      ...(barQueries[0]?[barQueries[0]]:[]),
+      ...(person?[`"${person}" ${region} attorney email`.trim()]:[]),
+      ...(name?[`"${name}" ${city} ${region} email`.trim()]:[]),
+      ...(phone?[`"${phone}" attorney email`]:[]),
+      ...(name?[`"${name}" site:allbiz.com OR site:chamberofcommerce.com email`]:[]),
+      ...(barQueries[1]?[barQueries[1]]:[]),
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
-    ];
+    ].filter(Boolean))];
     const useDeepIdentity=emailRecoveryPriority(lead)>=4;
     const [bingResult,zeroResult]=await Promise.allSettled([
       bingFallback(lead,bingQueries,emailRecoveryPriority(lead)>=5?10:8,key),
