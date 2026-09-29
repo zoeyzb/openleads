@@ -1964,7 +1964,8 @@ async function enrichLead(key,lead){
     law_email_enrich_version:EMAIL_METHOD_VERSION,
     law_email_method:emailMethod,law_email_source:source||"",
     law_email_source_verified:emailSourceVerified,
-    law_email_validation:emailSourceVerified?"published_exact+firm_identity+mx+keelead_infrastructure_heuristic":"rejected",\n    law_email_mailbox_verified:false,
+    law_email_validation:emailSourceVerified?"published_exact+firm_identity+mx+keelead_infrastructure_heuristic":"rejected",
+    law_email_mailbox_verified:false,
     law_bar_domain:stateBarDomain(lead),
     law_firm_enriched_at:new Date().toISOString()};
 
