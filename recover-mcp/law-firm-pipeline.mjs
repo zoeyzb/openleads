@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v32-strict-identity-size-ready";
+const EMAIL_METHOD_VERSION="email-v33-email-first-completion";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -1433,6 +1433,35 @@ async function enrichLead(key,lead){
   else if(identityMxCount)await redis.hIncrBy(STATS,"email_keelead_reject_leads",1);
   const emailSourceVerified=emails.length>0&&isDirectPublishedEmailSource(source);
   if(emailSourceVerified)await redis.hIncrBy(STATS,"email_source_verified_leads",1);
+
+  // Conversion pass: once a real published email survives identity/MX/verifier,
+  // spend extra research only on proving firm size. This is intentionally
+  // conditional so we do not multiply search cost across the full backlog.
+  if(emailSourceVerified&&!attorneyCountVerified){
+    const sizeName=String(lead.name||lead.title||"").replace(/"/g,"").trim();
+    const sizeRegion=String(lead.region||lead.state||"").trim();
+    const sizeQueries=sizeName?[
+      `"${sizeName}" "firm size"`,
+      `"${sizeName}" attorneys lawyers ${sizeRegion}`.trim(),
+      `"${sizeName}" site:lawyers.com "Firm Size"`,
+      `"${sizeName}" site:martindale.com "Firm Size"`,
+      `"${sizeName}" site:justia.com attorneys`
+    ]:[];
+    if(sizeQueries.length){
+      const sizeResearch=await bingFallback(lead,sizeQueries,10,key).catch(()=>null);
+      const verifiedCount=Number(sizeResearch?.attorneyCount||0);
+      const verifiedSource=String(sizeResearch?.attorneyCountSource||"");
+      if(verifiedCount>0&&isDirectPublishedEmailSource(verifiedSource)){
+        attorneyCount=verifiedCount;
+        attorneyCountVerified=true;
+        attorneyCountSource=verifiedSource;
+        await redis.hIncrBy(STATS,"post_email_headcount_verified",1);
+      }else{
+        await redis.hIncrBy(STATS,"post_email_headcount_miss",1);
+      }
+    }
+  }
+
   if(!emails.length||!emailSourceVerified){
     emails=[];
     emailMethod="none";
