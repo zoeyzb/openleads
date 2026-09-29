@@ -21,7 +21,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v53-bounded-deep-read";
+const EMAIL_METHOD_VERSION="email-v54-queue-precedence-fix";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -2383,37 +2383,53 @@ async function moveToEmailQueue(key,targetSet){
   if(targetSet)await redis.sAdd(targetSet,key);
 }
 async function normalizeEmailQueues(){
-  const [fresh,sizeReady,recoverable,priority]=await Promise.all([
+  const [fresh,sizeReady,recoverable,priority,regular]=await Promise.all([
     redis.sMembers(SOURCE_PENDING_SET),
     redis.sMembers(SIZE_READY_PENDING_SET),
     redis.sMembers(RECOVERABLE_PENDING_SET),
-    redis.sMembers(PRIORITY_PENDING_SET)
+    redis.sMembers(PRIORITY_PENDING_SET),
+    redis.sMembers(PENDING_SET)
   ]);
-  if(fresh.length){
-    await Promise.all(fresh.map(k=>Promise.all([
+
+  // Match the actual enrichBatch scheduling precedence exactly:
+  // regular(existing email) > size-ready > priority > fresh > recoverable.
+  if(regular.length){
+    await Promise.all(regular.map(k=>Promise.all([
       redis.sRem(SIZE_READY_PENDING_SET,k),
-      redis.sRem(RECOVERABLE_PENDING_SET,k),
       redis.sRem(PRIORITY_PENDING_SET,k),
-      redis.sRem(PENDING_SET,k)
+      redis.sRem(SOURCE_PENDING_SET,k),
+      redis.sRem(RECOVERABLE_PENDING_SET,k)
     ])));
   }
   if(sizeReady.length){
     await Promise.all(sizeReady.map(k=>Promise.all([
-      redis.sRem(RECOVERABLE_PENDING_SET,k),
       redis.sRem(PRIORITY_PENDING_SET,k),
-      redis.sRem(PENDING_SET,k)
-    ])));
-  }
-  if(recoverable.length){
-    await Promise.all(recoverable.map(k=>Promise.all([
-      redis.sRem(PRIORITY_PENDING_SET,k),
-      redis.sRem(PENDING_SET,k)
+      redis.sRem(SOURCE_PENDING_SET,k),
+      redis.sRem(RECOVERABLE_PENDING_SET,k)
     ])));
   }
   if(priority.length){
-    await Promise.all(priority.map(k=>redis.sRem(PENDING_SET,k)));
+    await Promise.all(priority.map(k=>Promise.all([
+      redis.sRem(SOURCE_PENDING_SET,k),
+      redis.sRem(RECOVERABLE_PENDING_SET,k)
+    ])));
   }
-  console.log(JSON.stringify({event:"law_email_queue_normalized",fresh:fresh.length,sizeReady:sizeReady.length,recoverable:recoverable.length,priority:priority.length}));
+  if(fresh.length){
+    await Promise.all(fresh.map(k=>redis.sRem(RECOVERABLE_PENDING_SET,k)));
+  }
+
+  const [freshAfter,sizeReadyAfter,recoverableAfter,priorityAfter,regularAfter]=await Promise.all([
+    redis.sCard(SOURCE_PENDING_SET),
+    redis.sCard(SIZE_READY_PENDING_SET),
+    redis.sCard(RECOVERABLE_PENDING_SET),
+    redis.sCard(PRIORITY_PENDING_SET),
+    redis.sCard(PENDING_SET)
+  ]);
+  console.log(JSON.stringify({
+    event:"law_email_queue_normalized",
+    regular:regularAfter,sizeReady:sizeReadyAfter,priority:priorityAfter,fresh:freshAfter,recoverable:recoverableAfter,
+    preRegular:regular.length,preSizeReady:sizeReady.length,prePriority:priority.length,preFresh:fresh.length,preRecoverable:recoverable.length
+  }));
 }
 async function enrichBatch(){
   // Conversion-first scheduling:
