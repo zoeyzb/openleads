@@ -1265,7 +1265,7 @@ function lawSourceRank(url="",lead={}){
   const expected=expectedBarHost(lead);
   if(expected&&(host===expected||host.endsWith("."+expected)))return 0;
   if(trustedLawSource(url,lead))return 1;
-  if(/govinfo\.gov|docs\.justia\.com/i.test(host))return 2;
+  if(/govinfo\.gov|docs\.justia\.com|floridapublicnotices\.com|publicnotices/i.test(host))return 2;
   if(/justia\.com|lawyers\.com|martindale\.com|findlaw\.com|avvo\.com|superlawyers\.com/i.test(host))return 3;
   if(/allbiz\.com|chamberofcommerce\.com|manta\.com|bbb\.org/i.test(host))return 4;
   if(/facebook\.com|linkedin\.com|instagram\.com|tiktok\.com|youtube\.com|x\.com|twitter\.com|pinterest\.com|mapquest\.com/i.test(host))return 90;
@@ -1387,13 +1387,24 @@ async function enrichLead(key,lead){
     const alternate=people[1]||"";
     const barDomain=stateBarDomain(lead);
     const barQueries=stateBarQueries(lead,people);
+    const state=String(lead.region||lead.state||lead.state_code||"").trim().toUpperCase();
+    const publicRecordQueries=[
+      ...(person&&phone?[`"${person}" "${phone}" email filetype:pdf`]:[]),
+      ...(person?[`"${person}" "${region}" "E-mail address" filetype:pdf`]:[]),
+      ...(name&&phone?[`"${name}" "${phone}" email filetype:pdf`]:[]),
+      ...(state==="FL"&&person?[
+        `site:floridapublicnotices.com "${person}" email`,
+        `"${person}" Florida "Conflict Attorney" email filetype:pdf`
+      ]:[]),
+      ...(person?[`"${person}" "notice to creditors" email`]:[])
+    ];
     const bingQueries=[...new Set([
       ...(phone&&name?[`"${name}" "${phone}"`]:[]),
+      ...publicRecordQueries,
       ...(barQueries[0]?[barQueries[0]]:[]),
       ...(person?[`"${person}" ${region} attorney email`.trim()]:[]),
       ...(name?[`"${name}" ${city} ${region} email`.trim()]:[]),
       ...(phone?[`"${phone}" attorney email`]:[]),
-      ...(name?[`"${name}" site:allbiz.com OR site:chamberofcommerce.com email`]:[]),
       ...(barQueries[1]?[barQueries[1]]:[]),
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ].filter(Boolean))];
