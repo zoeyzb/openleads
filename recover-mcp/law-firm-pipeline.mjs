@@ -16,7 +16,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v36-bounded-recovery";
+const EMAIL_METHOD_VERSION="email-v37-dual-search-recovery";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const MX_CACHE=new Map();
@@ -975,7 +975,11 @@ async function duckFallback(lead,key=""){
   const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
   const shape=lawFirmNameShape(lead);
-  const prioritizeSize=existingEmails.length>0||shape==="multi"||shape==="firm"||HISTORICAL_QUALIFIED_KEYS.has(key);
+  // Email is the first money gate. Firm-shaped names used to prioritize size
+  // before contact discovery, starving the first search waves of email queries.
+  // Only switch to size-first after an email exists or in the dedicated
+  // post-email headcount conversion pass.
+  const prioritizeSize=existingEmails.length>0||lead.conversion_headcount_priority===true;
   const queries=[...new Set(prioritizeSize
     ? [...headcountQueries,...attorneyQueries.slice(0,2),...baseQueries,...attorneyQueries.slice(2)]
     : [...attorneyQueries,...baseQueries,...headcountQueries])];
@@ -1025,8 +1029,9 @@ async function duckFallback(lead,key=""){
     }catch{}
   }
 
-  // Two fast search waves. Run searches in parallel, then fetch the best unique pages in parallel.
-  const waves=[queries.slice(0,4),queries.slice(4,8)];
+  // Three bounded search waves. Email-first prospects get enough room to reach
+  // public-record/contact queries; post-email conversion prospects stay size-first.
+  const waves=[queries.slice(0,4),queries.slice(4,8),queries.slice(8,12)];
   for(const wave of waves){
     if(!wave.length||(emails.length&&attorneyCount>=2&&attorneyCount<=10))break;
     const searchResults=await Promise.allSettled(wave.map(async (q,searchIndex)=>{
@@ -1497,20 +1502,34 @@ async function enrichLead(key,lead){
       ...(barQueries[0]?[barQueries[0]]:[]),
       ...(person?[`"${person}" ${region} attorney email`.trim()]:[]),
       ...(name?[`"${name}" ${city} ${region} email`.trim()]:[]),
+      ...(name?[`"${name}" ${city} ${region} contact email`.trim()]:[]),
+      ...(name?[`"${name}" ${region} "E-mail"`.trim()]:[]),
       ...(phone?[`"${phone}" attorney email`]:[]),
+      ...(phone&&name?[`"${name}" "${phone}" "Email"`]:[]),
       ...(barQueries[1]?[barQueries[1]]:[]),
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ].filter(Boolean))];
     const useDeepIdentity=false;
     const preferDuck=highValueLawResearchLead(lead);
-    const [bingResult,zeroResult]=await Promise.allSettled([
+    // High-value 2-10 candidates must not choose one search engine over the other.
+    // Run Bing + Duck concurrently so one sparse/blocked index cannot zero out
+    // contact discovery for the most promising cohort.
+    const [bingResult,duckResult,zeroResult]=await Promise.allSettled([
+      bingFallback(
+        lead,
+        bingQueries,
+        preferDuck?12:(emailRecoveryPriority(lead)>=5?10:8),
+        key,
+        [],
+        preferDuck?4:2
+      ),
       preferDuck
-        ? Promise.resolve({emails:[],text:"",source:"",attorneyCount:0,attorneyCountSource:"",personalFact:"",personalFactSource:""})
-        : bingFallback(lead,bingQueries,emailRecoveryPriority(lead)>=5?10:8,key),
+        ? duckFallback({...lead,website:""},key)
+        : Promise.resolve({emails:[],text:"",source:"",attorneyCount:0,attorneyCountSource:"",personalFact:"",personalFactSource:""}),
       useDeepIdentity?zeroCostEmailFallback(lead):Promise.resolve({emails:[],source:"",name_variant:""})
     ]);
-    if(preferDuck){
-      const targetedDuck=await duckFallback({...lead,website:""},key);
+    if(preferDuck&&duckResult.status==="fulfilled"){
+      const targetedDuck=duckResult.value;
       emails.push(...targetedDuck.emails);
       combined+=" "+targetedDuck.text;
       if(targetedDuck.source)source=targetedDuck.source;
