@@ -78,7 +78,8 @@ async function collectRows(redis){
         .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
       const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
       const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
-      if(!emails.length||!sourceVerified||attorneyCount<2||attorneyCount>10)continue;
+      const sizeEvidenceVerified=lead.attorney_count_evidence_verified===true;
+      if(!emails.length||!sourceVerified||!sizeEvidenceVerified||attorneyCount<2||attorneyCount>10)continue;
 
       const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const practiceKeys=[...new Set([
