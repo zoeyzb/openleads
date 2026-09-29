@@ -121,6 +121,63 @@ async function collectRows(redis){
   return out;
 }
 
+async function collectVerifiedEmailCandidateRows(redis){
+  const out=[];
+  const candidateKeys=await redis.sMembers("recover:law-firm:email-candidates:v1");
+  for(let offset=0;offset<candidateKeys.length;offset+=250){
+    const keys=candidateKeys.slice(offset,offset+250);
+    const values=await redis.hmGet("recover:leadstore:qualified",keys);
+    for(let i=0;i<keys.length;i++){
+      if(!values[i])continue;
+      let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
+      const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
+      if(!isLaw)continue;
+      const website=clean(lead.website||lead.website_url);
+      if(/^https?:\/\//i.test(website))continue;
+      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+        .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
+        .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
+      const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
+      if(!emails.length||!sourceVerified)continue;
+
+      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+      const sizeEvidenceVerified=lead.attorney_count_evidence_verified===true;
+      const sizeReady=sizeEvidenceVerified&&attorneyCount>=2&&attorneyCount<=10;
+      const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
+      const practiceKeys=[...new Set([
+        ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
+        ...lawFirmPracticeKeys(evidence),
+        ...(clean(lead.practice_focus)?[clean(lead.practice_focus)]:[])
+      ])].filter(k=>LAW_PRACTICES.some(p=>p.key===k));
+      const type=typeLabel(practiceKeys,evidence);
+      const name=clean(lead.name||lead.title);
+      const {city,state}=parseLocation(lead);
+      const rating=Number(lead.review_rating||lead.rating||0);
+      const reviews=Number(lead.review_count||lead.reviews||0);
+      const source=clean(lead.law_email_source||lead.email_source||lead.email_evidence_url||lead.personalization_source||lead.google_maps_url||lead.maps_url);
+      const personal=clean(lead.personalization_fact);
+      const contextType=type==="Needs Classification"?"law":(type||"law");
+      const context=city?`${contextType} firms in ${city}`:`${contextType} firms`;
+      const opener=`I found ${name} while looking at ${context}, but I couldn't find a firm website, so I wanted to reach out.`;
+      const status=sizeReady?"Ready":"Needs Size Proof";
+      out.push({
+        priority:Number(lead.lead_priority_score||0)||0,
+        email:emails[0]||"",
+        row:[type,name,emails[0]||"",clean(lead.phone),city,state,personal,source,opener,
+          sizeEvidenceVerified?attorneyCount:"",
+          clean(lead.firm_size_tier)||(sizeEvidenceVerified?String(attorneyCount):"Unknown"),
+          rating||"",reviews||"",clean(lead.google_maps_url||lead.maps_url),
+          Number(lead.lead_priority_score||0)||"",status]
+      });
+    }
+  }
+  out.sort((a,b)=>{
+    const ar=a.row[15]==="Ready"?0:1, br=b.row[15]==="Ready"?0:1;
+    return ar-br||b.priority-a.priority||String(a.row[1]).localeCompare(String(b.row[1]));
+  });
+  return out;
+}
+
 async function collectWebsiteRefreshRows(redis){
   const out=[];
   const readyKeys=await redis.sMembers("recover:law-firm:website-refresh-ready:v1");
@@ -273,6 +330,18 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       const redis=await getRedis();
       const leads=await collectRows(redis);
       for(const item of leads){if(statuses.has(item.email))item.row[15]=statuses.get(item.email);}
+
+      // Keep source-verified no-website email inventory visible even while
+      // attorney-count evidence is still pending. This tab is research inventory,
+      // not the strict send-ready qualification list.
+      const candidateTitle="Verified Email Candidates";
+      const candidateSheetId=await ensureAdditionalSheet(candidateTitle);
+      const candidateStatuses=await previousStatusesFor(candidateTitle);
+      const emailCandidates=await collectVerifiedEmailCandidateRows(redis);
+      for(const item of emailCandidates){
+        if(candidateStatuses.has(item.email)&&item.row[15]!=="Ready")item.row[15]=candidateStatuses.get(item.email);
+      }
+      await writeRowsToTab(candidateTitle,candidateSheetId,emailCandidates);
       const headers=["Type","Firm","Email","Phone","City","State","Personal Angle","Source","Opener","Attorneys","Firm Size","Rating","Reviews","Maps","Priority","Status"];
       const values=[headers,...leads.map(x=>x.row)];
       const endRow=Math.max(2,values.length),rowCount=Math.max(10,endRow+1);
@@ -292,7 +361,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
         {repeatCell:{range:{sheetId,startRowIndex:1,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:16},cell:{userEnteredFormat:{verticalAlignment:"MIDDLE",wrapStrategy:"CLIP",textFormat:{fontSize:9}}},fields:"userEnteredFormat(verticalAlignment,wrapStrategy,textFormat.fontSize)"}}
       );
       await request(":batchUpdate",{method:"POST",body:{requests}});
-      console.log(JSON.stringify({event:"law_sheet_sync",rows:leads.length,spreadsheetId,tabName}));
+      console.log(JSON.stringify({event:"law_sheet_sync",rows:leads.length,emailCandidateRows:emailCandidates.length,spreadsheetId,tabName,candidateTitle}));
 
       // Website-refresh inventory is intentionally excluded from this campaign.
     }catch(error){console.error("law_sheet_sync_error",error?.message||error);}
