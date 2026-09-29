@@ -62,13 +62,9 @@ function typeLabel(keys=[],evidence=""){
 }
 async function collectRows(redis){
   const out=[];
-  const [readyKeys,candidateKeys]=await Promise.all([
-    redis.sMembers("recover:law-firm:qualified:v3"),
-    redis.sMembers("recover:law-firm:email-candidates:v1")
-  ]);
-  const allKeys=[...new Set([...readyKeys,...candidateKeys])];
-  for(let offset=0;offset<allKeys.length;offset+=250){
-    const keys=allKeys.slice(offset,offset+250);
+  const readyKeys=await redis.sMembers("recover:law-firm:qualified:v3");
+  for(let offset=0;offset<readyKeys.length;offset+=250){
+    const keys=readyKeys.slice(offset,offset+250);
     const values=await redis.hmGet("recover:leadstore:qualified",keys);
     for(let i=0;i<keys.length;i++){
       if(!values[i])continue;
@@ -81,7 +77,8 @@ async function collectRows(redis){
         .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
         .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
       const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
-      if(!emails.length||!sourceVerified)continue;
+      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+      if(!emails.length||!sourceVerified||attorneyCount<2||attorneyCount>10)continue;
 
       const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const practiceKeys=[...new Set([
@@ -94,8 +91,6 @@ async function collectRows(redis){
       const {city,state}=parseLocation(lead);
       const rating=Number(lead.review_rating||lead.rating||0);
       const reviews=Number(lead.review_count||lead.reviews||0);
-      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
-      const strictReady=attorneyCount>=2&&attorneyCount<=10;
       const quality=clean(lead.personalization_quality).toLowerCase();
       let personal="",source=clean(lead.law_email_source);
       if(clean(lead.personalization_fact)&&quality==="specific"){
@@ -112,12 +107,12 @@ async function collectRows(redis){
         ? `I found ${name} while looking at ${context}. ${personal.replace(/^I noticed\s+/i,"")}. I couldn't find a firm website, so I wanted to reach out.`
         : `I found ${name} while looking at ${context}, but I couldn't find a firm website, so I wanted to reach out.`;
       out.push({
-        priority:(strictReady?1000:0)+(Number(lead.lead_priority_score||0)||0),
+        priority:Number(lead.lead_priority_score||0)||0,
         email:emails[0]||"",
         row:[type,name,emails[0]||"",clean(lead.phone),city,state,personal,source,opener,
-          attorneyCount||"",clean(lead.firm_size_tier)||(attorneyCount?String(attorneyCount):"unknown"),
+          attorneyCount,clean(lead.firm_size_tier)||String(attorneyCount),
           rating||"",reviews||"",clean(lead.google_maps_url||lead.maps_url),
-          Number(lead.lead_priority_score||0)||"",strictReady?"Ready":"Verify Size"]
+          Number(lead.lead_priority_score||0)||"","Ready"]
       });
     }
   }
