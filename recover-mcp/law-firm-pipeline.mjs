@@ -2224,9 +2224,35 @@ function calBarPublishedNameMatchesLead(publishedName="",lead={}){
 async function directOfficialProfileLinks(lead={},people=[]){
   const state=normalizedStateCode(lead);
   if(state==="AK"){
-    // Alaska Bar's public member directory publishes organization, phone and
-    // email together. Contextual extraction still has to match this exact lead.
     return ["https://member.alaskabar.org/cv5/cgi-bin/utilities.dll/customlist?ADDRESSTYPE=Work&CUSTOMERCD=&SQLNAME=GETMEMDIRADDR&wbp=Customer_Address.htm&whp=none&wmt=none&wnr=Customer_Address_None.htm"];
+  }
+  if(state==="FL"){
+    const profiles=[];
+    const names=[...new Set((people||[]).filter(Boolean).slice(0,3))];
+    for(const person of names){
+      const parts=normalizedPersonParts(person);
+      if(parts.length<2)continue;
+      const first=parts[0],last=parts[parts.length-1];
+      try{
+        await redis.hIncrBy(STATS,"direct_floridabar_search_attempt",1);
+        const searchUrl="https://www.floridabar.org/directories/find-mbr/?lName="+encodeURIComponent(last)+"&fName="+encodeURIComponent(first)+"&sdx=N&eligible=N&deceased=N&pageNumber=1&pageSize=10";
+        const page=await fetchText(searchUrl,7000);
+        const html=String(page?.html||"");
+        for(const m of html.matchAll(/href=["']([^"']*\/directories\/find-mbr\/profile\/\?[^"']*num=\d+[^"']*)["']/gi)){
+          try{
+            const href=new URL(String(m[1]||""),searchUrl).href.split("#")[0];
+            if(!profiles.includes(href))profiles.push(href);
+          }catch{}
+        }
+        if(profiles.length){
+          await redis.hIncrBy(STATS,"direct_floridabar_profile_links",profiles.length);
+          break;
+        }
+      }catch{
+        await redis.hIncrBy(STATS,"direct_floridabar_search_error",1);
+      }
+    }
+    return profiles.slice(0,8);
   }
   if(state!=="CA")return [];
   const queries=[...new Set([
