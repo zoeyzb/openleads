@@ -1047,7 +1047,60 @@ function buildServer() {
       const job = JSON.parse(raw);
       const total = await redis.lLen(key);
       const rows = total ? await redis.lRange(key, offset, offset + limit - 1) : [];
-      const leads = rows.map(row => { try { return JSON.parse(row); } catch { return null; } }).filter(Boolean);
+      let leads = rows.map(row => { try { return JSON.parse(row); } catch { return null; } }).filter(Boolean);
+
+      // For law-firm acquisitions, overlay the permanent leadstore record so
+      // callers can see downstream headcount/email verification progress rather
+      // than only the initial Maps-stage snapshot.
+      let law_final_qualified_count=0;
+      let law_verified_2_to_10_count=0;
+      let law_verified_email_count=0;
+      if (String(job.search_profile||"")==="law-firm" && leads.length) {
+        const normalizePhoneLocal=value=>String(value||"").replace(/\D/g,"").slice(-10);
+        const directKeys=leads.map(lead=>{
+          if (lead.place_id) return "place:"+String(lead.place_id).trim();
+          if (lead.cid) return "cid:"+String(lead.cid).trim();
+          if (lead.data_id) return "data:"+String(lead.data_id).trim();
+          return "";
+        });
+        const phones=leads.map(lead=>normalizePhoneLocal(lead.phone||""));
+        const phoneLookups=[...new Set(phones.filter(Boolean))];
+        const phoneIndexValues=phoneLookups.length
+          ? await redis.hmGet("recover:leadstore:phone-index",phoneLookups)
+          : [];
+        const phoneToKey=new Map(phoneLookups.map((phone,i)=>[phone,phoneIndexValues?.[i]||""]));
+        const resolvedKeys=leads.map((lead,i)=>directKeys[i]||phoneToKey.get(phones[i])||"");
+        const uniqueKeys=[...new Set(resolvedKeys.filter(Boolean))];
+        const storeValues=uniqueKeys.length
+          ? await redis.hmGet("recover:leadstore:qualified",uniqueKeys)
+          : [];
+        const store=new Map();
+        uniqueKeys.forEach((key,i)=>{
+          const rawValue=storeValues?.[i];
+          if(!rawValue)return;
+          try{store.set(key,JSON.parse(rawValue));}catch{}
+        });
+        leads=leads.map((lead,i)=>{
+          const enriched=store.get(resolvedKeys[i]);
+          const merged=enriched?{...lead,...enriched}:lead;
+          const count=Number(merged.attorney_count_estimate||0);
+          const sizeVerified=merged.attorney_count_evidence_verified===true && count>=2 && count<=10;
+          const emailVerified=merged.law_email_source_verified===true && Array.isArray(merged.emails) && merged.emails.length>0;
+          const finalQualified=merged.qualified_lead===true && sizeVerified && emailVerified && !String(merged.website||"").trim();
+          if(sizeVerified)law_verified_2_to_10_count++;
+          if(emailVerified)law_verified_email_count++;
+          if(finalQualified)law_final_qualified_count++;
+          return {
+            ...merged,
+            law_pipeline:{
+              attorney_count_verified_2_to_10:sizeVerified,
+              email_source_verified:emailVerified,
+              final_qualified:finalQualified
+            }
+          };
+        });
+      }
+
       return jsonText({
         acquisition_id,
         status:job.status,
@@ -1057,6 +1110,11 @@ function buildServer() {
         limit,
         returned:leads.length,
         next_offset:offset+leads.length<total ? offset+leads.length : null,
+        ...(String(job.search_profile||"")==="law-firm" ? {
+          law_verified_2_to_10_count,
+          law_verified_email_count,
+          law_final_qualified_count
+        } : {}),
         leads
       });
     } catch (e) {
