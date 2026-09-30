@@ -2222,10 +2222,29 @@ async function enrichLead(key,lead){
     return true;
   }
 
-  // Maps already supplied the no-website cohort. Do not spend a full web-search
-  // preflight on every record; it had zero live hits and materially slowed email
-  // discovery. Owned-site checks still run after a real email/source is found.
-  await redis.hIncrBy(STATS,"website_preflight_deferred",1);
+  // Maps can omit a firm's real website. For the active Chicago website-build
+  // campaign, verify the no-owned-website condition before spending headcount
+  // research. This removes false positives such as firms whose site is absent
+  // from the Maps row but discoverable by exact firm identity + phone.
+  if(chicagoHeadcountCampaign){
+    const discoveredSite=await findOwnedWebsitePreflight(lead,key,true);
+    if(discoveredSite){
+      const updated={...lead,website:discoveredSite,website_opportunity:"website_refresh",owned_website_evidence_source:"chicago_preflight"};
+      await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
+      await Promise.all([
+        redis.sRem(READY_SET,key),
+        redis.sRem(EMAIL_CANDIDATE_SET,key),
+        redis.sRem(CHICAGO_PENDING_SET,key)
+      ]);
+      await redis.sAdd(REJECTED_SET,key);
+      await redis.sAdd(ENRICHED_SET,key);
+      await redis.hIncrBy(STATS,"website_preflight_hit",1);
+      console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:0,emailMethod:"none",attorneyCount:null,attorneyCountVerified:false,attorneyCountSource:"",effectiveWebsite:discoveredSite,sizeTier:"unknown",practice:"",painPoint:"Has website",qualified:false,rejectReason:"has_owned_website_chicago_preflight",priority:0,personalizationQuality:"basic",elapsedMs:Date.now()-enrichStartedAt}));
+      return true;
+    }
+  }else{
+    await redis.hIncrBy(STATS,"website_preflight_deferred",1);
+  }
 
   const existingSource=String(lead.law_email_source||lead.email_source||lead.email_evidence_url||"").trim();
   const existingCandidates=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
