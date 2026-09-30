@@ -1021,6 +1021,24 @@ function buildServer() {
         else await redis.lPush(queue,acquisition_id);
       }
 
+      // Older workers could recover a law job into the generic acquisition
+      // queue. Repair that migration mistake from the status path.
+      const lawJob=String(job.search_profile||"")==="law-firm";
+      const queuedAge=Date.now()-Date.parse(job.updated_at||job.created_at||0);
+      if(lawJob && job.status==="queued" && queuedAge>30000 &&
+         ["requeued_after_restart","stale_requeued","queued"].includes(String(job.phase||""))){
+        for(const q of [
+          "recover:acquisition:queue",
+          "recover:acquisition:queue:us-city-priority",
+          "recover:acquisition:queue:ny-priority",
+          "recover:acquisition:queue:law-firm"
+        ]) await redis.lRem(q,0,acquisition_id);
+        await redis.rPush("recover:acquisition:queue:law-firm",acquisition_id);
+        job.phase="law_queue_repaired";
+        job.updated_at=new Date().toISOString();
+        await redis.set(`recover:acq:${acquisition_id}`,JSON.stringify(job),{EX:604800});
+      }
+
       return jsonText({
         acquisition_id,
         status:job.status,
