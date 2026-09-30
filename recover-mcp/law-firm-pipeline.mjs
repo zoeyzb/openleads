@@ -620,11 +620,13 @@ function likelyAttorneyName(lead={}){
     .replace(/\s*[-–—|]\s*(?:owner|attorney|lawyer|partner|principal|founder|manager|member)\s*$/i,"")
     .trim();
   const explicitLooksLikeFirm=/\b(law offices?|law office|law firm|attorneys? at law|legal group|legal services|llc|pllc|p\.?c\.?|llp|apc)\b/i.test(explicit);
-  if(explicitRaw&&explicitLooksLikeFirm)void redis.hIncrBy(STATS,"owner_name_firm_label_bypass",1).catch(()=>{});
-  if(explicit&&!explicitLooksLikeFirm&&explicit.split(/\s+/).length>=2&&explicit.split(/\s+/).length<=5)return explicit;
+  const explicitGenericRole=/^(?:at law|attorney at law|attorney|lawyer|owner|partner|principal|founder|manager|member)$/i.test(explicit);
+  if(explicitRaw&&(explicitLooksLikeFirm||explicitGenericRole))void redis.hIncrBy(STATS,"owner_name_firm_label_bypass",1).catch(()=>{});
+  if(explicit&&!explicitLooksLikeFirm&&!explicitGenericRole&&explicit.split(/\s+/).length>=2&&explicit.split(/\s+/).length<=5)return explicit;
   const raw=String(lead.name||lead.title||"").replace(/\s+/g," ").trim();
   if(!raw)return "";
   const patterns=[
+    /^([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4}),?\s+(?:esq\.?\s*)?attorney\s+at\s+law\b/i,
     /law offices? of\s+([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4})/i,
     /^attorney\s+([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4})/i,
     /^([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4})\s+law offices?\b/i,
@@ -638,7 +640,8 @@ function likelyAttorneyName(lead={}){
     if(m?.[1]){
       const name=String(m[1]).replace(/\b(?:LLC|PLLC|PC|PA|Esq)\.?$/i,"").trim();
       const looksLikeFirm=/\b(law offices?|law office|law firm|attorneys? at law|legal group|legal services|llc|pllc|p\.?c\.?|llp|apc|group|associates)\b/i.test(name);
-      if(!looksLikeFirm&&name.split(/\s+/).length>=2&&name.split(/\s+/).length<=5)return name;
+      const genericRole=/^(?:at law|attorney at law|attorney|lawyer)$/i.test(name);
+      if(!looksLikeFirm&&!genericRole&&name.split(/\s+/).length>=2&&name.split(/\s+/).length<=5)return name;
     }
   }
   return "";
