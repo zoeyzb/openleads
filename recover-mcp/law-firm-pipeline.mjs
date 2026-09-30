@@ -2080,6 +2080,7 @@ function trustedLawSource(url="",lead={}){
   let host="";try{host=new URL(String(url||"")).hostname.toLowerCase().replace(/^www\./,"");}catch{return false;}
   const expected=expectedBarHost(lead);
   if(expected&&(host===expected||host.endsWith("."+expected)))return true;
+  if(normalizedStateCode(lead)==="GA"&&host==="gabar.reliaguide.com")return true;
   return /texasbar\.com|floridabar\.org|calbar\.ca\.gov|nycourts\.gov|iardc\.org|supremecourt|disciplinaryboard|statebar|barassociation/i.test(host)||
     host.endsWith(".gov");
 }
@@ -2087,6 +2088,7 @@ function lawSourceRank(url="",lead={}){
   let host="";try{host=new URL(String(url||"")).hostname.toLowerCase().replace(/^www\./,"");}catch{return 99;}
   const expected=expectedBarHost(lead);
   if(expected&&(host===expected||host.endsWith("."+expected)))return 0;
+  if(normalizedStateCode(lead)==="GA"&&host==="gabar.reliaguide.com")return 1;
   if(trustedLawSource(url,lead))return 1;
   if(/govinfo\.gov|docs\.justia\.com|floridapublicnotices\.com|publicnotices|docketalarm\.com|trellis\.law/i.test(host))return 2;
   if(/justia\.com|lawyers\.com|martindale\.com|findlaw\.com|avvo\.com|superlawyers\.com|attorneydir\.com|lawyer-map\.com/i.test(host))return 3;
@@ -2272,25 +2274,26 @@ async function directOfficialProfileLinks(lead={},people=[]){
     const phoneDigits=String(lead.phone||"").replace(/\D/g,"").slice(-10);
     const phonePretty=phoneDigits.length===10?phoneDigits.slice(0,3)+"-"+phoneDigits.slice(3,6)+"-"+phoneDigits.slice(6):"";
     if(state==="GA"){
-      for(const person of names){
-        const parts=normalizedPersonParts(person);
-        if(parts.length<2)continue;
-        const first=parts[0],last=parts[parts.length-1];
+      const gaQueries=[
+        ...(phonePretty?['site:gabar.reliaguide.com/lawyer "'+phonePretty+'"']:[]),
+        ...names.map(n=>'site:gabar.reliaguide.com/lawyer "'+n+'"'),
+        ...(firm?['site:gabar.reliaguide.com/lawyer "'+firm+'"']:[])
+      ].slice(0,3);
+      for(const q of gaQueries){
         try{
           await redis.hIncrBy(STATS,"direct_gabar_search_attempt",1);
-          const directUrl="https://www.gabar.org/member-directory/?firstName="+encodeURIComponent(first)+"&lastName="+encodeURIComponent(last);
-          const page=await fetchText(directUrl,6000);
-          const html=String(page?.html||"");
-          const candidates=[...new Set(Array.from(html.matchAll(/href=["\']([^"\']*(?:member-directory|profile)[^"\']*)["\']/gi)).map(m=>{
-            try{return new URL(String(m[1]||""),directUrl).href;}catch{return "";}
-          }).filter(Boolean))].filter(u=>{
-            const h=hostOf(u);
-            return h&&(h==="gabar.org"||h.endsWith(".gabar.org"));
-          }).slice(0,8);
-          if(candidates.length){
-            out.push(...candidates);
-            await redis.hIncrBy(STATS,"direct_gabar_profile_links",candidates.length);
-            return [...new Set(out)].slice(0,8);
+          const page=await fetchText("https://www.bing.com/search?q="+encodeURIComponent(q),5000);
+          const links=[...new Set(bingResultLinks(String(page?.html||"")))]
+            .filter(u=>{
+              try{
+                const x=new URL(u);
+                return x.hostname.toLowerCase()==="gabar.reliaguide.com"&&/^\/lawyer\/[^/]+/i.test(x.pathname)&&!\/lawyer\/search/i.test(x.pathname);
+              }catch{return false;}
+            })
+            .slice(0,6);
+          if(links.length){
+            await redis.hIncrBy(STATS,"direct_gabar_profile_links",links.length);
+            return links;
           }
         }catch{
           await redis.hIncrBy(STATS,"direct_gabar_search_error",1);
@@ -2308,7 +2311,7 @@ async function directOfficialProfileLinks(lead={},people=[]){
             if(!h||!(h===host||h.endsWith("."+host)))return false;
             if(state==="TX")return /Template\.cfm\?[^#]*ContactID=\d+/i.test(u);
             if(state==="IL")return /lawyer/i.test(u);
-            if(state==="GA")return /member-directory|member|profile/i.test(u);
+            if(state==="GA")return /\/member-directory\/?\?[^#]*\bid=[A-Za-z0-9]+/i.test(u);
             if(state==="NC")return /verification|member|search/i.test(u);
             if(state==="WA")return /legal-directory|lawyer|member|profile|search/i.test(u);
             if(state==="FL")return /\/directories\/find-mbr\/profile\/\?[^#]*num=\d+/i.test(u);
