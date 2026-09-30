@@ -1324,6 +1324,85 @@ async function directDirectorySizeEvidence(lead={},key=""){
   return {count:0,source:"",website:""};
 }
 
+async function phoneRosterHeadcountEvidence(lead={},key=""){
+  const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+  if(phone.length!==10)return {count:0,source:""};
+  const phonePretty=phone.slice(0,3)+"-"+phone.slice(3,6)+"-"+phone.slice(6);
+  const city=normalize(normalizedLeadCity(lead));
+  const state=normalize(normalizedStateCode(lead)||lead.region||lead.state||"");
+  const firmTokens=leadNameTokens(lead);
+  const hosts=["lawyers.com","martindale.com","findlaw.com","justia.com"];
+
+  for(const host of hosts){
+    const q='site:'+host+' "'+phonePretty+'" attorney';
+    let links=[];
+    try{
+      const [bingPage,duckPage]=await Promise.allSettled([
+        fetchText("https://www.bing.com/search?q="+encodeURIComponent(q),5000),
+        fetchText("https://html.duckduckgo.com/html/?q="+encodeURIComponent(q),5000)
+      ]);
+      const bh=bingPage.status==="fulfilled"?String(bingPage.value?.html||""):"";
+      const dh=duckPage.status==="fulfilled"?String(duckPage.value?.html||""):"";
+      links=[...new Set([
+        ...bingResultLinks(bh),
+        ...duckResultLinks(dh),
+        ...markdownResultLinks(bh),
+        ...markdownResultLinks(dh)
+      ])].filter(u=>{
+        const h=hostOf(u);
+        if(!(h===host||h.endsWith("."+host)))return false;
+        return /attorney|lawyer|people|profile|firm/i.test(String(u));
+      }).slice(0,12);
+    }catch{}
+    if(!links.length)continue;
+
+    const pages=await Promise.allSettled(links.map(async url=>{
+      try{
+        const page=await fetchResearchPage(url,{...lead,conversion_headcount_priority:true},key,true);
+        if(!page?.html)return null;
+        const source=String(page.final_url||url);
+        const text=stripHtml(page.html).slice(0,60000);
+        const digits=String(text).replace(/\D/g,"");
+        if(!digits.includes(phone))return null;
+        const norm=normalize(text);
+        const locationMatch=(city&&norm.includes(city))||(state&&norm.includes(state));
+        const firmMatch=firmTokens.length>0&&firmTokens.filter(t=>norm.includes(t)).length>=Math.min(2,firmTokens.length);
+        if(!locationMatch&&!firmMatch)return null;
+
+        let identity="";
+        const h1=String(page.html).match(/<h1\b[^>]*>([\s\S]{1,220}?)<\/h1>/i);
+        const title=String(page.html).match(/<title\b[^>]*>([\s\S]{1,220}?)<\/title>/i);
+        identity=stripHtml(String(h1?.[1]||title?.[1]||""))
+          .replace(/\b(?:attorney|lawyer|profile|law firm|law office|law offices|find a lawyer)\b/ig," ")
+          .replace(/\s+/g," ").trim();
+        const parts=identity.split(/\s+/).filter(Boolean);
+        if(parts.length<2||parts.length>8){
+          try{
+            const u=new URL(source);
+            identity=decodeURIComponent(u.pathname.split("/").filter(Boolean).pop()||source)
+              .replace(/[-_]+/g," ").replace(/\s+/g," ").trim();
+          }catch{identity=source;}
+        }
+        return {source,identity:normalize(identity)||normalize(source)};
+      }catch{return null;}
+    }));
+
+    const matched=pages.filter(x=>x.status==="fulfilled"&&x.value).map(x=>x.value);
+    const unique=[...new Map(matched.map(x=>[x.identity,x])).values()];
+    if(unique.length){
+      const count=unique.length>10?11:unique.length;
+      await redis.hIncrBy(STATS,"phone_roster_headcount_attempt",1);
+      if(count>=2){
+        await redis.hIncrBy(STATS,"phone_roster_headcount_hit",1);
+        console.log(JSON.stringify({event:"law_phone_roster_headcount_hit",key,name:String(lead.name||lead.title||""),count,host,phone:phonePretty,sources:unique.slice(0,10).map(x=>x.source)}));
+        return {count,source:unique[0].source};
+      }
+    }
+  }
+  await redis.hIncrBy(STATS,"phone_roster_headcount_miss",1);
+  return {count:0,source:""};
+}
+
 async function directLawyerComSizeEvidence(lead={},key=""){
   const urls=lawyerComCandidateFirmUrls(lead);
   if(!urls.length)return {count:0,source:""};
@@ -2933,6 +3012,14 @@ async function enrichLead(key,lead){
       attorneyCountSource=directorySize.source;
       await redis.hIncrBy(STATS,"post_email_headcount_verified",1);
       await redis.hIncrBy(STATS,"post_email_headcount_direct_directory",1);
+    }
+    const phoneRoster=!attorneyCountVerified?await phoneRosterHeadcountEvidence(lead,key):{count:0,source:""};
+    if(phoneRoster.count>0){
+      attorneyCount=phoneRoster.count;
+      attorneyCountVerified=true;
+      attorneyCountSource=phoneRoster.source;
+      await redis.hIncrBy(STATS,"post_email_headcount_verified",1);
+      await redis.hIncrBy(STATS,"post_email_headcount_phone_roster",1);
     }
     const directSize=!attorneyCountVerified?await directLawyerComSizeEvidence(lead,key):{count:0,source:""};
     if(directSize.count>0){
