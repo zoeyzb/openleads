@@ -1548,7 +1548,10 @@ async function duckFallback(lead,key=""){
   // before contact discovery, starving the first search waves of email queries.
   // Only switch to size-first after an email exists or in the dedicated
   // post-email headcount conversion pass.
-  const prioritizeSize=existingEmails.length>0||lead.conversion_headcount_priority===true;
+  const chicagoWebsiteBuild=/\bchicago\b/i.test(String(lead.acquisition_location||lead.target_area||"")) &&
+    !String(lead.website||"").trim() &&
+    (shape==="multi"||shape==="firm");
+  const prioritizeSize=existingEmails.length>0||lead.conversion_headcount_priority===true||chicagoWebsiteBuild;
   const queries=[...new Set(prioritizeSize
     ? [...headcountQueries,...attorneyQueries.slice(0,2),...baseQueries,...attorneyQueries.slice(2)]
     : [...attorneyQueries,...baseQueries,...headcountQueries])];
@@ -1612,7 +1615,9 @@ async function duckFallback(lead,key=""){
 
   // Three bounded search waves. Email-first prospects get enough room to reach
   // public-record/contact queries; post-email conversion prospects stay size-first.
-  const waves=lead.conversion_headcount_priority===true?[queries.slice(0,4),queries.slice(4,8),queries.slice(8,12)]:[queries.slice(0,4)];
+  const waves=(lead.conversion_headcount_priority===true||chicagoWebsiteBuild)
+    ? [queries.slice(0,4),queries.slice(4,8),queries.slice(8,12)]
+    : [queries.slice(0,4)];
   for(const wave of waves){
     if(!wave.length||(emails.length&&attorneyCount>=2&&attorneyCount<=10))break;
     const searchResults=await Promise.allSettled(wave.map(async (q,searchIndex)=>{
@@ -1650,7 +1655,7 @@ async function duckFallback(lead,key=""){
     }
     if(emails.length&&attorneyCount>=2&&attorneyCount<=10)break;
 
-    const deepPageLimit=lead.conversion_headcount_priority===true?3:0;
+    const deepPageLimit=(lead.conversion_headcount_priority===true||chicagoWebsiteBuild)?3:0;
     const pages=await Promise.allSettled(pageCandidates.slice(0,3).map((target,pageIndex)=>fetchResearchPage(target,lead,key,pageIndex<deepPageLimit)));
     for(let i=0;i<pages.length;i++){
       const item=pages[i];
