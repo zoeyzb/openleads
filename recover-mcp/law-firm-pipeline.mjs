@@ -2268,6 +2268,32 @@ async function directOfficialProfileLinks(lead={},people=[]){
     const out=[];
     const names=[...new Set((people||[]).filter(Boolean).slice(0,2))];
     const firm=String(lead.name||lead.title||"").replace(/["']/g," ").replace(/\s+/g," ").trim();
+    if(state==="GA"){
+      for(const person of names){
+        const parts=normalizedPersonParts(person);
+        if(parts.length<2)continue;
+        const first=parts[0],last=parts[parts.length-1];
+        try{
+          await redis.hIncrBy(STATS,"direct_gabar_search_attempt",1);
+          const directUrl="https://www.gabar.org/member-directory/?firstName="+encodeURIComponent(first)+"&lastName="+encodeURIComponent(last);
+          const page=await fetchText(directUrl,6000);
+          const html=String(page?.html||"");
+          const candidates=[...new Set(Array.from(html.matchAll(/href=["\']([^"\']*(?:member-directory|profile)[^"\']*)["\']/gi)).map(m=>{
+            try{return new URL(String(m[1]||""),directUrl).href;}catch{return "";}
+          }).filter(Boolean))].filter(u=>{
+            const h=hostOf(u);
+            return h&&(h==="gabar.org"||h.endsWith(".gabar.org"));
+          }).slice(0,8);
+          if(candidates.length){
+            out.push(...candidates);
+            await redis.hIncrBy(STATS,"direct_gabar_profile_links",candidates.length);
+            return [...new Set(out)].slice(0,8);
+          }
+        }catch{
+          await redis.hIncrBy(STATS,"direct_gabar_search_error",1);
+        }
+      }
+    }
     const queries=[...names.map(n=>"site:"+host+" \""+n+"\""),...(firm?["site:"+host+" \""+firm+"\""]:[])].slice(0,2);
     for(const q of queries){
       try{
@@ -2277,7 +2303,7 @@ async function directOfficialProfileLinks(lead={},people=[]){
           .filter(u=>{
             const h=hostOf(u);
             if(!h||!(h===host||h.endsWith("."+host)))return false;
-            if(state==="TX")return /\/attorneys\/member\.cfm\?id=\d+|ContactID=\d+/i.test(u);
+            if(state==="TX")return /Template\.cfm\?[^#]*ContactID=\d+/i.test(u);
             if(state==="IL")return /lawyer/i.test(u);
             if(state==="GA")return /member-directory|member|profile/i.test(u);
             if(state==="NC")return /verification|member|search/i.test(u);
