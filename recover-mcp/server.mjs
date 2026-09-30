@@ -1039,6 +1039,26 @@ function buildServer() {
         await redis.set(`recover:acq:${acquisition_id}`,JSON.stringify(job),{EX:604800});
       }
 
+      // A prior queue-routing bug could park law jobs in the generic paused
+      // queues. Unpark those jobs back into the dedicated law lane.
+      if(lawJob && job.status==="parked" && String(job.phase||"")==="parked_queue_preserved"){
+        for(const q of [
+          "recover:acquisition:queue:paused-national",
+          "recover:acquisition:queue:paused-ny-surplus",
+          "recover:acquisition:queue:paused-legacy-national-v1",
+          "recover:acquisition:queue",
+          "recover:acquisition:queue:us-city-priority",
+          "recover:acquisition:queue:ny-priority",
+          "recover:acquisition:queue:law-firm"
+        ]) await redis.lRem(q,0,acquisition_id);
+        job.status="queued";
+        job.phase="law_queue_unparked";
+        job.error=null;
+        job.updated_at=new Date().toISOString();
+        await redis.set(`recover:acq:${acquisition_id}`,JSON.stringify(job),{EX:604800});
+        await redis.rPush("recover:acquisition:queue:law-firm",acquisition_id);
+      }
+
       return jsonText({
         acquisition_id,
         status:job.status,
