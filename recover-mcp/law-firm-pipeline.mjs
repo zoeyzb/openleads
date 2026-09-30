@@ -2735,7 +2735,8 @@ async function enrichLead(key,lead){
     ? `Saw ${lead.name||"your firm"} while looking at ${targetLabel} firms${city?` in ${city}`:""}.${p.fact?` ${p.fact}.`:""} Couldn't find a firm website, so I reached out.`
     : "";
 
-  const enriched={...lead,website:effectiveWebsite,emails,attorney_count_estimate:attorneyCount||null,attorney_count_evidence_verified:attorneyCountVerified,attorney_count_source:attorneyCountSource||"",preferred_firm_size:preferredSize,
+  const recoveryAttempts=Math.max(0,Number(lead.email_recovery_attempts||0));
+  const enriched={...lead,email_recovery_attempts:recoveryAttempts,website:effectiveWebsite,emails,attorney_count_estimate:attorneyCount||null,attorney_count_evidence_verified:attorneyCountVerified,attorney_count_source:attorneyCountSource||"",preferred_firm_size:preferredSize,
     firm_size_tier:sizeTier,practice_areas:practices,practice_keys:practiceKeys,
     lead_type:practices.join(" + "),personalization_fact:p.fact,personalization_source:p.source,
     personalization_quality:p.quality,website_opportunity:"website_build",website_audit:null,primary_pain_point:painPoint,
@@ -2748,6 +2749,22 @@ async function enrichLead(key,lead){
     law_email_mailbox_verified:false,
     law_bar_domain:stateBarDomain(lead),
     law_firm_enriched_at:new Date().toISOString()};
+
+  // No-email is not terminal anymore. Email discovery is the product gate:
+  // give promising no-website law firms multiple research passes before rejection.
+  if((!emails.length||!emailSourceVerified)&&recoveryAttempts<2){
+    const recoverable={...enriched,email_recovery_attempts:recoveryAttempts+1,email_recovery_last_at:new Date().toISOString(),law_email_validation:"recovery_pending"};
+    await redis.hSet(LEAD_HASH,key,JSON.stringify(recoverable));
+    await Promise.all([
+      redis.sRem(READY_SET,key),
+      redis.sRem(REJECTED_SET,key),
+      redis.sRem(ENRICHED_SET,key),
+      redis.sAdd(RECOVERABLE_PENDING_SET,key)
+    ]);
+    await redis.hIncrBy(STATS,"email_recovery_requeued",1);
+    console.log(JSON.stringify({event:"law_email_recovery_requeued",key,name:String(lead.name||lead.title||""),attempt:recoveryAttempts+1}));
+    return true;
+  }
 
   await redis.hSet(LEAD_HASH,key,JSON.stringify(enriched));
   await redis.sAdd(ENRICHED_SET,key);
