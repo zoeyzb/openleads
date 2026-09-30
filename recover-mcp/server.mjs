@@ -1,5 +1,6 @@
 // deployment trigger: qualified law sheet cleanup 2026-09-28
 import { createServer as createHttpServer } from "node:http";
+import { Readable } from "node:stream";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createClient } from "redis";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
@@ -29,6 +30,8 @@ const CRAWL4AI_BASE_URL = (process.env.CRAWL4AI_BASE_URL || "").replace(/\/$/, "
 const CRAWL4AI_API_TOKEN = process.env.CRAWL4AI_API_TOKEN || "";
 const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || "";
 const MCP_AUTH_TOKEN_SECONDARY = process.env.MCP_AUTH_TOKEN_SECONDARY || "";
+const UPSTREAM_MCP_URL = (process.env.UPSTREAM_MCP_URL || "").replace(/\/$/, "");
+const UPSTREAM_MCP_TOKEN = process.env.UPSTREAM_MCP_TOKEN || "";
 const OAUTH_ISSUER = (process.env.OAUTH_ISSUER || "").replace(/\/$/, "");
 const OAUTH_CLIENT_ID = process.env.OAUTH_CLIENT_ID || "";
 const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET || "";
@@ -91,6 +94,41 @@ function broadcastInboxEvent(event) {
 
 
 const oauthEnabled = Boolean(OAUTH_ISSUER && OAUTH_CLIENT_ID && OAUTH_CLIENT_SECRET && OAUTH_SIGNING_SECRET && OAUTH_ACCESS_KEY);
+
+async function proxyUpstreamMcpRequest(req, res) {
+  if (!UPSTREAM_MCP_URL) throw new Error("UPSTREAM_MCP_URL is not configured");
+  const method = String(req.method || "POST").toUpperCase();
+  const headers = {};
+  for (const name of ["accept","content-type","mcp-session-id","mcp-protocol-version","last-event-id"]) {
+    const value = req.headers[name];
+    if (value) headers[name] = value;
+  }
+  if (UPSTREAM_MCP_TOKEN) headers.authorization = `Bearer ${UPSTREAM_MCP_TOKEN}`;
+
+  let body;
+  if (method !== "GET" && method !== "HEAD") {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    body = Buffer.concat(chunks);
+  }
+
+  const upstream = await fetch(UPSTREAM_MCP_URL, {
+    method,
+    headers,
+    ...(body !== undefined ? { body } : {})
+  });
+
+  for (const name of ["content-type","cache-control","mcp-session-id"]) {
+    const value = upstream.headers.get(name);
+    if (value) res.setHeader(name, value);
+  }
+  res.statusCode = upstream.status;
+  if (!upstream.body) {
+    res.end();
+    return;
+  }
+  Readable.fromWeb(upstream.body).pipe(res);
+}
 
 function secureEqual(left, right) {
   const a = Buffer.from(String(left));
@@ -3973,6 +4011,14 @@ const httpServer = createHttpServer((req, res) => {
         res.end(JSON.stringify({error:"unauthorized"}));
         return;
       }
+    }
+    if (UPSTREAM_MCP_URL) {
+      void proxyUpstreamMcpRequest(req, res).catch(error => {
+        console.error("Upstream MCP proxy error", error);
+        if (!res.headersSent) res.writeHead(502, {"content-type":"application/json"});
+        if (!res.writableEnded) res.end(JSON.stringify({error:"upstream_mcp_error",message:String(error?.message||error)}));
+      });
+      return;
     }
     void nodeHandler(req, res);
     return;
