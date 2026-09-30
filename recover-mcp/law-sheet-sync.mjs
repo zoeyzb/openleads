@@ -132,7 +132,15 @@ async function collectRows(redis){
 async function collectVerifiedEmailCandidateRows(redis){
   const out=[];
   const drops={missingRecord:0,notLaw:0,hasWebsite:0,noExportableEmail:0,sourceUnverified:0,sourceOwnedDomain:0};
-  const candidateKeys=await redis.sMembers("recover:law-firm:email-candidates:v1");
+  // Email discovery is the first gate. Do not let missing attorney-count proof
+  // hide source-verified no-website law-firm emails from the research sheet.
+  // Union the dedicated email-candidate set with the full law-qualified pool,
+  // then keep the strict 2–10 attorney check only for Ready/send-ready status.
+  const [emailCandidateKeys, lawQualifiedKeys]=await Promise.all([
+    redis.sMembers("recover:law-firm:email-candidates:v1"),
+    redis.sMembers("recover:law-firm:qualified:v3")
+  ]);
+  const candidateKeys=[...new Set([...emailCandidateKeys,...lawQualifiedKeys])];
   for(let offset=0;offset<candidateKeys.length;offset+=250){
     const keys=candidateKeys.slice(offset,offset+250);
     const values=await redis.hmGet("recover:leadstore:qualified",keys);
