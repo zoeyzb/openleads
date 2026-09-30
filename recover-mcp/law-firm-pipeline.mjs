@@ -1109,6 +1109,7 @@ function attorneyEstimate(html="",text=""){
     ...plain.matchAll(/\b(?:size|team size)\s*[:#-]\s*(\d{1,3})\s+(?:attorneys|lawyers)\b/gi),
     ...plain.matchAll(/\b(?:firm|office)\s+(?:has|employs|includes|consists of|is made up of)\s+(\d{1,3})\s+(?:attorneys|lawyers)\b/gi),
     ...plain.matchAll(/\b(?:there\s+(?:is|are)|this\s+(?:office|firm)\s+has)\s+(\d{1,3})\s+(?:attorneys?|lawyers?)\b/gi),
+    ...plain.matchAll(/\bhas\s+(\d{1,3})\s+(?:attorneys?|lawyers?)\s+(?:at\s+this\s+(?:location|office)|in\s+this\s+(?:firm|office))\b/gi),
     ...plain.matchAll(/\b(?:law\s+office|law\s+firm|office|firm)\s+with\s+(\d{1,3})\s+(?:attorneys?|lawyers?)\b/gi),
     ...plain.matchAll(/\b(\d{1,3})\s+(?:attorneys|lawyers)\s+(?:at|with|in)\s+(?:the\s+|this\s+)?(?:firm|office)\b/gi)
   ].map(m=>Number(m[1])).filter(n=>n>0&&n<=500);
@@ -1151,6 +1152,50 @@ function lawyerComCandidateFirmUrls(lead={}){
     `https://www.lawyer.com/firm/law-office-of-${stripped}${state?"-"+state:""}.html`
   ])];
 }
+async function directDirectorySizeEvidence(lead={},key=""){
+  const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
+  if(!name)return {count:0,source:"",website:""};
+  const queries=[
+    `site:lawyers.com "${name}"`,
+    `site:martindale.com "${name}"`
+  ];
+  const resultPages=[];
+  for(const query of queries){
+    try{
+      const [htmlResult,rssResult]=await Promise.allSettled([
+        fetchText("https://www.bing.com/search?q="+encodeURIComponent(query),4500),
+        fetchText("https://www.bing.com/search?format=rss&q="+encodeURIComponent(query),4500)
+      ]);
+      const html=htmlResult.status==="fulfilled"?String(htmlResult.value?.html||""):"";
+      const rss=rssResult.status==="fulfilled"?String(rssResult.value?.html||""):"";
+      for(const url of [...new Set([...bingResultLinks(html),...bingRssResultLinks(rss)])]){
+        const host=hostOf(url);
+        if(!/(^|\.)(?:lawyers|martindale)\.com$/i.test(host))continue;
+        if(!resultPages.includes(url))resultPages.push(url);
+        if(resultPages.length>=8)break;
+      }
+    }catch{}
+  }
+  for(const url of resultPages){
+    try{
+      const page=await fetchText(url,5500);
+      if(!page?.html)continue;
+      const source=String(page.final_url||url);
+      const text=stripHtml(page.html).slice(0,70000);
+      if(!pageMatchesLead(text,lead,source))continue;
+      const count=attorneyEstimate(page.html,text);
+      const website=outboundFirmWebsiteFromDirectory(page.html,lead);
+      if(count>0){
+        await redis.hIncrBy(STATS,"direct_directory_size_hit",1);
+        console.log(JSON.stringify({event:"law_direct_directory_size_hit",key,name,count,source,website:website||""}));
+        return {count,source,website};
+      }
+    }catch{}
+  }
+  await redis.hIncrBy(STATS,"direct_directory_size_miss",1);
+  return {count:0,source:"",website:""};
+}
+
 async function directLawyerComSizeEvidence(lead={},key=""){
   const urls=lawyerComCandidateFirmUrls(lead);
   if(!urls.length)return {count:0,source:""};
@@ -2545,7 +2590,28 @@ async function enrichLead(key,lead){
   // spend extra research only on proving firm size. This is intentionally
   // conditional so we do not multiply search cost across the full backlog.
   if((emailSourceVerified||chicagoHeadcountCampaign)&&!attorneyCountVerified){
-    const directSize=await directLawyerComSizeEvidence(lead,key);
+    const directorySize=await directDirectorySizeEvidence(lead,key);
+    if(directorySize.website&&!website){
+      const updated={...lead,website:directorySize.website,website_opportunity:"website_refresh",owned_website_evidence_source:directorySize.source||"directory"};
+      await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
+      await Promise.all([
+        redis.sRem(READY_SET,key),
+        redis.sRem(EMAIL_CANDIDATE_SET,key),
+        redis.sRem(CHICAGO_PENDING_SET,key)
+      ]);
+      await redis.sAdd(REJECTED_SET,key);
+      await redis.sAdd(ENRICHED_SET,key);
+      console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:0,emailMethod:"none",attorneyCount:directorySize.count||null,attorneyCountVerified:directorySize.count>0,attorneyCountSource:directorySize.source||"",effectiveWebsite:directorySize.website,sizeTier:firmSizeTier(directorySize.count||0),practice:"",painPoint:"Has website",qualified:false,rejectReason:"has_owned_website_directory",priority:0,personalizationQuality:"basic",elapsedMs:Date.now()-enrichStartedAt}));
+      return true;
+    }
+    if(directorySize.count>0){
+      attorneyCount=directorySize.count;
+      attorneyCountVerified=true;
+      attorneyCountSource=directorySize.source;
+      await redis.hIncrBy(STATS,"post_email_headcount_verified",1);
+      await redis.hIncrBy(STATS,"post_email_headcount_direct_directory",1);
+    }
+    const directSize=!attorneyCountVerified?await directLawyerComSizeEvidence(lead,key):{count:0,source:""};
     if(directSize.count>0){
       attorneyCount=directSize.count;
       attorneyCountVerified=true;
