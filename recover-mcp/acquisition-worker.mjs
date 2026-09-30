@@ -761,7 +761,16 @@ const queryVariants=(industry,location,practiceFocus="",coveragePass="")=>{
         "estate planning law firm","real estate law firm","bankruptcy law firm","employment law firm",
         "workers compensation law firm","civil litigation law firm"
       ];
-      const expanded=areas.map((area,i)=>`${chicagoTerms[i%chicagoTerms.length]} in ${area}`);
+      const expanded=[];
+      // Three independent query waves per Chicago community area. One generic
+      // query per neighborhood under-sampled a city this dense; rotating terms
+      // gives us broad firm-type/practice coverage without leaving Chicago.
+      for(let wave=0;wave<3;wave++){
+        for(let i=0;i<areas.length;i++){
+          const term=chicagoTerms[(i+(wave*5))%chicagoTerms.length];
+          expanded.push(`${term} in ${areas[i]}`);
+        }
+      }
       return [...new Set(expanded)];
     }
     return [...new Set(mixed)].map(q=>`${q} in ${location}`);
@@ -1107,7 +1116,8 @@ async function processAcquisition(id) {
       variants=[...new Set(chosen)].slice(0,bundleCount);
     }
     const isLawFirmJob=String(job.search_profile||"")==="law-firm";
-    const lawBundleSize=isLawFirmJob?4:1;
+    const deepChicago=isLawFirmJob&&/\bchicago\b/i.test(String(job.location||""));
+    const lawBundleSize=isLawFirmJob?(deepChicago?12:4):1;
     const availableRounds=Math.ceil(variants.length/lawBundleSize);
     const maxRounds=Math.min(isFastHomeService ? Math.min(2,configuredMaxRounds) : configuredMaxRounds,availableRounds);
 
