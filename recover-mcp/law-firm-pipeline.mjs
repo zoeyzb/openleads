@@ -1079,7 +1079,7 @@ function attorneyEstimate(html="",text=""){
     // A 1-5 bucket is not enough to prove the firm has at least 2 attorneys.
     candidates.push(lo>=2?hi:1);
   }
-  if(/\bfirm\s+size\s*:?\s*solo\b/i.test(plain))candidates.push(1);
+  if(/\bfirm\s+size\s*:?\s*(?:solo|sole\s+practi(?:tioner|oner))\b/i.test(plain))candidates.push(1);
   if(!candidates.length)return 0;
 
   // Be conservative across conflicting explicit evidence: use the largest count,
@@ -2618,6 +2618,51 @@ async function cleanupWebsiteRefreshReady(){
   return {kept:rows.length-remove.length,removed:remove.length};
 }
 
+function lawyerComFirmSlug(lead={}){
+  return String(lead.name||lead.title||"")
+    .toLowerCase()
+    .replace(/\b(?:esq|esquire)\.?\b/g,"")
+    .replace(/&/g," and ")
+    .replace(/[^a-z0-9]+/g,"-")
+    .replace(/^-+|-+$/g,"")
+    .replace(/-+/g,"-");
+}
+function outboundFirmWebsiteFromDirectory(html="",lead={}){
+  const raw=String(html||"");
+  const blocked=/^(?:www\.)?(?:lawyer\.com|martindale\.com|avvo\.com|justia\.com|findlaw\.com|facebook\.com|linkedin\.com|instagram\.com|x\.com|twitter\.com|youtube\.com)$/i;
+  const candidates=[];
+  for(const m of raw.matchAll(/(?:https?:\/\/|www\.)[a-z0-9.-]+(?:\/[a-z0-9._~:/?#\[\]@!async function cleanupEmailCandidateSet(){'()*+,;=%-]*)?/ig)){
+    let value=String(m[0]||"").replace(/[),.;]+$/,"");
+    if(/^www\./i.test(value))value="https://"+value;
+    try{
+      const u=new URL(value);
+      const host=u.hostname.toLowerCase().replace(/^www\./,"");
+      if(blocked.test(host)||lawSourceRank(u.href,lead)<=4)continue;
+      if(!candidates.includes(u.origin))candidates.push(u.origin);
+    }catch{}
+  }
+  return candidates[0]||"";
+}
+async function lawyerComCandidateEvidence(lead={}){
+  const slug=lawyerComFirmSlug(lead);
+  if(!slug)return {count:0,source:"",website:""};
+  const url="https://www.lawyer.com/firm/"+slug+".html";
+  try{
+    const page=await fetchText(url,5000);
+    if(!page?.html)return {count:0,source:"",website:""};
+    const text=stripHtml(page.html).slice(0,50000);
+    const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+    const identity=pageMatchesLead(text,lead,page.final_url||url)||
+      Boolean(phone&&String(text).replace(/\D/g,"").includes(phone));
+    if(!identity)return {count:0,source:"",website:""};
+    const count=attorneyEstimate(page.html,text);
+    const website=outboundFirmWebsiteFromDirectory(page.html,lead);
+    return {count,source:page.final_url||url,website};
+  }catch{
+    return {count:0,source:"",website:""};
+  }
+}
+
 async function cleanupEmailCandidateSet(){
   const keys=await redis.sMembers(EMAIL_CANDIDATE_SET);
   if(!keys.length)return {scanned:0,removed:0,kept:0};
@@ -2651,8 +2696,22 @@ async function cleanupEmailCandidateSet(){
           sourceIdentityInvalid=true;
         }
       }
-      if(!discoveredWebsite&&values[i]&&isLawFirmLead(lead)&&emails.length&&lead.law_email_source_verified===true){
-        discoveredWebsite=await detectOwnedWebsiteFromEmailDomains(emails,lead);
+      if(values[i]&&isLawFirmLead(lead)&&emails.length&&lead.law_email_source_verified===true){
+        const directoryEvidence=await lawyerComCandidateEvidence(lead);
+        if(directoryEvidence.count>0&&!lead.attorney_count_evidence_verified){
+          lead={...lead,
+            attorney_count_estimate:directoryEvidence.count,
+            attorney_count_evidence_verified:true,
+            attorney_count_source:directoryEvidence.source
+          };
+          await redis.hSet(LEAD_HASH,chunk[i],JSON.stringify(lead));
+          await redis.hIncrBy(STATS,"candidate_lawyercom_size_hit",1);
+        }
+        if(!discoveredWebsite&&directoryEvidence.website){
+          discoveredWebsite=directoryEvidence.website;
+          await redis.hIncrBy(STATS,"candidate_lawyercom_website_hit",1);
+        }
+        if(!discoveredWebsite)discoveredWebsite=await detectOwnedWebsiteFromEmailDomains(emails,lead);
         if(!discoveredWebsite)discoveredWebsite=await findOwnedWebsitePreflight(lead,chunk[i],true);
       }
       if(discoveredWebsite&&!String(lead.website||lead.website_url||"").trim()){
