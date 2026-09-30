@@ -2211,6 +2211,9 @@ async function enrichLead(key,lead){
   if(await redis.sIsMember(ENRICHED_SET,key))return false;
 
   const website=String(lead.website||"").trim();
+  const chicagoHeadcountCampaign=!website &&
+    /\bchicago\b/i.test(String(lead.acquisition_location||lead.target_area||"")) &&
+    lawFirmNameShape(lead)!=="solo";
   if(/^https?:\/\//i.test(website)){
     await redis.sAdd(ENRICHED_SET,key);
     await redis.sAdd(REJECTED_SET,key);
@@ -2494,7 +2497,7 @@ async function enrichLead(key,lead){
   // Conversion pass: once a real published email survives identity/MX/verifier,
   // spend extra research only on proving firm size. This is intentionally
   // conditional so we do not multiply search cost across the full backlog.
-  if(emailSourceVerified&&!attorneyCountVerified){
+  if((emailSourceVerified||chicagoHeadcountCampaign)&&!attorneyCountVerified){
     const directSize=await directLawyerComSizeEvidence(lead,key);
     if(directSize.count>0){
       attorneyCount=directSize.count;
@@ -2520,7 +2523,7 @@ async function enrichLead(key,lead){
         ...lead,
         emails,
         law_email_source:source,
-        law_email_source_verified:true,
+        law_email_source_verified:emailSourceVerified,
         conversion_headcount_priority:true,
         website:""
       };
