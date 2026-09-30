@@ -2254,6 +2254,50 @@ async function directOfficialProfileLinks(lead={},people=[]){
     }
     return profiles.slice(0,8);
   }
+  // Five high-volume state adapters. Each does one narrow lookup against the
+  // official directory domain before the broad web-search waterfall.
+  const officialHosts={
+    TX:"texasbar.com",
+    IL:"iardc.org",
+    GA:"gabar.org",
+    NC:"portal.ncbar.gov",
+    WA:"wsba.org"
+  };
+  if(officialHosts[state]){
+    const host=officialHosts[state];
+    const out=[];
+    const names=[...new Set((people||[]).filter(Boolean).slice(0,2))];
+    const firm=String(lead.name||lead.title||"").replace(/["']/g," ").replace(/\s+/g," ").trim();
+    const queries=[...names.map(n=>"site:"+host+" \""+n+"\""),...(firm?["site:"+host+" \""+firm+"\""]:[])].slice(0,2);
+    for(const q of queries){
+      try{
+        await redis.hIncrBy(STATS,"direct_"+state.toLowerCase()+"bar_search_attempt",1);
+        const page=await fetchText("https://www.bing.com/search?q="+encodeURIComponent(q),5000);
+        const links=[...new Set(bingResultLinks(String(page?.html||"")))]
+          .filter(u=>{
+            const h=hostOf(u);
+            if(!h||!(h===host||h.endsWith("."+host)))return false;
+            if(state==="TX")return /\/attorneys\/member\.cfm\?id=\d+|ContactID=\d+/i.test(u);
+            if(state==="IL")return /lawyer/i.test(u);
+            if(state==="GA")return /member-directory|member|profile/i.test(u);
+            if(state==="NC")return /verification|member|search/i.test(u);
+            if(state==="WA")return /legal-directory|lawyer|member|profile|search/i.test(u);
+            return true;
+          })
+          .sort((a,b)=>lawSourceRank(a,lead)-lawSourceRank(b,lead))
+          .slice(0,6);
+        if(links.length){
+          out.push(...links);
+          await redis.hIncrBy(STATS,"direct_"+state.toLowerCase()+"bar_profile_links",links.length);
+          break;
+        }
+      }catch{
+        await redis.hIncrBy(STATS,"direct_"+state.toLowerCase()+"bar_search_error",1);
+      }
+    }
+    if(out.length)return [...new Set(out)].slice(0,8);
+  }
+
   if(state!=="CA")return [];
   const queries=[...new Set([
     ...(people||[]).filter(Boolean).slice(0,2),
