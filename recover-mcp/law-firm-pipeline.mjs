@@ -2022,6 +2022,41 @@ function isActiveCalBarProfile(url=""){
   return DIRECT_CALBAR_ACTIVE_PROFILE_URLS.has(String(url||"").split("#")[0]);
 }
 
+function calBarSearchRowName(context=""){
+  const plain=String(context||"").replace(/\s+/g," ").trim();
+  // QuickSearch rows render as "Last, First Middle Active 123456 City ...".
+  const m=plain.match(/([A-Z][A-Za-z.'’\- ]{1,80},\s*[A-Z][A-Za-z.'’\- ]{1,80})\s+(?:Active|Inactive|Disbarred|Resigned|Deceased|Suspended)\b/i);
+  return m?.[1]?String(m[1]).trim():"";
+}
+function normalizedPersonParts(name=""){
+  const suffix=/^(?:jr|sr|ii|iii|iv|esq)$/i;
+  return normalize(String(name||"").replace(/,/g," "))
+    .split(" ").map(x=>x.replace(/[^a-z]/g,"")).filter(x=>x&&!suffix.test(x));
+}
+function calBarPublishedNameMatchesLead(publishedName="",lead={}){
+  const pubRaw=String(publishedName||"").trim();
+  if(!pubRaw)return false;
+  const comma=pubRaw.includes(",");
+  let pub=normalizedPersonParts(pubRaw);
+  if(comma&&pub.length>=2)pub=[...pub.slice(1),pub[0]]; // Last, First Middle -> First Middle Last
+  if(pub.length<2)return false;
+  const pubFirst=pub[0],pubLast=pub[pub.length-1],pubMiddle=pub.slice(1,-1);
+
+  for(const variant of attorneyNameVariants(lead)){
+    const v=normalizedPersonParts(variant);
+    if(v.length<2)continue;
+    const first=v[0],last=v[v.length-1],middle=v.slice(1,-1);
+    if(first!==pubFirst||last!==pubLast)continue;
+    // Middle initials/full names may differ in length, but when both sides have
+    // substantive middle information it must be compatible.
+    const leadMid=middle.find(x=>x.length>=1)||"";
+    const pubMid=pubMiddle.find(x=>x.length>=1)||"";
+    if(leadMid&&pubMid&&leadMid[0]!==pubMid[0])continue;
+    return true;
+  }
+  return false;
+}
+
 async function directOfficialProfileLinks(lead={},people=[]){
   const state=normalizedStateCode(lead);
   if(state!=="CA")return [];
@@ -2039,13 +2074,19 @@ async function directOfficialProfileLinks(lead={},people=[]){
       const html=String(page?.html||"");
       if(!html)continue;
       const links=[];
+      const queryLooksPerson=(people||[]).some(p=>normalize(p)===normalize(q));
       for(const m of html.matchAll(/href=["']([^"']*\/attorney\/Licensee\/Detail\/\d+[^"']*)["']/gi)){
         try{
           const u=new URL(String(m[1]||""),url);
           const href=u.href.split("#")[0];
-          links.push(href);
           const idx=Number(m.index||0);
           const context=stripHtml(html.slice(Math.max(0,idx-1800),Math.min(html.length,idx+2400)));
+          const publishedName=calBarSearchRowName(context);
+          if(queryLooksPerson&&publishedName&&!calBarPublishedNameMatchesLead(publishedName,lead)){
+            await redis.hIncrBy(STATS,"direct_calbar_search_identity_reject",1);
+            continue;
+          }
+          links.push(href);
           const hasInactive=/\bInactive\b/i.test(context);
           const hasActive=/\bActive\b/i.test(context);
           if(hasActive&&!hasInactive){
@@ -2611,7 +2652,8 @@ async function cleanupEmailCandidateSet(){
         }
       }
       if(!discoveredWebsite&&values[i]&&isLawFirmLead(lead)&&emails.length&&lead.law_email_source_verified===true){
-        discoveredWebsite=await findOwnedWebsitePreflight(lead,chunk[i],true);
+        discoveredWebsite=await detectOwnedWebsiteFromEmailDomains(emails,lead);
+        if(!discoveredWebsite)discoveredWebsite=await findOwnedWebsitePreflight(lead,chunk[i],true);
       }
       if(discoveredWebsite&&!String(lead.website||lead.website_url||"").trim()){
         lead={...lead,website:discoveredWebsite,website_opportunity:"website_refresh",owned_website_evidence_source:"candidate_recheck"};
@@ -3192,7 +3234,7 @@ async function enrichmentLoop(){
         postEmailHeadcountBing:Number(emailStats?.[24]||0),postEmailHeadcountDuck:Number(emailStats?.[25]||0),
         rejectedNoVerifiedEmail:Number(emailStats?.[26]||0),rejectedUnverifiedAttorneyCount:Number(emailStats?.[27]||0),
         rejectedWrongSize:Number(emailStats?.[28]||0),rejectedHasWebsite:Number(emailStats?.[29]||0),
-        scraplingStaticHit:Number(emailStats?.[30]||0),scraplingStaticFail:Number(emailStats?.[31]||0),bingQueriesWithLinks:Number(emailStats?.[32]||0),bingSourcePageFetchReject:Number(emailStats?.[33]||0),bingRssQueryHit:Number(emailStats?.[34]||0),bingQueryFetchReject:Number(emailStats?.[35]||0),bingFallbackError:Number(emailStats?.[36]||0),emailSourceBindingRejectLeads:Number(emailStats?.[37]||0),scraplingGenericSkip:Number(emailStats?.[38]||0),ownedWebsiteResearchHit:Number(emailStats?.[39]||0),websitePreflightHit:Number(emailStats?.[40]||0),websitePreflightMiss:Number(emailStats?.[41]||0),barQueryHit:Number(emailStats?.[42]||0),barSourcePageMatched:Number(emailStats?.[43]||0),barEmailPage:Number(emailStats?.[44]||0),emailZeroCostFail:Number(emailStats?.[45]||0),emailSourceBindingPageMiss:Number(emailStats?.[46]||0),emailSourceBindingIdentityReject:Number(emailStats?.[47]||0),emailSourceBindingExactEmailMiss:Number(emailStats?.[48]||0),emailSourceBindingFetchError:Number(emailStats?.[49]||0),websitePreflightDeferred:Number(emailStats?.[50]||0),scraplingBrowserSkip:Number(emailStats?.[51]||0),bingRelativeResultLinks:Number(emailStats?.[52]||0),scraplingBroadDiscoverySkip:Number(emailStats?.[53]||0),bingSourceRawEmailPages:Number(emailStats?.[54]||0),bingSourceContextRejectEmailPages:Number(emailStats?.[55]||0),duckSourceRawEmailPages:Number(emailStats?.[56]||0),duckSourceContextRejectEmailPages:Number(emailStats?.[57]||0),ownedWebsiteVerifiedEmailHit:Number(emailStats?.[58]||0),bingGenericLinkReject:Number(emailStats?.[59]||0),calbarDecoyEmailReject:Number(emailStats?.[60]||0),bingTrustedLinkReject:Number(emailStats?.[61]||0),expectedBarQueryWithLinks:Number(emailStats?.[62]||0),expectedBarResultLinks:Number(emailStats?.[63]||0),expectedBarPageMatched:Number(emailStats?.[64]||0),expectedBarEmailPage:Number(emailStats?.[65]||0),yahooExpectedBarQueryHit:Number(emailStats?.[66]||0),yahooExpectedBarResultLinks:Number(emailStats?.[67]||0),yahooExpectedBarQueryMiss:Number(emailStats?.[68]||0),yahooExpectedBarFetchError:Number(emailStats?.[69]||0),expectedBarEligibleQueryChecks:Number(emailStats?.[70]||0),expectedBarQueryExecuted:Number(emailStats?.[71]||0),expectedBarStateDirect:Number(emailStats?.[72]||0),expectedBarStateDerived:Number(emailStats?.[73]||0),directCalbarSearchAttempt:Number(emailStats?.[74]||0),directCalbarProfileLinks:Number(emailStats?.[75]||0),directCalbarSearchError:Number(emailStats?.[76]||0),directCalbarPageMatched:Number(emailStats?.[77]||0),directCalbarEmailPage:Number(emailStats?.[78]||0),candidateOwnedWebsiteRecheckHit:Number(emailStats?.[79]||0),calbarProfileIdentityReject:Number(emailStats?.[80]||0),calbarProfileWebsiteHit:Number(emailStats?.[81]||0),candidateCalbarIdentityReject:Number(emailStats?.[82]||0),candidateCalbarWebsiteHit:Number(emailStats?.[83]||0),ownerNameFirmLabelBypass:Number(emailStats?.[84]||0),directCalbarUniqueProfile:Number(emailStats?.[85]||0),directCalbarDeepReadAttempt:Number(emailStats?.[86]||0),directCalbarDeepReadMatch:Number(emailStats?.[87]||0),enrichNonDestructiveBatchSelected:Number(emailStats?.[88]||0),directCalbarDeepReadChars:Number(emailStats?.[88]||0),directCalbarActiveFromSearch:Number(emailStats?.[89]||0),directCalbarUniqueActive:Number(emailStats?.[90]||0),calbarStrongEmailAccept:Number(emailStats?.[91]||0)
+        scraplingStaticHit:Number(emailStats?.[30]||0),scraplingStaticFail:Number(emailStats?.[31]||0),bingQueriesWithLinks:Number(emailStats?.[32]||0),bingSourcePageFetchReject:Number(emailStats?.[33]||0),bingRssQueryHit:Number(emailStats?.[34]||0),bingQueryFetchReject:Number(emailStats?.[35]||0),bingFallbackError:Number(emailStats?.[36]||0),emailSourceBindingRejectLeads:Number(emailStats?.[37]||0),scraplingGenericSkip:Number(emailStats?.[38]||0),ownedWebsiteResearchHit:Number(emailStats?.[39]||0),websitePreflightHit:Number(emailStats?.[40]||0),websitePreflightMiss:Number(emailStats?.[41]||0),barQueryHit:Number(emailStats?.[42]||0),barSourcePageMatched:Number(emailStats?.[43]||0),barEmailPage:Number(emailStats?.[44]||0),emailZeroCostFail:Number(emailStats?.[45]||0),emailSourceBindingPageMiss:Number(emailStats?.[46]||0),emailSourceBindingIdentityReject:Number(emailStats?.[47]||0),emailSourceBindingExactEmailMiss:Number(emailStats?.[48]||0),emailSourceBindingFetchError:Number(emailStats?.[49]||0),websitePreflightDeferred:Number(emailStats?.[50]||0),scraplingBrowserSkip:Number(emailStats?.[51]||0),bingRelativeResultLinks:Number(emailStats?.[52]||0),scraplingBroadDiscoverySkip:Number(emailStats?.[53]||0),bingSourceRawEmailPages:Number(emailStats?.[54]||0),bingSourceContextRejectEmailPages:Number(emailStats?.[55]||0),duckSourceRawEmailPages:Number(emailStats?.[56]||0),duckSourceContextRejectEmailPages:Number(emailStats?.[57]||0),ownedWebsiteVerifiedEmailHit:Number(emailStats?.[58]||0),bingGenericLinkReject:Number(emailStats?.[59]||0),calbarDecoyEmailReject:Number(emailStats?.[60]||0),bingTrustedLinkReject:Number(emailStats?.[61]||0),expectedBarQueryWithLinks:Number(emailStats?.[62]||0),expectedBarResultLinks:Number(emailStats?.[63]||0),expectedBarPageMatched:Number(emailStats?.[64]||0),expectedBarEmailPage:Number(emailStats?.[65]||0),yahooExpectedBarQueryHit:Number(emailStats?.[66]||0),yahooExpectedBarResultLinks:Number(emailStats?.[67]||0),yahooExpectedBarQueryMiss:Number(emailStats?.[68]||0),yahooExpectedBarFetchError:Number(emailStats?.[69]||0),expectedBarEligibleQueryChecks:Number(emailStats?.[70]||0),expectedBarQueryExecuted:Number(emailStats?.[71]||0),expectedBarStateDirect:Number(emailStats?.[72]||0),expectedBarStateDerived:Number(emailStats?.[73]||0),directCalbarSearchAttempt:Number(emailStats?.[74]||0),directCalbarProfileLinks:Number(emailStats?.[75]||0),directCalbarSearchError:Number(emailStats?.[76]||0),directCalbarPageMatched:Number(emailStats?.[77]||0),directCalbarEmailPage:Number(emailStats?.[78]||0),candidateOwnedWebsiteRecheckHit:Number(emailStats?.[79]||0),calbarProfileIdentityReject:Number(emailStats?.[80]||0),calbarProfileWebsiteHit:Number(emailStats?.[81]||0),candidateCalbarIdentityReject:Number(emailStats?.[82]||0),candidateCalbarWebsiteHit:Number(emailStats?.[83]||0),ownerNameFirmLabelBypass:Number(emailStats?.[84]||0),directCalbarUniqueProfile:Number(emailStats?.[85]||0),directCalbarDeepReadAttempt:Number(emailStats?.[86]||0),directCalbarDeepReadMatch:Number(emailStats?.[87]||0),enrichNonDestructiveBatchSelected:Number(emailStats?.[88]||0),directCalbarSearchIdentityReject:Number(emailStats?.[89]||0),directCalbarDeepReadChars:Number(emailStats?.[88]||0),directCalbarActiveFromSearch:Number(emailStats?.[89]||0),directCalbarUniqueActive:Number(emailStats?.[90]||0),calbarStrongEmailAccept:Number(emailStats?.[91]||0)
       }));
     }catch(error){console.error("law_firm_enrich_loop_error",error?.stack||error?.message||error);}
     await sleep(LOOP_MS);
