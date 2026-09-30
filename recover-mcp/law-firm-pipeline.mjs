@@ -678,16 +678,29 @@ function calBarProfileMatchesLead(text="",lead={},sourceUrl=""){
   const variants=attorneyNameVariants(lead)
     .map(v=>normalize(v))
     .filter(Boolean);
-  const exactVariant=variants.find(v=>{
-    const tokens=v.split(" ").filter(x=>x.length>=2);
-    return tokens.length>=2&&tokens.every(x=>plain.includes(x));
-  })||"";
-  if(!exactVariant)return false;
+  let matchedVariant="",strongNameMatch=false;
+  for(const v of variants){
+    const tokens=v.split(" ").filter(Boolean);
+    if(tokens.length<2)continue;
+    // Middle initials frequently differ from CalBar's full middle name
+    // (e.g. "Timothy A. Lundell" vs "Timothy Arthur Lundell").
+    // Require first + last; treat middle tokens as optional corroboration.
+    const first=tokens[0].replace(/[^a-z]/g,"");
+    const last=tokens[tokens.length-1].replace(/[^a-z]/g,"");
+    if(first.length<2||last.length<2)continue;
+    if(!plain.includes(first)||!plain.includes(last))continue;
+    matchedVariant=v;
+    const substantiveMiddle=tokens.slice(1,-1)
+      .map(x=>x.replace(/[^a-z]/g,""))
+      .filter(x=>x.length>=3);
+    strongNameMatch=tokens.length>=3||substantiveMiddle.some(x=>plain.includes(x));
+    break;
+  }
+  if(!matchedVariant)return false;
 
-  const exactTokens=exactVariant.split(" ").filter(x=>x.length>=2);
-  // Full three-part+ names are strong enough on the authoritative CalBar
-  // profile even if the current Maps listing uses a different office city.
-  if(exactTokens.length>=3)return true;
+  // Three-part names are strong enough on an authoritative CalBar profile even
+  // when the profile spells out a middle name that Maps stores as an initial.
+  if(strongNameMatch)return true;
 
   // Two-token names are more collision-prone. A deterministic CalBar search
   // returning exactly one profile is sufficient; otherwise keep geo/phone guards.
