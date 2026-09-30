@@ -240,7 +240,7 @@ const REQUALIFY_VERSION_KEY="recover:law-firm:full-requalify-version";
 const HISTORICAL_RECOVERY_VERSION_KEY="recover:law-firm:historical-recovery-version";
 const CALBAR_ADAPTER_VERSION="calbar-v10-strong-email-accept";
 const CALBAR_ADAPTER_VERSION_KEY="recover:law-firm:calbar-adapter-version";
-const FLORIDA_DIRECT_RECOVERY_VERSION="florida-direct-firm-v3-authoritative-fastpath";
+const FLORIDA_DIRECT_RECOVERY_VERSION="florida-direct-firm-v4-top-priority";
 const FLORIDA_DIRECT_RECOVERY_KEY="recover:law-firm:florida-direct-recovery-version";
 const CANDIDATE_SIZE_RESEARCH_VERSION="candidate-size-v9-phone-roster";
 const CANDIDATE_SIZE_RESEARCH_VERSION_KEY="recover:law-firm:candidate-size-research-version";
@@ -2470,7 +2470,7 @@ async function directOfficialProfileLinks(lead={},people=[]){
       const rawFirm=String(lead.name||lead.title||"").replace(/["']/g," ").replace(/\s+/g," ").trim();
       const firmVariants=[...new Set([
         rawFirm,
-        rawFirm.replace(/\b(?:attorneys?\s+at\s+law|law\s+offices?|law\s+firm|llc|pllc|p\.?a\.?|p\.?c\.?|llp|apc)\b/gi," ").replace(/\s+/g," ").trim()
+        rawFirm.replace(/\b(?:attorneys?\s+at\s+law|law\s+offices?|law\s+firm|llc|pllc|p\.?a\.?|p\.?c\.?|llp|apc)\b/gi," ").replace(/[,.;]+/g," ").replace(/\s+/g," ").trim()
       ].filter(x=>x.length>=3))].slice(0,2);
       const city=normalizedLeadCity(lead);
       for(const firm of firmVariants){
@@ -3902,7 +3902,7 @@ async function bootstrapExistingQualified(){
         redis.sRem(SOURCE_PENDING_SET,chunk),
         redis.sRem(SIZE_READY_PENDING_SET,chunk)
       ]);
-      await redis.sAdd(PRIORITY_PENDING_SET,chunk);
+      await redis.sAdd(PENDING_SET,chunk);
     }
     console.log(JSON.stringify({event:"law_florida_direct_recovery_queued",count:floridaRecoveryKeys.length,version:FLORIDA_DIRECT_RECOVERY_VERSION}));
   }
