@@ -254,6 +254,7 @@ const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
+const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
 const UNIQUE_VERIFIED_HEADCOUNT_SET="recover:law-firm:unique-verified-headcount:v1";
 const UNIQUE_ELIGIBLE_SET="recover:law-firm:unique-eligible:v1";
 const WEBSITE_CANDIDATE_HASH="recover:law-firm:website-candidates:v1";
@@ -2672,6 +2673,21 @@ function isDirectPublishedEmailSource(source=""){
   }catch{return false;}
 }
 
+
+function isPublishedHeadcountSource(source="",lead={}){
+  try{
+    const u=new URL(String(source||""));
+    const host=u.hostname.toLowerCase().replace(/^www\./,"");
+    if(!/^https?:$/.test(u.protocol))return false;
+    if(/(^|\.)(bing\.com|google\.com|duckduckgo\.com|yahoo\.com)$/.test(host))return false;
+    const expected=expectedBarHost(lead);
+    if(expected&&(host===expected||host.endsWith("."+expected)))return true;
+    if(normalizedStateCode(lead)==="GA"&&host==="gabar.reliaguide.com")return true;
+    return /(^|\.)(lawyers|martindale|lawyer|findlaw|justia)\.com$/i.test(host)||
+      /statebar|barassociation|supremecourt|disciplinaryboard|nycourts\.gov|iardc\.org/i.test(host);
+  }catch{return false;}
+}
+
 async function enrichLead(key,lead){
   const enrichStartedAt=Date.now();
   if(String(lead.search_profile||"")!=="law-firm"&&normalize(lead.industry)!=="law firm")return false;
@@ -2684,6 +2700,21 @@ async function enrichLead(key,lead){
   }
   if(await redis.sIsMember(ENRICHED_SET,key))return false;
 
+  let durableHeadcountEvidence=null;
+  try{
+    const rawHeadcount=await redis.hGet(VERIFIED_HEADCOUNT_EVIDENCE_HASH,key);
+    if(rawHeadcount)durableHeadcountEvidence=JSON.parse(rawHeadcount);
+  }catch{}
+  if(durableHeadcountEvidence?.count>0&&isPublishedHeadcountSource(durableHeadcountEvidence?.source||"",lead)){
+    lead={...lead,
+      attorney_count_estimate:Number(durableHeadcountEvidence.count),
+      attorney_count_evidence_verified:true,
+      attorney_count_source:String(durableHeadcountEvidence.source||""),
+      attorney_count_verified_at:String(durableHeadcountEvidence.verified_at||lead.attorney_count_verified_at||"")
+    };
+    await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
+    await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
+  }
   const knownVerifiedCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
   if(knownVerifiedCount>0&&(knownVerifiedCount<2||knownVerifiedCount>10)){
     await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
@@ -3186,7 +3217,7 @@ async function enrichLead(key,lead){
         });
       }
       const verified=candidates
-        .filter(x=>x.count>0&&isDirectPublishedEmailSource(x.source))
+        .filter(x=>x.count>0&&isPublishedHeadcountSource(x.source,lead))
         .sort((a,b)=>{
           const aTarget=a.count>=2&&a.count<=10?0:1;
           const bTarget=b.count>=2&&b.count<=10?0:1;
@@ -3232,7 +3263,17 @@ async function enrichLead(key,lead){
   }
   const sizeTier=firmSizeTier(attorneyCount);
   const preferredSize=attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10;
-  if(attorneyCountVerified)await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
+  if(attorneyCountVerified){
+    await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
+    if(attorneyCount>0&&isPublishedHeadcountSource(attorneyCountSource,lead)){
+      await redis.hSet(VERIFIED_HEADCOUNT_EVIDENCE_HASH,key,JSON.stringify({
+        count:Number(attorneyCount),
+        source:String(attorneyCountSource||""),
+        verified_at:new Date().toISOString(),
+        verification:"published_identity_matched_headcount"
+      }));
+    }
+  }
   const painPoint="No website";
   const evidenceOwnedWebsite="";
   const discoveredOwnedWebsite="";
@@ -3701,7 +3742,18 @@ async function bootstrapExistingQualified(){
           }
         }catch{}
       }
-      if(lead.attorney_count_evidence_verified===true&&attorneyCount>0)await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,entry.field);
+      if(lead.attorney_count_evidence_verified===true&&attorneyCount>0){
+        await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,entry.field);
+        const hcSource=String(lead.attorney_count_source||"");
+        if(isPublishedHeadcountSource(hcSource,lead)){
+          await redis.hSet(VERIFIED_HEADCOUNT_EVIDENCE_HASH,entry.field,JSON.stringify({
+            count:attorneyCount,
+            source:hcSource,
+            verified_at:String(lead.attorney_count_verified_at||lead.law_firm_enriched_at||new Date().toISOString()),
+            verification:"published_identity_matched_headcount"
+          }));
+        }
+      }
       const evidenceText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const observedKeys=lawFirmPracticeKeys(evidenceText);
       const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
