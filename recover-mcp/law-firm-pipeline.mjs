@@ -3651,8 +3651,15 @@ async function bootstrapExistingQualified(){
       const mxEmails=emailChecks.filter(x=>x.ok).map(x=>x.email);
       const emails=await keeleadVerifiedEmails(mxEmails);
       const attorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
-      if(sourceBacked&&emails.length)await redis.sAdd(UNIQUE_VERIFIED_EMAIL_SET,entry.field);
-      else{
+      if(sourceBacked&&emails.length){
+        await redis.sAdd(UNIQUE_VERIFIED_EMAIL_SET,entry.field);
+        await redis.hSet(VERIFIED_EMAIL_EVIDENCE_HASH,entry.field,JSON.stringify({
+          emails:[...new Set(emails)],
+          source:existingSource,
+          verified_at:String(lead.law_email_verified_at||lead.law_firm_enriched_at||new Date().toISOString()),
+          verification:String(lead.law_email_validation||"published_exact+strict_firm_identity+mx")
+        }));
+      }else{
         try{
           const durableRaw=await redis.hGet(VERIFIED_EMAIL_EVIDENCE_HASH,entry.field);
           if(durableRaw){
