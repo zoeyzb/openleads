@@ -99,7 +99,7 @@ async function proxyUpstreamMcpRequest(req, res) {
   if (!UPSTREAM_MCP_URL) throw new Error("UPSTREAM_MCP_URL is not configured");
   const method = String(req.method || "POST").toUpperCase();
   const headers = {};
-  for (const name of ["accept","content-type","mcp-session-id","mcp-protocol-version","last-event-id"]) {
+  for (const name of ["accept","content-type","mcp-method","mcp-session-id","mcp-protocol-version","last-event-id"]) {
     const value = req.headers[name];
     if (value) headers[name] = value;
   }
