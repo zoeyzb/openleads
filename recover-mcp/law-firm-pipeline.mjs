@@ -150,17 +150,40 @@ async function publishedEmailsOnExactSource(source="",emails=[],lead={},key=""){
     // identity, phone, trusted legal source, or owned-domain affinity.
     // Requiring a second whole-page geo rule here contradicted discovery and
     // rejected valid court/legal-record emails that omit Maps city/state text.
-    const published=new Set(contextualEmails(page.html,lead,page.final_url||source).map(x=>String(x).toLowerCase()));
-    const matched=emails.filter(email=>published.has(String(email).toLowerCase()));
+    const finalUrl=page.final_url||source;
+    const pageText=stripHtml(page.html).slice(0,50000);
+    const identityMatched=pageMatchesLead(pageText,lead,finalUrl);
+    const contextual=new Set(contextualEmails(page.html,lead,finalUrl).map(x=>String(x).toLowerCase()));
+    const literal=new Set(emailsFrom(page.html).map(x=>String(x).toLowerCase()));
+    const rank=lawSourceRank(finalUrl,lead);
+    const trustedLiteral=identityMatched&&(rank<=4||legalRecordUrlLikely(finalUrl));
+    const matched=emails.filter(email=>{
+      const e=String(email).toLowerCase();
+      return contextual.has(e)||(trustedLiteral&&literal.has(e));
+    });
+    if(matched.length&&matched.some(email=>!contextual.has(String(email).toLowerCase()))){
+      await redis.hIncrBy(STATS,"email_source_binding_literal_identity_accept",1);
+      console.log(JSON.stringify({
+        event:"law_email_source_binding_literal_identity_accept",
+        key,
+        name:String(lead.name||lead.title||""),
+        source:String(finalUrl),
+        matched:matched.slice(0,3),
+        sourceRank:rank
+      }));
+    }
     if(!matched.length){
       await redis.hIncrBy(STATS,"email_source_binding_exact_email_miss",1);
       console.log(JSON.stringify({
         event:"law_email_source_binding_reject",
         key,
         name:String(lead.name||lead.title||""),
-        source:String(page.final_url||source),
+        source:String(finalUrl),
         candidateCount:emails.length,
-        publishedContextCount:published.size
+        publishedContextCount:contextual.size,
+        literalEmailCount:literal.size,
+        identityMatched,
+        sourceRank:rank
       }));
     }
     return matched;
@@ -599,21 +622,22 @@ async function fetchResearchPage(url,lead={},key="",allowStealth=true){
         return jina;
       }
     }
-    // Generic pages used to fall through to Scrapling and routinely cost
-    // ~30-50s. Reserve that expensive path for authoritative/PDF sources or
-    // the tiny post-email headcount cohort.
-    if(conversion){
-      const stealth=await callScrapling(url,{allowBrowser:true});
-      if(stealth?.html){
-        const stealthText=stripHtml(stealth.html).slice(0,24000);
-        if(pageMatchesLead(stealthText,lead,stealth?.final_url||url))return stealth;
+    // Broad email discovery needs Scrapling's lightweight HTTP client too.
+    // Use static Scrapling for any promising legal source; reserve Chromium
+    // stealth only for the tiny post-email conversion/headcount cohort.
+    const scrapling=await callScrapling(url,{allowBrowser:conversion});
+    if(scrapling?.html){
+      const scraplingText=stripHtml(scrapling.html).slice(0,36000);
+      if(pageMatchesLead(scraplingText,lead,scrapling?.final_url||url)){
+        const scraplingEmails=contextualEmails(scrapling.html,lead,scrapling?.final_url||url);
+        const scraplingAttorneys=attorneyEstimate(scrapling.html,scraplingText);
+        if(scraplingEmails.length||scraplingAttorneys>0||conversion){
+          await redis.hIncrBy(STATS,"scrapling_source_hit",1);
+          return scrapling;
+        }
       }
-    }else{
-      // Jina is dramatically more reliable here than Scrapling static in live
-      // law-email runs. Do not spend 20-40s on a ~1% fallback before an email
-      // even exists; preserve Scrapling for the tiny post-email conversion pass.
-      await redis.hIncrBy(STATS,"scrapling_broad_discovery_skip",1);
     }
+    if(!conversion)await redis.hIncrBy(STATS,"scrapling_broad_discovery_miss",1);
   }
   return directMatches?direct:null;
 }
@@ -1322,12 +1346,12 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
           await redis.hIncrBy(STATS,"yahoo_expected_bar_fetch_error",1);
         }
       }
-      if(!resultLinks.length&&searchIndex<2&&lead.conversion_headcount_priority===true){
-        const stealth=await callScrapling(url);
+      if(!resultLinks.length&&searchIndex<3){
+        const stealth=await callScrapling(url,{allowBrowser:lead.conversion_headcount_priority===true});
         if(stealth?.html){
           result=stealth;
           resultLinks=[...new Set([...bingResultLinks(stealth.html),...markdownResultLinks(stealth.html)])];
-          await redis.hIncrBy(STATS,"scrapling_search_hit",1);
+          if(resultLinks.length)await redis.hIncrBy(STATS,"scrapling_search_hit",1);
         }
       }
       return {q,url,...(result||{html:"",final_url:url,status:0}),resultLinks};
