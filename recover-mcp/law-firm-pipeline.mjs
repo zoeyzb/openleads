@@ -177,6 +177,14 @@ async function queueWebsiteRefreshCandidate(key,lead={},website=""){
 const KEELEAD_BASE_URL=String(process.env.KEELEAD_BASE_URL||process.env.RAILWAY_SERVICE_KEELEAD_URL||"").replace(/\/$/,"");
 const SCRAPLING_MCP_URL=String(process.env.SCRAPLING_MCP_URL||"").replace(/\/$/,"");
 const SCRAPLING_MCP_TOKEN=String(process.env.SCRAPLING_MCP_TOKEN||"");
+let scraplingBrowserGate=Promise.resolve();
+async function withScraplingBrowserSlot(fn){
+  const previous=scraplingBrowserGate;
+  let release;
+  scraplingBrowserGate=new Promise(resolve=>{release=resolve;});
+  await previous;
+  try{return await fn();}finally{release();}
+}
 const JINA_READER_ENABLED=String(process.env.JINA_READER_ENABLED||"true").toLowerCase()!=="false";
 const JINA_READER_RPM=Math.max(1,Math.min(30,Number(process.env.JINA_READER_RPM||24)));
 const JINA_READER_MAX_INFLIGHT=Math.max(1,Math.min(5,Number(process.env.JINA_READER_MAX_INFLIGHT||4)));
@@ -466,7 +474,7 @@ async function callScrapling(url,{allowBrowser=true}={}){
     // one blocked source from consuming the entire per-lead time budget.
     if(allowBrowser){
       try{
-        const stealth=await invoke("stealthy_fetch",{
+        const stealth=await withScraplingBrowserSlot(()=>invoke("stealthy_fetch",{
           url,
           extraction_type:"html",
           main_content_only:false,
@@ -474,7 +482,7 @@ async function callScrapling(url,{allowBrowser=true}={}){
           network_idle:false,
           disable_resources:true,
           timeout:12000
-        },16000);
+        },16000));
         if(stealth?.html){
           await redis.hIncrBy(STATS,"scrapling_browser_hit",1);
           return {...stealth,via:"scrapling_browser"};
