@@ -249,6 +249,9 @@ const PRIORITY_PENDING_SET="recover:law-firm:enrich-priority:v3";
 const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
+const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
+const UNIQUE_VERIFIED_HEADCOUNT_SET="recover:law-firm:unique-verified-headcount:v1";
+const UNIQUE_ELIGIBLE_SET="recover:law-firm:unique-eligible:v1";
 const WEBSITE_CANDIDATE_HASH="recover:law-firm:website-candidates:v1";
 const WEBSITE_AUDIT_PENDING_SET="recover:law-firm:website-audit-pending:v1";
 const WEBSITE_REFRESH_HASH="recover:law-firm:website-refresh:v1";
@@ -2638,6 +2641,21 @@ async function enrichLead(key,lead){
   }
   if(await redis.sIsMember(ENRICHED_SET,key))return false;
 
+  const knownVerifiedCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
+  if(knownVerifiedCount>0&&(knownVerifiedCount<2||knownVerifiedCount>10)){
+    await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
+    await redis.sAdd(ENRICHED_SET,key);
+    await redis.sAdd(REJECTED_SET,key);
+    await Promise.all([
+      redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),
+      redis.sRem(PENDING_SET,key),redis.sRem(PRIORITY_PENDING_SET,key),
+      redis.sRem(RECOVERABLE_PENDING_SET,key),redis.sRem(SOURCE_PENDING_SET,key),
+      redis.sRem(SIZE_READY_PENDING_SET,key),redis.sRem(CHICAGO_PENDING_SET,key)
+    ]);
+    await redis.hIncrBy(STATS,"known_wrong_size_short_circuit",1);
+    return true;
+  }
+
   let website=String(lead.website||"").trim();
   const chicagoLead=/\bchicago\b/i.test(String(lead.acquisition_location||lead.target_area||""));
   const pipelineWebsiteEvidence=String(lead.owned_website_evidence_source||"").trim();
@@ -2970,7 +2988,10 @@ async function enrichLead(key,lead){
   if(emails.length)await redis.hIncrBy(STATS,"email_keelead_pass_leads",1);
   else if(sourceBoundEmails.length)await redis.hIncrBy(STATS,"email_keelead_reject_leads",1);
   const emailSourceVerified=emails.length>0&&isDirectPublishedEmailSource(source);
-  if(emailSourceVerified)await redis.hIncrBy(STATS,"email_source_verified_leads",1);
+  if(emailSourceVerified){
+    await redis.hIncrBy(STATS,"email_source_verified_leads",1);
+    await redis.sAdd(UNIQUE_VERIFIED_EMAIL_SET,key);
+  }
 
   // Website eligibility comes before firm-size research. If the verified email
   // itself proves an owned firm domain/site, the lead is ineligible and there is
@@ -3121,6 +3142,7 @@ async function enrichLead(key,lead){
   }
   const sizeTier=firmSizeTier(attorneyCount);
   const preferredSize=attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10;
+  if(attorneyCountVerified)await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
   const painPoint="No website";
   const evidenceOwnedWebsite="";
   const discoveredOwnedWebsite="";
@@ -3184,6 +3206,7 @@ async function enrichLead(key,lead){
   await redis.sAdd(ENRICHED_SET,key);
   await redis.hIncrBy(STATS,"enriched",1);
   if(qualified){
+    await redis.sAdd(UNIQUE_ELIGIBLE_SET,key);
     await redis.sAdd(READY_SET,key);
     await redis.hIncrBy(STATS,"qualified",1);
     const targetArea=String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"unknown").trim();
@@ -4017,10 +4040,11 @@ async function enrichmentLoop(){
   while(true){
     try{
       const enriched=await enrichBatch();
-      const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,currentEmailCandidates,emailStats]=await Promise.all([
+      const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,currentEmailCandidates,uniqueVerifiedEmails,uniqueVerifiedHeadcounts,uniqueEligibleLeads,emailStats]=await Promise.all([
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
         redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
         redis.sCard(WEBSITE_AUDIT_PENDING_SET),redis.sCard(WEBSITE_REFRESH_READY_SET),redis.sCard(EMAIL_CANDIDATE_SET),
+        redis.sCard(UNIQUE_VERIFIED_EMAIL_SET),redis.sCard(UNIQUE_VERIFIED_HEADCOUNT_SET),redis.sCard(UNIQUE_ELIGIBLE_SET),
         redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","scrapling_search_hit","bing_source_links","bing_source_pages_matched","bing_source_email_pages","email_raw_candidate_leads","email_identity_mx_pass_leads","email_identity_mx_reject_leads","email_keelead_pass_leads","email_keelead_reject_leads","email_source_verified_leads","jina_source_hit","jina_source_fail","email_existing_recorroborated","email_existing_recorroboration_miss","post_email_headcount_verified","post_email_headcount_miss","post_email_headcount_bing","post_email_headcount_duck","rejected_no_verified_email","rejected_unverified_attorney_count","rejected_wrong_size","rejected_has_website","scrapling_static_hit","scrapling_static_fail","bing_queries_with_links","bing_source_page_fetch_reject","bing_rss_query_hit","bing_query_fetch_reject","bing_fallback_error","email_source_binding_reject_leads","scrapling_generic_skip","owned_website_research_hit","website_preflight_hit","website_preflight_miss","bar_query_hit","bar_source_page_matched","bar_email_page","email_zero_cost_fail","email_source_binding_page_miss","email_source_binding_identity_reject","email_source_binding_exact_email_miss","email_source_binding_fetch_error","website_preflight_deferred","scrapling_browser_skip","bing_relative_result_links","scrapling_broad_discovery_skip","bing_source_raw_email_pages","bing_source_context_reject_email_pages","duck_source_raw_email_pages","duck_source_context_reject_email_pages","owned_website_verified_email_hit","bing_generic_link_reject","calbar_decoy_email_reject","bing_trusted_link_reject","expected_bar_query_with_links","expected_bar_result_links","expected_bar_page_matched","expected_bar_email_page","yahoo_expected_bar_query_hit","yahoo_expected_bar_result_links","yahoo_expected_bar_query_miss","yahoo_expected_bar_fetch_error","expected_bar_eligible_query_checks","expected_bar_query_executed","expected_bar_state_direct","expected_bar_state_derived","direct_calbar_search_attempt","direct_calbar_profile_links","direct_calbar_search_error","direct_calbar_page_matched","direct_calbar_email_page","candidate_owned_website_recheck_hit","calbar_profile_identity_reject","calbar_profile_website_hit","candidate_calbar_identity_reject","candidate_calbar_website_hit","owner_name_firm_label_bypass","direct_calbar_unique_profile","direct_calbar_deep_read_attempt","direct_calbar_deep_read_match","enrich_non_destructive_batch_selected","direct_calbar_deep_read_chars","direct_calbar_active_from_search","direct_calbar_unique_active","calbar_strong_email_accept","direct_calbar_search_identity_reject","direct_lawyercom_size_attempt","direct_lawyercom_size_hit","direct_lawyercom_size_miss","post_email_headcount_direct_lawyercom","candidate_source_owned_website_hit","candidate_lawyercom_size_hit","candidate_lawyercom_website_hit","candidate_source_email_phone_owned_hit","candidate_source_jina_recheck","direct_txbar_search_attempt","direct_txbar_profile_links","direct_txbar_search_error","direct_ilbar_search_attempt","direct_ilbar_profile_links","direct_ilbar_search_error","direct_gabar_search_attempt","direct_gabar_profile_links","direct_gabar_search_error","direct_ncbar_search_attempt","direct_ncbar_profile_links","direct_ncbar_search_error","direct_wabar_search_attempt","direct_wabar_profile_links","direct_wabar_search_error","direct_floridabar_search_attempt","direct_floridabar_profile_links","direct_floridabar_search_error"])
       ]);
       console.log(JSON.stringify({
@@ -4033,7 +4057,7 @@ async function enrichmentLoop(){
         bingSourceEmailPages:Number(emailStats?.[11]||0),
         emailRawCandidateAttempts:Number(emailStats?.[12]||0),emailIdentityMxPassAttempts:Number(emailStats?.[13]||0),
         emailIdentityMxRejectAttempts:Number(emailStats?.[14]||0),emailKeeleadInfrastructurePassAttempts:Number(emailStats?.[15]||0),
-        emailKeeleadInfrastructureRejectAttempts:Number(emailStats?.[16]||0),emailSourceVerifiedAttempts:Number(emailStats?.[17]||0),currentEmailCandidates,jinaSourceHit:Number(emailStats?.[18]||0),jinaSourceFail:Number(emailStats?.[19]||0),emailExistingRecorroborated:Number(emailStats?.[20]||0),emailExistingRecorroborationMiss:Number(emailStats?.[21]||0),postEmailHeadcountVerified:Number(emailStats?.[22]||0),postEmailHeadcountMiss:Number(emailStats?.[23]||0),
+        emailKeeleadInfrastructureRejectAttempts:Number(emailStats?.[16]||0),emailSourceVerifiedAttempts:Number(emailStats?.[17]||0),currentEmailCandidates,uniqueVerifiedEmails,uniqueVerifiedHeadcounts,uniqueEligibleLeads,jinaSourceHit:Number(emailStats?.[18]||0),jinaSourceFail:Number(emailStats?.[19]||0),emailExistingRecorroborated:Number(emailStats?.[20]||0),emailExistingRecorroborationMiss:Number(emailStats?.[21]||0),postEmailHeadcountVerified:Number(emailStats?.[22]||0),postEmailHeadcountMiss:Number(emailStats?.[23]||0),
         postEmailHeadcountBing:Number(emailStats?.[24]||0),postEmailHeadcountDuck:Number(emailStats?.[25]||0),
         rejectedNoVerifiedEmail:Number(emailStats?.[26]||0),rejectedUnverifiedAttorneyCount:Number(emailStats?.[27]||0),
         rejectedWrongSize:Number(emailStats?.[28]||0),rejectedHasWebsite:Number(emailStats?.[29]||0),
