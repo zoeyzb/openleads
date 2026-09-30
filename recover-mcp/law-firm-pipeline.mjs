@@ -1101,6 +1101,29 @@ function linksFrom(base,html=""){
   }
   return [...new Set(out)].slice(0,4);
 }
+function directoryRosterCount(html="",source="",lead={}){
+  const host=hostOf(source);
+  if(!/(^|\.)(?:lawyers|martindale|lawyer)\.com$/i.test(host))return 0;
+  const names=[];
+  const seen=new Set();
+  for(const m of String(html||"").matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{1,180}?)<\/a>/gi)){
+    const href=String(m[1]||"");
+    const label=stripHtml(String(m[2]||"")).replace(/\s+/g," ").trim();
+    if(!label||label.length>90)continue;
+    if(!/(?:attorney|lawyer|profile|people|professional)/i.test(href))continue;
+    const cleaned=label.replace(/\b(?:esq(?:uire)?|attorney|lawyer|partner|associate|counsel)\b\.?/ig," ").replace(/\s+/g," ").trim();
+    const parts=cleaned.split(/\s+/).filter(Boolean);
+    if(parts.length<2||parts.length>5)continue;
+    if(parts.some(x=>/\d|@|https?|www\./i.test(x)))continue;
+    if(!parts.every(x=>/^[A-Za-z.'’\-]+$/.test(x)))continue;
+    const key=normalize(cleaned);
+    if(!key||seen.has(key))continue;
+    seen.add(key); names.push(cleaned);
+    if(names.length>10)return 11;
+  }
+  return names.length>=2?names.length:0;
+}
+
 function attorneyEstimate(html="",text=""){
   const plain=String(text||stripHtml(String(html||""))).replace(/\s+/g," ").trim();
   if(!plain)return 0;
@@ -1176,10 +1199,15 @@ async function verifyOwnedWebsiteCandidate(url="",lead={}){
 async function directDirectorySizeEvidence(lead={},key=""){
   const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
   if(!name)return {count:0,source:"",website:""};
-  const queries=[
-    `site:lawyers.com "${name}"`,
-    `site:martindale.com "${name}"`
-  ];
+  const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+  const phonePretty=phone.length===10?phone.slice(0,3)+"-"+phone.slice(3,6)+"-"+phone.slice(6):"";
+  const city=normalizedLeadCity(lead);
+  const state=normalizedStateCode(lead)||String(lead.region||lead.state||"").trim();
+  const queries=[...new Set([
+    ...(phonePretty?[`site:lawyers.com "${phonePretty}"`,`site:martindale.com "${phonePretty}"`]:[]),
+    `site:lawyers.com "${name}" "${city}" "${state}"`,
+    `site:martindale.com "${name}" "${city}" "${state}"`
+  ])].slice(0,4);
   const resultPages=[];
   for(const query of queries){
     try{
@@ -1204,7 +1232,9 @@ async function directDirectorySizeEvidence(lead={},key=""){
       const source=String(page.final_url||url);
       const text=stripHtml(page.html).slice(0,70000);
       if(!pageMatchesLead(text,lead,source))continue;
-      const count=attorneyEstimate(page.html,text);
+      const explicitCount=attorneyEstimate(page.html,text);
+      const rosterCount=directoryRosterCount(page.html,source,lead);
+      const count=explicitCount>0?explicitCount:rosterCount;
       const websiteCandidate=outboundFirmWebsiteFromDirectory(page.html,lead);
       const website=websiteCandidate?await verifyOwnedWebsiteCandidate(websiteCandidate,lead):"";
       if(count>0){
@@ -1230,7 +1260,9 @@ async function directLawyerComSizeEvidence(lead={},key=""){
     if(!/(^|\.)lawyer\.com$/i.test(hostOf(source)))continue;
     const text=stripHtml(page.html).slice(0,36000);
     if(!pageMatchesLead(text,lead,source))continue;
-    const count=attorneyEstimate(page.html,text);
+    const explicitCount=attorneyEstimate(page.html,text);
+    const rosterCount=directoryRosterCount(page.html,source,lead);
+    const count=explicitCount>0?explicitCount:rosterCount;
     if(count>0){
       await redis.hIncrBy(STATS,"direct_lawyercom_size_hit",1);
       console.log(JSON.stringify({event:"law_direct_lawyercom_size_hit",key,name:String(lead.name||lead.title||""),count,source}));
