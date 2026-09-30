@@ -2461,6 +2461,36 @@ async function directOfficialProfileLinks(lead={},people=[]){
         await redis.hIncrBy(STATS,"direct_floridabar_search_error",1);
       }
     }
+    if(!profiles.length){
+      // Florida's directory supports direct firm/city search. This is much
+      // stronger and cheaper than asking a web search engine for profile URLs.
+      const rawFirm=String(lead.name||lead.title||"").replace(/["']/g," ").replace(/\s+/g," ").trim();
+      const firmVariants=[...new Set([
+        rawFirm,
+        rawFirm.replace(/\b(?:attorneys?\s+at\s+law|law\s+offices?|law\s+firm|llc|pllc|p\.?a\.?|p\.?c\.?|llp|apc)\b/gi," ").replace(/\s+/g," ").trim()
+      ].filter(x=>x.length>=3))].slice(0,2);
+      const city=normalizedLeadCity(lead);
+      for(const firm of firmVariants){
+        try{
+          await redis.hIncrBy(STATS,"direct_floridabar_search_attempt",1);
+          const searchUrl="https://www.floridabar.org/directories/find-mbr/?lName=&lNameSdx=N&fName=&fNameSdx=N&eligible=N&deceased=N&firm="+encodeURIComponent(firm)+"&locValue="+encodeURIComponent(city)+"&locType=C&pracAreas=&lawSchool=&services=&langs=&certValue=&pageNumber=1&pageSize=20";
+          const page=await fetchText(searchUrl,7000);
+          const html=String(page?.html||"");
+          for(const m of html.matchAll(/href=["']([^"']*\/directories\/find-mbr\/profile\/\?[^"']*num=\d+[^"']*)["']/gi)){
+            try{
+              const href=new URL(String(m[1]||""),searchUrl).href.split("#")[0];
+              if(!profiles.includes(href))profiles.push(href);
+            }catch{}
+          }
+          if(profiles.length){
+            await redis.hIncrBy(STATS,"direct_floridabar_profile_links",profiles.length);
+            break;
+          }
+        }catch{
+          await redis.hIncrBy(STATS,"direct_floridabar_search_error",1);
+        }
+      }
+    }
     if(profiles.length)return profiles.slice(0,8);
   }
   // High-volume state adapters. Exact phone is the strongest identity key when
