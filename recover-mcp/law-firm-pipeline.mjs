@@ -27,7 +27,7 @@ const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibili
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
 const CHICAGO_HEADCOUNT_RECOVERY_KEY="recover:law-firm:chicago-headcount-recovery-version";
-const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v3-full-pdf-evidence";
+const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v4-person-parser";
 const ASSOCIATION_DOCKET_RECOVERY_KEY="recover:law-firm:association-docket-recovery-version";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
@@ -702,20 +702,54 @@ function likelyAttorneyName(lead={}){
   return "";
 }
 function attorneyNameVariants(lead={}){
+  const values=[];
   const primary=likelyAttorneyName(lead);
-  if(!primary)return [];
-  const values=[primary];
-  const parts=primary.replace(/,/g," ").split(/\s+/).filter(Boolean);
+  if(primary)values.push(primary);
+
+  const raw=String(lead.name||lead.title||"").replace(/\s+/g," ").trim();
+  const addPerson=(candidate="")=>{
+    const cleaned=String(candidate||"")
+      .replace(/\b(?:esq(?:uire)?|attorneys?|lawyers?|counselors?|counsel|at law|law offices?|law firm|llc|pllc|pc|p\.c\.|pa|p\.a\.|llp|apc)\b/ig," ")
+      .replace(/^[\s,:;|\-–—]+|[\s,:;|\-–—]+$/g,"")
+      .replace(/\s+/g," ").trim();
+    const parts=cleaned.split(/\s+/).filter(Boolean);
+    if(parts.length<2||parts.length>5)return;
+    if(parts.some(x=>/\d|@|https?|www\./i.test(x)))return;
+    if(!parts.every(x=>/^[A-Za-z.'’\-]+$/.test(x)))return;
+    if(/\b(group|associates|partners|legal|services|office|firm)\b/i.test(cleaned))return;
+    values.push(cleaned);
+  };
+
+  // Google Maps frequently appends an attorney after the firm label:
+  // "Firm Name: Jane Doe", "Firm Name | Jane Doe", or "Firm - Jane Doe".
+  const suffixMatch=raw.match(/(?:[:|]|\s[-–—]\s)\s*([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){1,4})\s*$/);
+  if(suffixMatch?.[1])addPerson(suffixMatch[1]);
+
+  // Two named attorneys are often embedded directly in the Maps business name.
+  // Capture both before a trailing "Attorneys..." label.
+  const pair=raw.match(/^([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){1,3})\s+(?:&|and)\s+([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){1,3})\s*,?\s*(?:Attorneys?|Lawyers?|Counselors?)/i);
+  if(pair){addPerson(pair[1]);addPerson(pair[2]);}
+
+  // "Law Office(s) of Jane Doe" remains a strong person identity even when the
+  // whole business label was classified as firm-shaped.
+  const officeOf=raw.match(/law offices? of\s+([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){1,4})/i);
+  if(officeOf?.[1])addPerson(officeOf[1]);
+
+  const expanded=[];
   const suffixes=new Set(["jr","sr","ii","iii","iv","esq"]);
-  if(parts.length>=2&&parts.length<=4){
-    const clean=parts.filter(x=>!suffixes.has(x.toLowerCase().replace(/\./g,"")));
-    if(clean.length>=2){
-      // Maps frequently stores attorneys as "Last First M". Search both forms.
-      values.push([clean[1],...clean.slice(2),clean[0]].join(" "));
-      values.push([clean[clean.length-1],...clean.slice(1,-1),clean[0]].join(" "));
+  for(const value of values){
+    expanded.push(value);
+    const parts=value.replace(/,/g," ").split(/\s+/).filter(Boolean);
+    if(parts.length>=2&&parts.length<=4){
+      const clean=parts.filter(x=>!suffixes.has(x.toLowerCase().replace(/\./g,"")));
+      if(clean.length>=2){
+        // Maps frequently stores attorneys as "Last First M". Search both forms.
+        expanded.push([clean[1],...clean.slice(2),clean[0]].join(" "));
+        expanded.push([clean[clean.length-1],...clean.slice(1,-1),clean[0]].join(" "));
+      }
     }
   }
-  return [...new Set(values.map(x=>x.replace(/\s+/g," ").trim()).filter(x=>x.split(/\s+/).length>=2))].slice(0,3);
+  return [...new Set(expanded.map(x=>x.replace(/\s+/g," ").trim()).filter(x=>x.split(/\s+/).length>=2))].slice(0,6);
 }
 async function zeroCostEmailFallback(lead={}){
   const names=attorneyNameVariants(lead).slice(0,3);
