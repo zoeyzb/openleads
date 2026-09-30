@@ -248,7 +248,7 @@ function lawFirmNameShape(lead={}){
   if(!name)return "unknown";
   if(/\b(?:attorneys at law|attorneys|lawyers|partners|associates|law group|legal group)\b/i.test(name)||
      /\s(?:&|and)\s/i.test(name))return "multi";
-  if(/\b(?:law firm|pllc|p\.c\.|pc|p\.a\.|pa|llp|professional corporation)\b/i.test(name))return "firm";
+  if(/\b(?:law firm|law offices|pllc|p\.c\.|pc|p\.a\.|pa|llp|apc|professional corporation)\b/i.test(name))return "firm";
   if(/^the?\s*law office of\s+[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4}$/i.test(name)||
      /\battorney(?:\s+at\s+law)?\b/i.test(name)||
      /^[A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,3}(?:,?\s+Esq\.?)?$/i.test(name))return "solo";
@@ -1834,10 +1834,19 @@ function legalRecordUrlLikely(url=""){
 
 function emailRecoveryPriority(lead={}){
   let score=0;
-  if(likelyAttorneyName(lead))score+=2;
-  if(String(lead.phone||"").replace(/\D+/g,"").slice(-10).length===10)score+=2;
+  const shape=lawFirmNameShape(lead);
+  const verifiedCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
+  if(verifiedCount>=2&&verifiedCount<=10)score+=8;
+  if(shape==="multi")score+=4;
+  else if(shape==="firm")score+=3;
+  else if(shape==="solo")score-=2;
+
+  // Identity/contact completeness only breaks ties; it no longer makes a solo
+  // office "priority" by itself.
+  if(likelyAttorneyName(lead))score+=1;
+  if(String(lead.phone||"").replace(/\D+/g,"").slice(-10).length===10)score+=1;
   if(stateBarDomain(lead))score+=1;
-  if(String(lead.city||"").trim())score+=1;
+  if(normalizedLeadCity(lead))score+=1;
   return score;
 }
 function stateBarQueries(lead={},people=[]){
@@ -2756,6 +2765,36 @@ async function normalizeEmailQueues(){
     await Promise.all(fresh.map(k=>redis.sRem(RECOVERABLE_PENDING_SET,k)));
   }
 
+  // Rebalance the existing backlog against the actual paid cohort. Previous
+  // versions promoted almost every solo with name+phone+state+city.
+  let demotedPriority=0,promotedPriority=0;
+  for(let offset=0;offset<priority.length;offset+=250){
+    const chunk=priority.slice(offset,offset+250);
+    const values=await redis.hmGet(LEAD_HASH,chunk);
+    for(let i=0;i<chunk.length;i++){
+      let lead={};try{lead=values[i]?JSON.parse(values[i]):{};}catch{}
+      if(!values[i])continue;
+      if(!highValueLawResearchLead(lead)&&emailRecoveryPriority(lead)<5){
+        await redis.sRem(PRIORITY_PENDING_SET,chunk[i]);
+        await redis.sAdd(RECOVERABLE_PENDING_SET,chunk[i]);
+        demotedPriority++;
+      }
+    }
+  }
+  for(let offset=0;offset<recoverable.length;offset+=250){
+    const chunk=recoverable.slice(offset,offset+250);
+    const values=await redis.hmGet(LEAD_HASH,chunk);
+    for(let i=0;i<chunk.length;i++){
+      let lead={};try{lead=values[i]?JSON.parse(values[i]):{};}catch{}
+      if(!values[i])continue;
+      if(highValueLawResearchLead(lead)||emailRecoveryPriority(lead)>=5){
+        await redis.sRem(RECOVERABLE_PENDING_SET,chunk[i]);
+        await redis.sAdd(PRIORITY_PENDING_SET,chunk[i]);
+        promotedPriority++;
+      }
+    }
+  }
+
   const [freshAfter,sizeReadyAfter,recoverableAfter,priorityAfter,regularAfter]=await Promise.all([
     redis.sCard(SOURCE_PENDING_SET),
     redis.sCard(SIZE_READY_PENDING_SET),
@@ -2766,7 +2805,8 @@ async function normalizeEmailQueues(){
   console.log(JSON.stringify({
     event:"law_email_queue_normalized",
     regular:regularAfter,sizeReady:sizeReadyAfter,priority:priorityAfter,fresh:freshAfter,recoverable:recoverableAfter,
-    preRegular:regular.length,preSizeReady:sizeReady.length,prePriority:priority.length,preFresh:fresh.length,preRecoverable:recoverable.length
+    preRegular:regular.length,preSizeReady:sizeReady.length,prePriority:priority.length,preFresh:fresh.length,preRecoverable:recoverable.length,
+    demotedPriority,promotedPriority
   }));
 }
 async function enrichBatch(){
