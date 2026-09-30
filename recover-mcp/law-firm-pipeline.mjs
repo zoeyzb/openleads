@@ -3212,16 +3212,19 @@ async function enrichBatch(){
   // 5) broad recovery backlog.
   // The old allocator capped PRIORITY_PENDING_SET at 6/64 even when thousands
   // of high-value leads were waiting; reserve materially more of each batch.
-  const regularKeys=await popSetBatch(PENDING_SET,Math.min(20,ENRICH_BATCH));
+  // Reserve capacity for every high-value lane so a large historical backlog
+  // cannot starve newly discovered firms. Fresh discovery gets a guaranteed
+  // slice while email-backed and size-ready conversion work stays prioritized.
+  const regularKeys=await popSetBatch(PENDING_SET,Math.min(8,ENRICH_BATCH));
   const afterRegular=Math.max(0,ENRICH_BATCH-regularKeys.length);
-  const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(16,afterRegular)):[];
+  const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(8,afterRegular)):[];
   const afterSizeReady=Math.max(0,afterRegular-sizeReadyKeys.length);
-  const priorityKeys=afterSizeReady?await popSetBatch(PRIORITY_PENDING_SET,Math.min(24,afterSizeReady)):[];
-  const afterPriority=Math.max(0,afterSizeReady-priorityKeys.length);
-  const freshKeys=afterPriority?await popSetBatch(SOURCE_PENDING_SET,Math.min(8,afterPriority)):[];
-  const afterFresh=Math.max(0,afterPriority-freshKeys.length);
-  const recoverableKeys=afterFresh?await popSetBatch(RECOVERABLE_PENDING_SET,afterFresh):[];
-  const keys=[...new Set([...regularKeys,...sizeReadyKeys,...priorityKeys,...freshKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
+  const freshKeys=afterSizeReady?await popSetBatch(SOURCE_PENDING_SET,Math.min(8,afterSizeReady)):[];
+  const afterFresh=Math.max(0,afterSizeReady-freshKeys.length);
+  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(8,afterFresh)):[];
+  const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
+  const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
+  const keys=[...new Set([...regularKeys,...sizeReadyKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
   await redis.hIncrBy(STATS,"enrich_non_destructive_batch_selected",keys.length);
   let index=0,done=0;
