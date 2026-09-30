@@ -147,12 +147,13 @@ async function detectOwnedWebsiteFromEvidenceSource(source="",emails=[],lead={},
 }
 
 async function publishedEmailsOnExactSource(source="",emails=[],lead={},key=""){
-  if(!isDirectPublishedEmailSource(source)||!emails.length)return [];
+  const tagged=(values,status)=>{const out=[...(values||[])];out.bindingStatus=status;return out;};
+  if(!isDirectPublishedEmailSource(source)||!emails.length)return tagged([],"invalid");
   try{
     const page=await fetchResearchPage(source,lead,key,true);
     if(!page?.html){
       await redis.hIncrBy(STATS,"email_source_binding_page_miss",1);
-      return [];
+      return tagged([],"unavailable");
     }
     // contextualEmails is the identity gate: it only emits an address when the
     // surrounding page/email context proves firm/person ownership via exact
@@ -195,11 +196,11 @@ async function publishedEmailsOnExactSource(source="",emails=[],lead={},key=""){
         sourceRank:rank
       }));
     }
-    return matched;
+    return tagged(matched,matched.length?"matched":"disproven");
   }catch(error){
     await redis.hIncrBy(STATS,"email_source_binding_fetch_error",1);
     console.warn(JSON.stringify({event:"law_email_source_binding_error",key,error:String(error?.message||error).slice(0,240)}));
-    return [];
+    return tagged([],"error");
   }
 }
 async function queueWebsiteRefreshCandidate(key,lead={},website=""){
@@ -2973,12 +2974,20 @@ async function enrichLead(key,lead){
   // A single shared source URL caused valid emails from one engine/page to be
   // checked against a different page discovered later.
   const sourceBoundEmails=[],boundSourceByEmail={};
+  const priorVerified=lead.law_email_source_verified===true;
   for(const email of emails){
     const candidateSource=String(emailEvidenceSources[String(email).toLowerCase()]||source||"");
     const matched=await publishedEmailsOnExactSource(candidateSource,[email],lead,key);
     if(matched.length){
       sourceBoundEmails.push(email);
       boundSourceByEmail[String(email).toLowerCase()]=candidateSource;
+    }else if(priorVerified&&existingCandidates.includes(String(email).toLowerCase())&&
+      (matched.bindingStatus==="unavailable"||matched.bindingStatus==="error")){
+      // Never destroy already-proven evidence because a source timed out.
+      sourceBoundEmails.push(email);
+      boundSourceByEmail[String(email).toLowerCase()]=candidateSource;
+      await redis.hIncrBy(STATS,"email_verified_preserved_transient_recheck",1);
+      console.log(JSON.stringify({event:"law_verified_email_preserved",key,name:String(lead.name||lead.title||""),email,source:candidateSource,status:matched.bindingStatus}));
     }
   }
   if(emails.length&&!sourceBoundEmails.length)await redis.hIncrBy(STATS,"email_source_binding_reject_leads",1);
