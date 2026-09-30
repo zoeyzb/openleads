@@ -3097,7 +3097,17 @@ async function enrichLead(key,lead){
   if(emails.length&&!sourceBoundEmails.length)await redis.hIncrBy(STATS,"email_source_binding_reject_leads",1);
   emails=sourceBoundEmails;
 
-  emails=await keeleadVerifiedEmails(emails);
+  // Official Bar/court records already passed source-page identity + exact
+  // published email + MX. KeeLead is optional infrastructure and must not delay
+  // or erase authoritative evidence. Keep KeeLead only as an extra signal for
+  // non-authoritative web sources.
+  const authoritativeBound=sourceBoundEmails.length>0&&sourceBoundEmails.every(email=>{
+    const src=String(boundSourceByEmail[String(email).toLowerCase()]||"");
+    return src&&lawSourceRank(src,lead)<=1;
+  });
+  if(!authoritativeBound)emails=await keeleadVerifiedEmails(emails);
+  else await redis.hIncrBy(STATS,"email_authoritative_keelead_bypass",1);
+
   if(emails.length)source=String(boundSourceByEmail[String(emails[0]).toLowerCase()]||source||"");
   if(emails.length)await redis.hIncrBy(STATS,"email_keelead_pass_leads",1);
   else if(sourceBoundEmails.length)await redis.hIncrBy(STATS,"email_keelead_reject_leads",1);
