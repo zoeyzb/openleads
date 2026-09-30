@@ -1471,7 +1471,9 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       const queryTargetsExpectedBar=Boolean(expectedBar&&String(result.q||"").toLowerCase().includes("site:"+expectedBar));
       const searchText=stripHtml(result.html).slice(0,10000);
       texts.push(searchText);
-      const legalIntent=/notice to creditors|attorney for|represented by|bankruptcy|legal notice|email court|email bar|filetype:pdf/i.test(String(result.q||""));
+      const queryText=String(result.q||"");
+      const legalIntent=/notice to creditors|attorney for|represented by|bankruptcy|legal notice|email court|email bar|filetype:pdf/i.test(queryText);
+      const professionalDirectoryIntent=/member directory|association email|affiliate.*email|estate planning council|professional directory/i.test(queryText);
       const ranked=(result.resultLinks||bingResultLinks(result.html))
         .filter(u=>{
           const rank=lawSourceRank(u,lead);
@@ -1480,6 +1482,7 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
           if(rank<=4&&legalRecordUrlLikely(u))return true;
           if(/\.pdf(?:$|[?#])/i.test(u)&&legalRecordUrlLikely(u))return true;
           if(legalIntent&&legalRecordUrlLikely(u))return true;
+          if(professionalDirectoryIntent&&professionalDirectoryUrlLikely(u))return true;
           // Generic web results are only worth crawling when the domain itself
           // resembles the target firm. Legal-intent queries no longer exempt
           // arbitrary web results such as History.com, Forbes, or baby-name sites.
@@ -1502,7 +1505,7 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
         const rank=lawSourceRank(link,lead);
         const bucket=rank<=2?authoritative:
           /\.pdf(?:$|[?#])/i.test(link)?pdfs:
-          legalIntent?legalRecords:
+          (legalIntent||professionalDirectoryIntent)?legalRecords:
           rank<=4?directories:other;
         if(!bucket.includes(link))bucket.push(link);
       }
@@ -2128,6 +2131,16 @@ function lawSourceRank(url="",lead={}){
   if(/facebook\.com|linkedin\.com|instagram\.com|tiktok\.com|youtube\.com|x\.com|twitter\.com|pinterest\.com|mapquest\.com/i.test(host))return 90;
   return 6;
 }
+function professionalDirectoryUrlLikely(url=""){
+  let u;try{u=new URL(String(url||""));}catch{return false;}
+  const host=u.hostname.toLowerCase().replace(/^www\./,"");
+  const path=(u.pathname+" "+u.search).toLowerCase();
+  // Only public professional/member directory and council/association surfaces.
+  // Content still must pass pageMatchesLead / exact phone identity before email use.
+  return /(?:realtor|mls|barassociation|estateplanning|estate-planning|professional|chamber|association|council)/i.test(host)||
+    /(?:affiliate|affiliates|member-directory|membership|members|directory|estate[-_]?planning|professional[-_]?directory)/i.test(path);
+}
+
 function legalRecordUrlLikely(url=""){
   let u;try{u=new URL(String(url||""));}catch{return false;}
   const host=u.hostname.toLowerCase().replace(/^www\./,"");
@@ -2600,6 +2613,18 @@ async function enrichLead(key,lead){
         `"${person}" Florida "Conflict Attorney" email filetype:pdf`
       ]:[])
     ];
+    const professionalDirectoryQueries=highValueLawResearchLead(lead)&&name?[
+      `"${name}" "${phone||city}" "member directory" email`,
+      `"${name}" "${city}" association email filetype:pdf`,
+      `"${name}" "${region}" "affiliate" email`,
+      `"${name}" "${region}" "estate planning council" email`,
+      `"${name}" "${phone}" filetype:pdf email`
+    ].filter(Boolean):[];
+    const docketQueries=highValueLawResearchLead(lead)&&name?[
+      `site:bkalerts.com "${name}" email`,
+      `site:bankruptcyobserver.com "${name}" email`,
+      `site:inforuptcy.com "${name}" email`
+    ]:[];
     const directoryEmailQueries=[
       ...(name?[`site:trellis.law "${name}" "Email:"`]:[]),
       ...(name?[`site:docketalarm.com "${name}" "Email:"`]:[]),
@@ -2618,6 +2643,8 @@ async function enrichLead(key,lead){
       ...(person?[`"${person}" ${region} attorney email`.trim()]:[]),
       ...(phone&&name?[`"${name}" "${phone}" "Email"`]:[]),
       ...barQueries,
+      ...professionalDirectoryQueries,
+      ...docketQueries,
       ...directoryEmailQueries.slice(0,4),
       ...publicRecordQueries,
       ...(name?[`"${name}" email filetype:pdf`]:[]),
