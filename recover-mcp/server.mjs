@@ -2323,8 +2323,40 @@ function telnyxWebhookTarget() {
 }
 
 function inboxLoginHtml(error = "") {
-  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>Recover Inbox</title><style>
-  *{box-sizing:border-box}body{margin:0;background:#0a0c0f;color:#f6f7f8;font-family:Inter,system-ui,-apple-system,sans-serif;min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(420px,100%);background:#11151a;border:1px solid #262c34;border-radius:22px;padding:28px}.brand{font-size:21px;font-weight:800}.muted{color:#929ba7}.err{background:#30191c;color:#ffc1c5;padding:10px;border-radius:10px;margin:12px 0}input{width:100%;background:#0d1014;color:white;border:1px solid #333a44;border-radius:12px;padding:13px;margin:8px 0 12px;font-size:16px}button{width:100%;border:0;border-radius:12px;padding:13px;font-weight:800;background:#f4f4f3;color:#111}</style></head><body><form class="card" method="post" action="/inbox/login"><div class="brand">Recover Inbox</div><p class="muted">Your Telnyx SMS conversations</p>${error ? `<div class="err">${escapeHtml(error)}</div>` : ""}<label>Password</label><input name="password" type="password" required autofocus autocomplete="current-password"><button type="submit">Open inbox</button></form></body></html>`;
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta charset="utf-8"><meta name="theme-color" content="#080b11"><title>Recover Inbox</title><style>
+  *{box-sizing:border-box}html,body{min-height:100%;margin:0}body{min-height:100vh;overflow:hidden;background:
+  radial-gradient(circle at 18% 15%,rgba(76,96,180,.22),transparent 29%),
+  radial-gradient(circle at 85% 82%,rgba(141,76,154,.17),transparent 32%),
+  linear-gradient(145deg,#07090d,#0a0e16 52%,#080a0f);color:#f4f6f9;font-family:Inter,system-ui,-apple-system,sans-serif;display:grid;place-items:center;padding:24px;position:relative}
+  .login3d{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;opacity:.68}
+  .glow{position:fixed;border-radius:999px;filter:blur(70px);pointer-events:none;opacity:.16}.glow.a{width:300px;height:300px;background:#667cff;left:-110px;top:-80px}.glow.b{width:340px;height:340px;background:#9d61ae;right:-140px;bottom:-110px}
+  .wrap{width:min(440px,100%);position:relative;z-index:2;perspective:1200px}
+  .logoOrb{width:74px;height:74px;margin:0 auto 16px;border-radius:24px;display:grid;place-items:center;font-size:28px;font-weight:900;
+  background:linear-gradient(145deg,rgba(255,255,255,.16),rgba(255,255,255,.045));border:1px solid rgba(255,255,255,.13);
+  box-shadow:0 24px 60px rgba(0,0,0,.34),inset 0 1px 0 rgba(255,255,255,.09);backdrop-filter:blur(18px);transform:rotateX(8deg) rotateY(-8deg)}
+  .card{width:100%;background:linear-gradient(155deg,rgba(20,25,34,.90),rgba(10,13,18,.80));border:1px solid rgba(255,255,255,.10);border-radius:24px;padding:28px;
+  box-shadow:0 34px 90px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.04);backdrop-filter:blur(26px) saturate(145%);-webkit-backdrop-filter:blur(26px) saturate(145%)}
+  .brand{font-size:24px;font-weight:900;letter-spacing:-.04em;background:linear-gradient(135deg,#fff,#bfcaff 58%,#d9b9e6);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .muted{color:#909bab;margin:7px 0 22px}.err{background:rgba(90,28,35,.58);border:1px solid rgba(255,105,117,.18);color:#ffc3c9;padding:10px 12px;border-radius:12px;margin:12px 0}
+  label{font-size:12px;font-weight:750;color:#bbc3cd}input{width:100%;background:rgba(255,255,255,.045);color:#fff;border:1px solid rgba(255,255,255,.095);border-radius:14px;padding:14px 15px;margin:8px 0 14px;font-size:16px;outline:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}
+  input:focus{border-color:rgba(145,164,247,.40);box-shadow:0 0 0 3px rgba(105,128,228,.08)}
+  button{width:100%;border:0;border-radius:14px;padding:14px;font-size:15px;font-weight:850;background:linear-gradient(135deg,#f8f9fb,#dce5ff);color:#11151d;cursor:pointer;box-shadow:0 12px 30px rgba(98,119,209,.15);transition:transform .16s ease,box-shadow .16s ease}
+  button:hover{transform:translateY(-1px);box-shadow:0 16px 36px rgba(98,119,209,.19)}button:active{transform:scale(.99)}
+  .privacy{text-align:center;color:#65707e;font-size:11px;margin-top:14px}
+  @media(max-width:520px){body{padding:18px}.card{padding:24px 20px;border-radius:21px}.logoOrb{width:66px;height:66px;border-radius:21px}.login3d{opacity:.42}}
+  </style><script defer src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.1/three.min.js"></script></head><body><canvas id="login3d" class="login3d" aria-hidden="true"></canvas><div class="glow a"></div><div class="glow b"></div><div class="wrap"><div class="logoOrb">R</div><form class="card" method="post" action="/inbox/login"><div class="brand">Recover Inbox</div><p class="muted">Private messaging workspace</p>${error ? `<div class="err">${escapeHtml(error)}</div>` : ""}<label>Password</label><input name="password" type="password" required autofocus autocomplete="current-password"><button type="submit">Open inbox</button><div class="privacy">Secure access · Recover Revenue</div></form></div><script>
+  window.addEventListener("load",function(){
+    if(!window.THREE)return;const c=document.getElementById("login3d");if(!c)return;let r;try{r=new THREE.WebGLRenderer({canvas:c,alpha:true,antialias:true,powerPreference:"low-power"});}catch(e){return}
+    r.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));const s=new THREE.Scene();const cam=new THREE.PerspectiveCamera(45,1,.1,100);cam.position.z=8;
+    s.add(new THREE.AmbientLight(0xffffff,.8));const l=new THREE.PointLight(0x8094ff,8,16);l.position.set(3,3,4);s.add(l);const g=new THREE.Group();s.add(g);
+    const m1=new THREE.MeshPhysicalMaterial({color:0x647bd6,roughness:.3,metalness:.18,transparent:true,opacity:.19,clearcoat:.7});const m2=new THREE.MeshBasicMaterial({color:0xb17ac1,wireframe:true,transparent:true,opacity:.11});
+    const a=new THREE.Mesh(new THREE.IcosahedronGeometry(1.4,2),m1);a.position.set(-3.8,2.4,-1);g.add(a);const b=new THREE.Mesh(new THREE.TorusKnotGeometry(.85,.2,80,12),m2);b.position.set(3.7,-2.4,-1.2);g.add(b);
+    const reduce=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;let px=0,py=0;
+    function size(){const w=innerWidth,h=innerHeight;r.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix()}function move(e){px=e.clientX/innerWidth-.5;py=e.clientY/innerHeight-.5}
+    function tick(){if(!reduce){const t=performance.now()*.0004;a.rotation.x=t;a.rotation.y=t*1.2;b.rotation.x=-t*.7;b.rotation.y=t;g.rotation.y+=(px*.16-g.rotation.y)*.025;g.rotation.x+=(-py*.08-g.rotation.x)*.025}r.render(s,cam);requestAnimationFrame(tick)}
+    addEventListener("resize",size,{passive:true});addEventListener("pointermove",move,{passive:true});size();tick();
+  },{once:true});
+  </script></body></html>`;
 }
 
 function inboxAppHtml() {
