@@ -2252,22 +2252,25 @@ async function directOfficialProfileLinks(lead={},people=[]){
         await redis.hIncrBy(STATS,"direct_floridabar_search_error",1);
       }
     }
-    return profiles.slice(0,8);
+    if(profiles.length)return profiles.slice(0,8);
   }
-  // Five high-volume state adapters. Each does one narrow lookup against the
-  // official directory domain before the broad web-search waterfall.
+  // High-volume state adapters. Exact phone is the strongest identity key when
+  // Maps gives us a firm name but not a clean attorney name.
   const officialHosts={
     TX:"texasbar.com",
     IL:"iardc.org",
     GA:"gabar.org",
     NC:"portal.ncbar.gov",
-    WA:"wsba.org"
+    WA:"wsba.org",
+    FL:"floridabar.org"
   };
   if(officialHosts[state]){
     const host=officialHosts[state];
     const out=[];
     const names=[...new Set((people||[]).filter(Boolean).slice(0,2))];
     const firm=String(lead.name||lead.title||"").replace(/["']/g," ").replace(/\s+/g," ").trim();
+    const phoneDigits=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+    const phonePretty=phoneDigits.length===10?phoneDigits.slice(0,3)+"-"+phoneDigits.slice(3,6)+"-"+phoneDigits.slice(6):"";
     if(state==="GA"){
       for(const person of names){
         const parts=normalizedPersonParts(person);
@@ -2294,7 +2297,7 @@ async function directOfficialProfileLinks(lead={},people=[]){
         }
       }
     }
-    const queries=[...names.map(n=>"site:"+host+" \""+n+"\""),...(firm?["site:"+host+" \""+firm+"\""]:[])].slice(0,2);
+    const queries=[...(phonePretty?["site:"+host+" \""+phonePretty+"\""]:[]),...names.map(n=>"site:"+host+" \""+n+"\""),...(firm?["site:"+host+" \""+firm+"\""]:[])].slice(0,3);
     for(const q of queries){
       try{
         await redis.hIncrBy(STATS,"direct_"+state.toLowerCase()+"bar_search_attempt",1);
@@ -2308,6 +2311,7 @@ async function directOfficialProfileLinks(lead={},people=[]){
             if(state==="GA")return /member-directory|member|profile/i.test(u);
             if(state==="NC")return /verification|member|search/i.test(u);
             if(state==="WA")return /legal-directory|lawyer|member|profile|search/i.test(u);
+            if(state==="FL")return /\/directories\/find-mbr\/profile\/\?[^#]*num=\d+/i.test(u);
             return true;
           })
           .sort((a,b)=>lawSourceRank(a,lead)-lawSourceRank(b,lead))
