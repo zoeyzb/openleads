@@ -27,7 +27,7 @@ const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibili
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
 const CHICAGO_HEADCOUNT_RECOVERY_KEY="recover:law-firm:chicago-headcount-recovery-version";
-const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v4-person-parser";
+const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v5-core-person-identity";
 const ASSOCIATION_DOCKET_RECOVERY_KEY="recover:law-firm:association-docket-recovery-version";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
@@ -680,6 +680,20 @@ function likelyAttorneyName(lead={}){
   if(explicit&&!explicitLooksLikeFirm&&!explicitGenericRole&&explicit.split(/\s+/).length>=2&&explicit.split(/\s+/).length<=5)return explicit;
   const raw=String(lead.name||lead.title||"").replace(/\s+/g," ").trim();
   if(!raw)return "";
+
+  // Maps often stores the actual attorney after a firm label, e.g.
+  // "Naugle Law Offices: Naugle Cathy L" or "Howes Law Firm | John Titler".
+  // Promote that person into the core identity parser so free-mail/public
+  // source verification uses the same attorney identity as search discovery.
+  const suffixPerson=raw.match(/(?:[:|]|\s[-–—]\s)\s*([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){1,4})\s*$/);
+  if(suffixPerson?.[1]){
+    const candidate=String(suffixPerson[1]).replace(/\s+/g," ").trim();
+    const parts=candidate.split(/\s+/);
+    if(parts.length>=2&&parts.length<=5&&!/\b(law|office|firm|group|associates|partners|legal|services|attorney|lawyer)\b/i.test(candidate)){
+      return candidate;
+    }
+  }
+
   const patterns=[
     /^([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4}),?\s+(?:esq\.?\s*)?attorney\s+at\s+law\b/i,
     /law offices? of\s+([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){1,4})/i,
