@@ -3036,6 +3036,20 @@ async function enrichLead(key,lead){
   const priorVerified=lead.law_email_source_verified===true;
   for(const email of emails){
     const candidateSource=String(emailEvidenceSources[String(email).toLowerCase()]||source||"");
+    const candidateRank=lawSourceRank(candidateSource,lead);
+
+    // Authoritative Bar/court emails arrived here only after the source page was
+    // fetched, pageMatchesLead() passed, and contextualEmails() found this exact
+    // address on that page. Refetching the same official page adds latency but
+    // no new verification value, and was causing good leads to hit the 75s job
+    // timeout before durable evidence could be saved.
+    if(candidateSource&&candidateRank<=1){
+      sourceBoundEmails.push(email);
+      boundSourceByEmail[String(email).toLowerCase()]=candidateSource;
+      await redis.hIncrBy(STATS,"email_authoritative_source_binding_fastpath",1);
+      continue;
+    }
+
     const matched=await publishedEmailsOnExactSource(candidateSource,[email],lead,key);
     if(matched.length){
       sourceBoundEmails.push(email);
