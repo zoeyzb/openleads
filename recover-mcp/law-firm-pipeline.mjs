@@ -1248,9 +1248,13 @@ async function findOwnedWebsitePreflight(lead,key="",force=false){
   for(const result of searchResults){
     if(result.status!=="fulfilled")continue;
     for(const url of result.value||[]){
-      if(lawSourceRank(url,lead)!==6||!ownedDomainAffinity(url,lead))continue;
+      // Exact-name/phone search results can reveal an owned site whose domain
+      // is a brand alias unrelated to the firm's Maps name (for example an
+      // initials/advocates domain). Fetch unknown first-party candidates and
+      // let ownedWebsiteFromMatchedPage enforce exact identity/phone evidence.
+      if(lawSourceRank(url,lead)!==6)continue;
       if(!links.includes(url))links.push(url);
-      if(links.length>=6)break;
+      if(links.length>=8)break;
     }
   }
   const pages=await Promise.allSettled(links.slice(0,6).map(async url=>{
