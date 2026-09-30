@@ -3626,15 +3626,18 @@ async function enrichBatch(){
   // Reserve capacity for every high-value lane so a large historical backlog
   // cannot starve newly discovered firms. Fresh discovery gets a guaranteed
   // slice while email-backed and size-ready conversion work stays prioritized.
-  const chicagoKeys=await popSetBatch(CHICAGO_PENDING_SET,Math.min(16,ENRICH_BATCH));
+  // Paid-cohort-first allocation. Legacy Chicago work gets only spare attention;
+  // source-backed and 2-10-shaped leads must not be starved by the broad solo backlog.
+  const chicagoKeys=await popSetBatch(CHICAGO_PENDING_SET,Math.min(2,ENRICH_BATCH));
   const afterChicago=Math.max(0,ENRICH_BATCH-chicagoKeys.length);
-  const regularKeys=afterChicago?await popSetBatch(PENDING_SET,Math.min(4,afterChicago)):[];
+  const regularKeys=afterChicago?await popSetBatch(PENDING_SET,Math.min(8,afterChicago)):[];
   const afterRegular=Math.max(0,afterChicago-regularKeys.length);
-  const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(4,afterRegular)):[];
+  const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(8,afterRegular)):[];
   const afterSizeReady=Math.max(0,afterRegular-sizeReadyKeys.length);
-  const freshKeys=afterSizeReady?await popSetBatch(SOURCE_PENDING_SET,Math.min(4,afterSizeReady)):[];
+  const freshKeys=afterSizeReady?await popSetBatch(SOURCE_PENDING_SET,Math.min(8,afterSizeReady)):[];
   const afterFresh=Math.max(0,afterSizeReady-freshKeys.length);
-  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(4,afterFresh)):[];
+  const priorityTarget=Math.max(16,Math.floor(ENRICH_BATCH*0.6));
+  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(priorityTarget,afterFresh)):[];
   const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
   const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
   const keys=[...new Set([...chicagoKeys,...regularKeys,...sizeReadyKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
