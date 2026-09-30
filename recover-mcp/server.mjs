@@ -954,9 +954,11 @@ function buildServer() {
     try {
       const redis = await getAcquisitionRedis();
       const id = randomUUID();
+      const isLawAcquisition = /\blaw\s*firm\b|\battorney\b|\blawyer\b/i.test(String(args.industry || ""));
       const job = {
         id,
         ...args,
+        ...(isLawAcquisition ? { search_profile:"law-firm" } : {}),
         status:"queued",
         phase:"queued",
         round:0,
@@ -971,7 +973,7 @@ function buildServer() {
       };
       await redis.set(`recover:acq:${id}`, JSON.stringify(job), { EX: 604800 });
       await redis.sAdd("recover:acq:index", id);
-      await redis.lPush("recover:acquisition:queue", id);
+      await redis.lPush(isLawAcquisition ? "recover:acquisition:queue:law-firm" : "recover:acquisition:queue", id);
       return jsonText({
         status:"queued",
         acquisition_id:id,
