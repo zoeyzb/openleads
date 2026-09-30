@@ -1113,6 +1113,7 @@ function buildServer() {
       let law_final_qualified_count=0;
       let law_verified_2_to_10_count=0;
       let law_verified_email_count=0;
+      let law_target_2_to_10_no_website_count=0;
       if (String(job.search_profile||"")==="law-firm" && leads.length) {
         const normalizePhoneLocal=value=>String(value||"").replace(/\D/g,"").slice(-10);
         const directKeys=leads.map(lead=>{
@@ -1144,14 +1145,19 @@ function buildServer() {
           const count=Number(merged.attorney_count_estimate||0);
           const sizeVerified=merged.attorney_count_evidence_verified===true && count>=2 && count<=10;
           const emailVerified=merged.law_email_source_verified===true && Array.isArray(merged.emails) && merged.emails.length>0;
-          const finalQualified=merged.qualified_lead===true && sizeVerified && emailVerified && !String(merged.website||"").trim();
+          const noOwnedWebsite=!String(merged.website||"").trim();
+          const targetQualified=sizeVerified && noOwnedWebsite;
+          const finalQualified=merged.qualified_lead===true && sizeVerified && emailVerified && noOwnedWebsite;
           if(sizeVerified)law_verified_2_to_10_count++;
           if(emailVerified)law_verified_email_count++;
+          if(targetQualified)law_target_2_to_10_no_website_count++;
           if(finalQualified)law_final_qualified_count++;
           return {
             ...merged,
             law_pipeline:{
               attorney_count_verified_2_to_10:sizeVerified,
+              no_owned_website:noOwnedWebsite,
+              target_2_to_10_no_website:targetQualified,
               email_source_verified:emailVerified,
               final_qualified:finalQualified
             }
@@ -1170,6 +1176,7 @@ function buildServer() {
         next_offset:offset+leads.length<total ? offset+leads.length : null,
         ...(String(job.search_profile||"")==="law-firm" ? {
           law_verified_2_to_10_count,
+          law_target_2_to_10_no_website_count,
           law_verified_email_count,
           law_final_qualified_count
         } : {}),
