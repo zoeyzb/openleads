@@ -2760,7 +2760,7 @@ async function cleanupEmailCandidateSet(){
         try{
           const sourceRank=lawSourceRank(candidateSource,lead);
           if(sourceRank===6){
-            const page=await fetchText(candidateSource,5000);
+            const page=await fetchResearchPage(candidateSource,lead,chunk[i],true);
             if(page?.html){
               const pageText=stripHtml(page.html).slice(0,50000);
               const owned=ownedWebsiteFromMatchedPage(page.final_url||candidateSource,pageText,lead);
