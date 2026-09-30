@@ -1152,6 +1152,20 @@ function lawyerComCandidateFirmUrls(lead={}){
     `https://www.lawyer.com/firm/law-office-of-${stripped}${state?"-"+state:""}.html`
   ])];
 }
+async function verifyOwnedWebsiteCandidate(url="",lead={}){
+  if(!/^https?:\/\//i.test(String(url||"")))return "";
+  try{
+    const page=await fetchResearchPage(String(url),lead,String(lead.place_id||lead.key||"")?("place:"+String(lead.place_id||"")):"");
+    if(!page?.html)return "";
+    const finalUrl=String(page.final_url||url);
+    const text=stripHtml(page.html).slice(0,50000);
+    const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+    const phoneMatch=Boolean(phone&&String(text).replace(/\D/g,"").includes(phone));
+    if(!pageMatchesLead(text,lead,finalUrl)&&!phoneMatch)return "";
+    return ownedWebsiteFromMatchedPage(finalUrl,text,lead)||new URL(finalUrl).origin;
+  }catch{return "";}
+}
+
 async function directDirectorySizeEvidence(lead={},key=""){
   const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
   if(!name)return {count:0,source:"",website:""};
@@ -1184,7 +1198,8 @@ async function directDirectorySizeEvidence(lead={},key=""){
       const text=stripHtml(page.html).slice(0,70000);
       if(!pageMatchesLead(text,lead,source))continue;
       const count=attorneyEstimate(page.html,text);
-      const website=outboundFirmWebsiteFromDirectory(page.html,lead);
+      const websiteCandidate=outboundFirmWebsiteFromDirectory(page.html,lead);
+      const website=websiteCandidate?await verifyOwnedWebsiteCandidate(websiteCandidate,lead):"";
       if(count>0){
         await redis.hIncrBy(STATS,"direct_directory_size_hit",1);
         console.log(JSON.stringify({event:"law_direct_directory_size_hit",key,name,count,source,website:website||""}));
@@ -2283,14 +2298,34 @@ async function enrichLead(key,lead){
   }
   if(await redis.sIsMember(ENRICHED_SET,key))return false;
 
-  const website=String(lead.website||"").trim();
+  let website=String(lead.website||"").trim();
+  const chicagoLead=/\bchicago\b/i.test(String(lead.acquisition_location||lead.target_area||""));
+  const pipelineWebsiteEvidence=String(lead.owned_website_evidence_source||"").trim();
+  if(chicagoLead&&/^https?:\/\//i.test(website)&&pipelineWebsiteEvidence){
+    const verifiedWebsite=await verifyOwnedWebsiteCandidate(website,lead);
+    if(verifiedWebsite){
+      website=verifiedWebsite;
+      if(website!==String(lead.website||"")){
+        lead={...lead,website};
+        await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
+      }
+    }else{
+      // A directory/ad/alias false positive must not disqualify a no-website lead.
+      website="";
+      lead={...lead,website:"",owned_website_evidence_source:""};
+      await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
+      await redis.sRem(REJECTED_SET,key);
+      await redis.sRem(ENRICHED_SET,key);
+      await redis.hIncrBy(STATS,"chicago_false_website_cleared",1);
+    }
+  }
   const chicagoHeadcountCampaign=!website &&
-    /\bchicago\b/i.test(String(lead.acquisition_location||lead.target_area||"")) &&
+    chicagoLead &&
     lawFirmNameShape(lead)!=="solo";
   if(/^https?:\/\//i.test(website)){
     await redis.sAdd(ENRICHED_SET,key);
     await redis.sAdd(REJECTED_SET,key);
-    await Promise.all([redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key)]);
+    await Promise.all([redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(CHICAGO_PENDING_SET,key)]);
     await redis.hIncrBy(STATS,"rejected_has_website",1);
     return true;
   }
