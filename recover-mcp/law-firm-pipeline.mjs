@@ -2484,12 +2484,21 @@ async function directOfficialProfileLinks(lead={},people=[]){
               if(!profiles.includes(href))profiles.push(href);
             }catch{}
           }
+          console.log(JSON.stringify({
+            event:"law_floridabar_direct_firm_search",
+            name:String(lead.name||lead.title||""),
+            firm,
+            city,
+            profiles:profiles.length,
+            searchUrl
+          }));
           if(profiles.length){
             await redis.hIncrBy(STATS,"direct_floridabar_profile_links",profiles.length);
             break;
           }
-        }catch{
+        }catch(error){
           await redis.hIncrBy(STATS,"direct_floridabar_search_error",1);
+          console.warn(JSON.stringify({event:"law_floridabar_direct_firm_error",name:String(lead.name||lead.title||""),error:String(error?.message||error).slice(0,220)}));
         }
       }
     }
