@@ -2282,8 +2282,18 @@ async function directOfficialProfileLinks(lead={},people=[]){
       for(const q of gaQueries){
         try{
           await redis.hIncrBy(STATS,"direct_gabar_search_attempt",1);
-          const page=await fetchText("https://www.bing.com/search?q="+encodeURIComponent(q),5000);
-          const links=[...new Set(bingResultLinks(String(page?.html||"")))]
+          const [bingPage,duckPage]=await Promise.allSettled([
+            fetchText("https://www.bing.com/search?q="+encodeURIComponent(q),5000),
+            fetchText("https://html.duckduckgo.com/html/?q="+encodeURIComponent(q),5000)
+          ]);
+          const bingHtml=bingPage.status==="fulfilled"?String(bingPage.value?.html||""):"";
+          const duckHtml=duckPage.status==="fulfilled"?String(duckPage.value?.html||""):"";
+          const links=[...new Set([
+            ...bingResultLinks(bingHtml),
+            ...duckResultLinks(duckHtml),
+            ...markdownResultLinks(bingHtml),
+            ...markdownResultLinks(duckHtml)
+          ])]
             .filter(u=>{
               try{
                 const x=new URL(u);
