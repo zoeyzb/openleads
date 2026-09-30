@@ -2287,7 +2287,7 @@ async function directOfficialProfileLinks(lead={},people=[]){
             .filter(u=>{
               try{
                 const x=new URL(u);
-                return x.hostname.toLowerCase()==="gabar.reliaguide.com"&&/^\/lawyer\/[^/]+/i.test(x.pathname)&&!\/lawyer\/search/i.test(x.pathname);
+                return x.hostname.toLowerCase()==="gabar.reliaguide.com"&&/^\/lawyer\/[^/]+/i.test(x.pathname)&&!/\/lawyer\/search/i.test(x.pathname);
               }catch{return false;}
             })
             .slice(0,6);
