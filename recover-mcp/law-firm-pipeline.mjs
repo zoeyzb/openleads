@@ -2837,9 +2837,10 @@ async function enrichLead(key,lead){
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ].filter(Boolean))];
     const highValue=highValueLawResearchLead(lead);
+    const soloShape=lawFirmNameShape(lead)==="solo";
     const hasDirectOfficial=directOfficialLinks.length>0;
-    const dualSearch=!hasDirectOfficial&&(highValue||emailRecoveryPriority(lead)>=5);
-    const effectiveQueries=hasDirectOfficial?bingQueries.slice(0,4):bingQueries;
+    const dualSearch=!soloShape&&!hasDirectOfficial&&(highValue||emailRecoveryPriority(lead)>=5);
+    const effectiveQueries=hasDirectOfficial?bingQueries.slice(0,4):(soloShape?bingQueries.slice(0,5):bingQueries);
     // When an official directory profile is already known, do not burn dozens
     // of generic search requests first. Fetch the authoritative profile plus a
     // tiny fallback set; only fan out to multiple engines when direct lookup
@@ -2848,7 +2849,7 @@ async function enrichLead(key,lead){
       bingFallback(
         lead,
         effectiveQueries,
-        hasDirectOfficial?4:(highValue?10:(dualSearch?8:7)),
+        hasDirectOfficial?4:(soloShape?5:(highValue?10:(dualSearch?8:7))),
         key,
         [],
         hasDirectOfficial?1:(highValue?2:1),
@@ -3586,6 +3587,8 @@ async function bootstrapExistingQualified(){
       const mxEmails=emailChecks.filter(x=>x.ok).map(x=>x.email);
       const emails=await keeleadVerifiedEmails(mxEmails);
       const attorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
+      if(sourceBacked&&emails.length)await redis.sAdd(UNIQUE_VERIFIED_EMAIL_SET,entry.field);
+      if(lead.attorney_count_evidence_verified===true&&attorneyCount>0)await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,entry.field);
       const evidenceText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const observedKeys=lawFirmPracticeKeys(evidenceText);
       const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
@@ -3633,6 +3636,9 @@ async function bootstrapExistingQualified(){
         attorney_count_evidence_verified:lead.attorney_count_evidence_verified===true,
         email_source_verified:sourceBacked&&emails.length>0
       });
+
+      if(qualifies)await redis.sAdd(UNIQUE_ELIGIBLE_SET,entry.field);
+      else await redis.sRem(UNIQUE_ELIGIBLE_SET,entry.field);
 
       if(!qualifies){
         if(wasQualified){
