@@ -888,6 +888,13 @@ const NY_FIRST_MILESTONE=Number(process.env.NY_FIRST_MILESTONE||1000);
 async function queueForJob(job) {
   const industry=String(job?.industry||"");
   const batchId=String(job?.batch_id||"");
+
+  // Law acquisitions have a dedicated worker pool. Restart/retry recovery must
+  // preserve that routing instead of silently moving them to the generic queue.
+  if (String(job?.search_profile||"")==="law-firm" ||
+      /\blaw\s*firm\b|\battorney\b|\blawyer\b/i.test(industry)) {
+    return LAW_FIRM_QUEUE;
+  }
   const isFastNy=industry==="HOME_COMFORT_TRADES" ||
     batchId==="ny-home-comfort-fast-1000-2026-09-09" ||
     batchId==="ny-home-comfort-fast-pass2-2026-09-09";
@@ -923,7 +930,7 @@ async function enqueueUnique(id, jobOverride=null) {
     }
 
     const queueKey=await queueForJob(job);
-    const allQueues=[NY_PRIORITY_QUEUE,US_CITY_PRIORITY_QUEUE,ACTIVE_QUEUE,PAUSED_NATIONAL_QUEUE];
+    const allQueues=[LAW_FIRM_QUEUE,NY_PRIORITY_QUEUE,US_CITY_PRIORITY_QUEUE,ACTIVE_QUEUE,PAUSED_NATIONAL_QUEUE];
 
     // A queued acquisition must exist in exactly one queue.
     for (const key of allQueues) {
