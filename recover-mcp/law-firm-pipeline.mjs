@@ -251,6 +251,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
+const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const UNIQUE_VERIFIED_HEADCOUNT_SET="recover:law-firm:unique-verified-headcount:v1";
 const UNIQUE_ELIGIBLE_SET="recover:law-firm:unique-eligible:v1";
 const WEBSITE_CANDIDATE_HASH="recover:law-firm:website-candidates:v1";
@@ -2713,6 +2714,23 @@ async function enrichLead(key,lead){
     await redis.hIncrBy(STATS,"website_preflight_deferred",1);
   }
 
+  let durableEmailEvidence=null;
+  try{
+    const rawEvidence=await redis.hGet(VERIFIED_EMAIL_EVIDENCE_HASH,key);
+    if(rawEvidence)durableEmailEvidence=JSON.parse(rawEvidence);
+  }catch{}
+  if(durableEmailEvidence?.source&&Array.isArray(durableEmailEvidence?.emails)&&durableEmailEvidence.emails.length){
+    lead={...lead,
+      emails:[...new Set([...(Array.isArray(lead.emails)?lead.emails:[]),...durableEmailEvidence.emails])],
+      law_email_source:String(durableEmailEvidence.source),
+      law_email_source_verified:true,
+      law_email_validation:"published_exact+strict_firm_identity+mx",
+      law_email_verified_at:String(durableEmailEvidence.verified_at||lead.law_email_verified_at||"")
+    };
+    await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
+    await redis.sAdd(UNIQUE_VERIFIED_EMAIL_SET,key);
+  }
+
   const existingSource=String(lead.law_email_source||lead.email_source||lead.email_evidence_url||"").trim();
   const existingCandidates=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
     .map(x=>String(x||"").trim().toLowerCase())
@@ -3001,6 +3019,13 @@ async function enrichLead(key,lead){
   if(emailSourceVerified){
     await redis.hIncrBy(STATS,"email_source_verified_leads",1);
     await redis.sAdd(UNIQUE_VERIFIED_EMAIL_SET,key);
+    const verifiedAt=new Date().toISOString();
+    await redis.hSet(VERIFIED_EMAIL_EVIDENCE_HASH,key,JSON.stringify({
+      emails:[...new Set(emails)],
+      source,
+      verified_at:verifiedAt,
+      verification:"published_exact+strict_firm_identity+mx"
+    }));
   }
 
   // Website eligibility comes before firm-size research. If the verified email
@@ -3597,6 +3622,17 @@ async function bootstrapExistingQualified(){
       const emails=await keeleadVerifiedEmails(mxEmails);
       const attorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
       if(sourceBacked&&emails.length)await redis.sAdd(UNIQUE_VERIFIED_EMAIL_SET,entry.field);
+      else{
+        try{
+          const durableRaw=await redis.hGet(VERIFIED_EMAIL_EVIDENCE_HASH,entry.field);
+          if(durableRaw){
+            const durable=JSON.parse(durableRaw);
+            if(Array.isArray(durable?.emails)&&durable.emails.length&&isDirectPublishedEmailSource(durable?.source||"")){
+              await redis.sAdd(UNIQUE_VERIFIED_EMAIL_SET,entry.field);
+            }
+          }
+        }catch{}
+      }
       if(lead.attorney_count_evidence_verified===true&&attorneyCount>0)await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,entry.field);
       const evidenceText=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const observedKeys=lawFirmPracticeKeys(evidenceText);
