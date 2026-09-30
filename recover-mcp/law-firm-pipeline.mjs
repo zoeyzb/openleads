@@ -25,6 +25,8 @@ const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRI
 const EMAIL_METHOD_VERSION="email-v66-yahoo-official-bar-fallback";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
+const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v1";
+const CHICAGO_HEADCOUNT_RECOVERY_KEY="recover:law-firm:chicago-headcount-recovery-version";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -2850,11 +2852,12 @@ async function cleanupEmailCandidateSet(){
 }
 
 async function bootstrapExistingQualified(){
-  let scanned=0,qualifiedAdded=0,qualifiedRemoved=0,queuedForEnrichment=0,alreadyQualified=0,requalifyQueued=0,historicalQualifiedMarkers=0,calbarAdapterRecoveryQueued=0;
+  let scanned=0,qualifiedAdded=0,qualifiedRemoved=0,queuedForEnrichment=0,alreadyQualified=0,requalifyQueued=0,historicalQualifiedMarkers=0,calbarAdapterRecoveryQueued=0,chicagoHeadcountRecoveryQueued=0;
   const fullRequalify=(await redis.get(REQUALIFY_VERSION_KEY))!==FULL_REQUAL_VERSION;
   const historicalRecovery=(await redis.get(HISTORICAL_RECOVERY_VERSION_KEY))!==HISTORICAL_RECOVERY_VERSION;
   const calbarAdapterRecovery=(await redis.get(CALBAR_ADAPTER_VERSION_KEY))!==CALBAR_ADAPTER_VERSION;
   const candidateSizeRecovery=(await redis.get(CANDIDATE_SIZE_RESEARCH_VERSION_KEY))!==CANDIDATE_SIZE_RESEARCH_VERSION;
+  const chicagoHeadcountRecovery=(await redis.get(CHICAGO_HEADCOUNT_RECOVERY_KEY))!==CHICAGO_HEADCOUNT_RECOVERY_VERSION;
   const readySet=new Set(await redis.sMembers(READY_SET));
   const requalSizeReady=[],requalRegular=[],requalPriority=[],requalRecoverable=[],requalAll=[];
 
@@ -2927,6 +2930,26 @@ async function bootstrapExistingQualified(){
       scanned++;
 
       const website=String(lead.website||"").trim();
+
+      // One-time recovery for the Chicago website-build campaign: old runs
+      // marked fresh firms enriched before proving the requested 2-10 size.
+      // Re-open only no-website, firm/multi-shaped Chicago records.
+      if(chicagoHeadcountRecovery && !website &&
+         /\bchicago\b/i.test(String(lead.acquisition_location||lead.target_area||"")) &&
+         lead.attorney_count_evidence_verified!==true){
+        const shape=lawFirmNameShape(lead);
+        if(shape==="multi"||shape==="firm"){
+          await Promise.all([
+            redis.sRem(ENRICHED_SET,entry.field),
+            redis.sRem(REJECTED_SET,entry.field),
+            redis.sRem(RECOVERABLE_PENDING_SET,entry.field),
+            redis.sRem(SOURCE_PENDING_SET,entry.field),
+            redis.sRem(SIZE_READY_PENDING_SET,entry.field)
+          ]);
+          await redis.sAdd(PRIORITY_PENDING_SET,entry.field);
+          chicagoHeadcountRecoveryQueued++;
+        }
+      }
 
       // Direct CalBar adapter migrations retry only California no-website law
       // records. This avoids a global ~36K method requeue for source-specific
@@ -3110,9 +3133,10 @@ async function bootstrapExistingQualified(){
   }
 
   if(calbarAdapterRecovery)await redis.set(CALBAR_ADAPTER_VERSION_KEY,CALBAR_ADAPTER_VERSION);
+  if(chicagoHeadcountRecovery)await redis.set(CHICAGO_HEADCOUNT_RECOVERY_KEY,CHICAGO_HEADCOUNT_RECOVERY_VERSION);
 
   console.log(JSON.stringify({
-    event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,FULL_REQUAL_VERSION,HISTORICAL_RECOVERY_VERSION,EMAIL_METHOD_VERSION,CALBAR_ADAPTER_VERSION,calbarAdapterRecoveryQueued,
+    event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,FULL_REQUAL_VERSION,HISTORICAL_RECOVERY_VERSION,EMAIL_METHOD_VERSION,CALBAR_ADAPTER_VERSION,calbarAdapterRecoveryQueued,chicagoHeadcountRecoveryQueued,
     queuedForEnrichment,requalifyQueued,fullRequalify,
     requalifySizeReady:requalSizeReady.length,requalifyRegular:requalRegular.length,requalifyPriority:requalPriority.length,requalifyRecoverable:requalRecoverable.length,
     historicalQualifiedMarkers
