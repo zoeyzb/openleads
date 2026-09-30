@@ -216,6 +216,7 @@ const SIZE_READY_PENDING_SET="recover:law-firm:size-ready-pending:v1";
 const PRIORITY_PENDING_SET="recover:law-firm:enrich-priority:v3";
 const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
+const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const WEBSITE_CANDIDATE_HASH="recover:law-firm:website-candidates:v1";
 const WEBSITE_AUDIT_PENDING_SET="recover:law-firm:website-audit-pending:v1";
 const WEBSITE_REFRESH_HASH="recover:law-firm:website-refresh:v1";
@@ -2931,6 +2932,27 @@ async function bootstrapExistingQualified(){
 
       const website=String(lead.website||"").trim();
 
+      // Always prioritize Chicago no-website firms whose 2-10 headcount is
+      // still unknown. This is the user's active campaign and must not sit
+      // behind the nationwide historical email backlog.
+      if(!website &&
+         /\bchicago\b/i.test(String(lead.acquisition_location||lead.target_area||"")) &&
+         lead.attorney_count_evidence_verified!==true){
+        const chicagoShape=lawFirmNameShape(lead);
+        if(chicagoShape!=="solo"){
+          await Promise.all([
+            redis.sRem(ENRICHED_SET,entry.field),
+            redis.sRem(REJECTED_SET,entry.field),
+            redis.sRem(RECOVERABLE_PENDING_SET,entry.field),
+            redis.sRem(SOURCE_PENDING_SET,entry.field),
+            redis.sRem(SIZE_READY_PENDING_SET,entry.field),
+            redis.sRem(PRIORITY_PENDING_SET,entry.field),
+            redis.sRem(PENDING_SET,entry.field)
+          ]);
+          await redis.sAdd(CHICAGO_PENDING_SET,entry.field);
+        }
+      }
+
       // One-time recovery for the Chicago website-build campaign: old runs
       // marked fresh firms enriched before proving the requested 2-10 size.
       // Re-open only no-website, firm/multi-shaped Chicago records.
@@ -3152,6 +3174,7 @@ async function popSetBatch(setKey,count){
 }
 async function moveToEmailQueue(key,targetSet){
   await Promise.all([
+    redis.sRem(CHICAGO_PENDING_SET,key),
     redis.sRem(SOURCE_PENDING_SET,key),
     redis.sRem(SIZE_READY_PENDING_SET,key),
     redis.sRem(RECOVERABLE_PENDING_SET,key),
@@ -3252,16 +3275,18 @@ async function enrichBatch(){
   // Reserve capacity for every high-value lane so a large historical backlog
   // cannot starve newly discovered firms. Fresh discovery gets a guaranteed
   // slice while email-backed and size-ready conversion work stays prioritized.
-  const regularKeys=await popSetBatch(PENDING_SET,Math.min(8,ENRICH_BATCH));
-  const afterRegular=Math.max(0,ENRICH_BATCH-regularKeys.length);
-  const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(8,afterRegular)):[];
+  const chicagoKeys=await popSetBatch(CHICAGO_PENDING_SET,Math.min(16,ENRICH_BATCH));
+  const afterChicago=Math.max(0,ENRICH_BATCH-chicagoKeys.length);
+  const regularKeys=afterChicago?await popSetBatch(PENDING_SET,Math.min(4,afterChicago)):[];
+  const afterRegular=Math.max(0,afterChicago-regularKeys.length);
+  const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(4,afterRegular)):[];
   const afterSizeReady=Math.max(0,afterRegular-sizeReadyKeys.length);
-  const freshKeys=afterSizeReady?await popSetBatch(SOURCE_PENDING_SET,Math.min(8,afterSizeReady)):[];
+  const freshKeys=afterSizeReady?await popSetBatch(SOURCE_PENDING_SET,Math.min(4,afterSizeReady)):[];
   const afterFresh=Math.max(0,afterSizeReady-freshKeys.length);
-  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(8,afterFresh)):[];
+  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(4,afterFresh)):[];
   const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
   const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
-  const keys=[...new Set([...regularKeys,...sizeReadyKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
+  const keys=[...new Set([...chicagoKeys,...regularKeys,...sizeReadyKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
   await redis.hIncrBy(STATS,"enrich_non_destructive_batch_selected",keys.length);
   let index=0,done=0;
@@ -3278,6 +3303,7 @@ async function enrichBatch(){
           new Promise((_,reject)=>setTimeout(()=>reject(new Error("enrich_job_timeout_"+jobTimeoutMs)),jobTimeoutMs))
         ]);
         await Promise.all([
+          redis.sRem(CHICAGO_PENDING_SET,key),
           redis.sRem(SOURCE_PENDING_SET,key),
           redis.sRem(SIZE_READY_PENDING_SET,key),
           redis.sRem(RECOVERABLE_PENDING_SET,key),
