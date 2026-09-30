@@ -2331,8 +2331,153 @@ function inboxAppHtml() {
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta charset="utf-8"><meta name="theme-color" content="#0a0c0f"><title>Recover Inbox</title><style>
   :root{color-scheme:dark}*{box-sizing:border-box}html,body{height:100%;overflow:hidden}body{margin:0;background:#090b0e;color:#f5f6f7;font:14px/1.4 Inter,system-ui,-apple-system,sans-serif}.app{height:100dvh;min-height:0;overflow:hidden;display:grid;grid-template-columns:340px 1fr}.side{height:100%;min-height:0;overflow:hidden;background:#0d1014;border-right:1px solid #242a32;display:flex;flex-direction:column;min-width:0}.head{padding:13px 14px;border-bottom:1px solid #242a32;display:flex;justify-content:space-between;align-items:center;gap:10px}.brand{font-weight:850;font-size:18px;letter-spacing:-.02em}.topStats{color:#7e8792;font-size:11px;margin-top:2px;white-space:nowrap}.topActions{display:flex;gap:6px;align-items:center;flex:none}.iconBtn{width:34px;height:34px;padding:0;border:1px solid #2d343d;border-radius:10px;background:#151a20;color:#d9dfe6;display:grid;place-items:center;font-size:16px;font-weight:800;cursor:pointer}.iconBtn:hover{background:#1b2128}#composeNew{display:grid!important;font-size:19px;line-height:1}#composeNew::after{content:"";}.refreshCircle{border-radius:50%;font-size:17px}.refreshCircle:active{transform:rotate(35deg)}.liveStatus{height:34px;padding:0 10px;border-radius:10px;border:1px solid #1f4e34;background:#10251a;color:#79d9a3;font-size:10px;font-weight:850;display:flex;align-items:center;gap:6px;cursor:default}.liveStatus.live{border-color:#1f4e34;background:#10251a;color:#79d9a3}.liveStatus.offline{border-color:#6a242a;background:#30191c;color:#ff9ca6}.liveStatus.offline .livePulse{background:#ff5f6d;box-shadow:0 0 8px rgba(255,95,109,.8)}.green{font-size:10px;color:#79d9a3;background:#10251a;border:1px solid #1f4e34;border-radius:999px;padding:4px 7px}.search{margin:10px 12px 8px;border:1px solid #303741;background:#11151a;color:#fff;border-radius:11px;padding:10px 12px;outline:none}.search:focus{border-color:#4a5563;box-shadow:0 0 0 2px rgba(255,255,255,.035)}.list{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}.row{padding:11px 14px;border-bottom:1px solid #1c2127;cursor:pointer;position:relative}.row:hover,.row.active{background:#151a20}.row.reply{padding-left:38px}.replyDot{position:absolute;left:16px;top:20px;width:10px;height:10px;border-radius:50%;background:#66f0a5;box-shadow:0 0 0 3px rgba(102,240,165,.12),0 0 12px rgba(102,240,165,.9);animation:pulse 1.8s ease-in-out infinite}.replyLabel{display:inline-flex;align-items:center;gap:5px;margin-top:5px;padding:2px 7px;border-radius:999px;background:#10251a;border:1px solid #1f4e34;color:#79d9a3;font-size:10px;font-weight:800}.filters{display:flex;gap:7px;padding:0 12px 12px;flex-wrap:wrap}.filter{border:1px solid #2d343d;background:#11151a;color:#89939f;border-radius:999px;padding:6px 10px;font-size:11px;font-weight:750;cursor:pointer}.filter.active{background:#f1f2f3;color:#101215;border-color:#f1f2f3}.phone{font-weight:750}@keyframes pulse{0%,100%{transform:scale(.9);opacity:.78}50%{transform:scale(1.18);opacity:1}}.preview{color:#929ba7;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.time{font-size:10px;color:#68717c;margin-top:2px}.draftLabel{display:inline-flex;align-items:center;margin-left:6px;padding:1px 6px;border-radius:999px;background:#2a2414;color:#f3cf72;border:1px solid #5c4b1f;font-size:9px;font-weight:850;vertical-align:1px}.thread{height:100%;min-height:0;overflow:hidden;display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-width:0}.threadHead{padding:14px 18px;border-bottom:1px solid #242a32;background:#0d1014;display:flex;gap:10px;align-items:center}.msgs{min-height:0;overflow:auto;overscroll-behavior:contain;padding:20px;display:flex;flex-direction:column;gap:9px}.bubble{max-width:min(76%,680px);padding:10px 13px;border-radius:16px;white-space:pre-wrap;word-break:break-word}.bubble a{color:#2f7cf6;text-decoration:underline;text-underline-offset:2px;overflow-wrap:anywhere}.out a{color:#075ac8}.in{align-self:flex-start;background:#191f26;border:1px solid #29323c}.out{align-self:flex-end;background:#f0f1f2;color:#111}.meta{font-size:10px;opacity:.58;margin-top:5px}.composer{display:grid;grid-template-columns:1fr auto;gap:8px;padding:12px;border-top:1px solid #242a32;background:#0d1014}.composer textarea{min-height:48px;max-height:140px;resize:none;background:#11151a;color:#fff;border:1px solid #303741;border-radius:12px;padding:12px;font:inherit}.composer button,.smallbtn{border:0;border-radius:11px;font-weight:750}.composer button{padding:0 15px;background:#f0f1f2;color:#111}.smallbtn{padding:8px 10px;background:#171c22;color:#cbd1d7;cursor:pointer}.smallbtn:disabled{opacity:.5;cursor:not-allowed}.livePulse{display:inline-block;width:6px;height:6px;border-radius:50%;background:#66f0a5;margin-right:5px;box-shadow:0 0 8px rgba(102,240,165,.8)}.statusBadge{display:inline-flex;align-items:center;gap:4px;margin-left:6px;padding:1px 6px;border-radius:999px;font-size:9px;font-weight:800;background:#222831;color:#8e98a5}.statusBadge.delivered{background:#10251a;color:#79d9a3}.statusBadge.failed{background:#30191c;color:#ffc2c6}.messageFailureReason{margin-top:6px;padding-top:6px;border-top:1px solid rgba(127,0,0,.18);font-size:10px;color:#8f3038}.messageFailureReason strong{font-weight:900}.resendBtn{margin-left:7px;border:1px solid #a83a45;background:#fff;color:#8a1723;border-radius:7px;padding:2px 7px;font-size:9px;font-weight:850;cursor:pointer}.resendBtn:disabled{opacity:.45;cursor:wait}.notifyOn{color:#79d9a3;border-color:#1f4e34}.empty{display:grid;place-items:center;color:#707a86;padding:28px;text-align:center}.mobileBack{display:none}.error{padding:9px 12px;background:#30191c;color:#ffc2c6}.toast{position:fixed;right:18px;bottom:18px;z-index:20;background:#171c22;border:1px solid #303843;border-radius:12px;padding:10px 13px;color:#dce2e8;box-shadow:0 10px 35px rgba(0,0,0,.35);opacity:0;transform:translateY(8px);pointer-events:none;transition:.18s}.toast.show{opacity:1;transform:none}.replyMeta{color:#66d998;font-weight:800}.failurePanel{display:none;margin:0 12px 12px;border:1px solid #3a2a2d;background:#171113;border-radius:12px;padding:10px 12px;color:#d8c8ca}.failurePanel.show{display:block}.failureItem{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-top:1px solid #2a2023}.failureItem:first-child{border-top:0}.failureCount{font-weight:850;color:#ff9ea7;flex:none}.failureTitle{font-weight:750}.failureDetail{font-size:11px;color:#8e7f82;margin-top:2px}.undoBar{position:fixed;left:50%;bottom:20px;transform:translate(-50%,18px);z-index:25;display:flex;align-items:center;gap:12px;background:#f1f2f3;color:#111;border-radius:14px;padding:10px 12px 10px 14px;box-shadow:0 18px 50px rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:.18s;min-width:280px;justify-content:space-between}.undoBar.show{opacity:1;transform:translate(-50%,0);pointer-events:auto}.undoBar button{border:0;background:#111;color:#fff;border-radius:9px;padding:7px 10px;font-weight:800;cursor:pointer}.pendingBubble{opacity:.65;border-style:dashed!important}.composeOverlay{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.58);display:none;align-items:flex-start;justify-content:center;padding:72px 16px 16px}.composeOverlay.show{display:flex}.composeCard{width:min(520px,100%);background:#0f1318;border:1px solid #2b333d;border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.55);overflow:hidden}.composeHead{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #242a32}.composeTitle{font-weight:850;font-size:16px}.closeBtn{width:30px;height:30px;border:0;border-radius:9px;background:#171c22;color:#cbd1d7;cursor:pointer}.composeBody{padding:14px 16px;display:grid;gap:10px}.composeBody input,.composeBody textarea{width:100%;background:#11151a;color:#fff;border:1px solid #303741;border-radius:11px;padding:11px 12px;font:inherit;outline:none}.composeBody textarea{min-height:150px;resize:vertical}.composeBody input:focus,.composeBody textarea:focus{border-color:#4a5563}.composeActions{display:flex;justify-content:flex-end;gap:8px;padding:0 16px 16px}.composeActions button{border:0;border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer}.composeCancel{background:#171c22;color:#cbd1d7}.composeSend{background:#f0f1f2;color:#111}
   @media(max-width:720px){.app{display:block}.side{height:100dvh;border:0}.thread{height:100dvh;display:none}.app.open .side{display:none}.app.open .thread{display:grid}.mobileBack{display:inline-block}.bubble{max-width:88%}.msgs{padding:14px}}
-  </style></head><body><div class="app" id="app"><aside class="side"><div class="head" style="position:sticky;top:0;z-index:5;background:#0d1014"><div><div class="brand">Recover Inbox</div><div id="inboxCount" class="topStats">Loading…</div></div><div class="topActions"><button id="composeNew" class="iconBtn" type="button" title="New text message" aria-label="New text message">✎</button><button id="refresh" class="iconBtn refreshCircle" type="button" title="Refresh inbox" aria-label="Refresh inbox">↻</button><button id="liveState" class="liveStatus live" type="button" title="Messaging is live" aria-label="Messaging status"><span class="livePulse"></span><span id="liveLabel">LIVE</span></button></div></div><input id="search" class="search" placeholder="Search business, number, or message"><div class="filters"><button class="filter active" data-filter="all" type="button">All</button><button class="filter" data-filter="replies" type="button">Replies <span id="replyCount">0</span></button><button class="filter" data-filter="unread" type="button">Unread <span id="unreadCount">0</span></button><button class="filter" data-filter="drafts" type="button">Drafts <span id="draftCount">0</span></button><button class="filter" id="failuresBtn" type="button">Failures <span id="failedCount">0</span></button></div><div id="failurePanel" class="failurePanel"></div><div id="err"></div><div id="list" class="list"><div class="empty">Loading…</div></div><div class="head" style="border-top:1px solid #242a32;border-bottom:0"><span style="font-size:11px;color:#69727d">Auto-refreshes automatically</span><form method="post" action="/inbox/logout"><button class="smallbtn" type="submit">Log out</button></form></div></aside><main class="thread"><div class="threadHead"><button id="back" class="smallbtn mobileBack">←</button><div><strong id="threadPhone">Conversation</strong><div id="threadSub" style="color:#75808c;font-size:11px">SMS conversation</div></div></div><div id="messages" class="msgs"><div class="empty">Choose a conversation</div></div><form id="composer" class="composer"><textarea id="reply" maxlength="1600" placeholder="Write a reply…" disabled></textarea><button id="send" disabled>Send</button></form></main></div><div id="toast" class="toast"></div><div id="undoBar" class="undoBar"><span id="undoText">Sending in 10s…</span><button id="undoSend" type="button">Undo send</button></div><div id="composeOverlay" class="composeOverlay"><div class="composeCard" role="dialog" aria-modal="true" aria-labelledby="composeTitle"><div class="composeHead"><div id="composeTitle" class="composeTitle">New message</div><button id="composeClose" class="closeBtn" type="button" aria-label="Close">×</button></div><div class="composeBody"><input id="composePhone" type="tel" placeholder="+1 555 123 4567" autocomplete="tel"><textarea id="composeText" maxlength="1600" placeholder="Write your message…"></textarea></div><div class="composeActions"><button id="composeCancel" class="composeCancel" type="button">Cancel</button><button id="composeSend" class="composeSend" type="button">Send</button></div></div></div><script>
+  
+  /* premium 3D + glass layer */
+  body{background:
+    radial-gradient(circle at 18% 12%,rgba(72,92,160,.18),transparent 28%),
+    radial-gradient(circle at 82% 86%,rgba(114,63,130,.15),transparent 30%),
+    linear-gradient(145deg,#07090d 0%,#090d14 48%,#080a0f 100%)!important;
+    position:relative;isolation:isolate}
+  .ambient3d{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;opacity:.72}
+  .ambientGlow{position:fixed;z-index:1;pointer-events:none;border-radius:999px;filter:blur(70px);opacity:.18}
+  .ambientGlow.one{width:320px;height:320px;left:-110px;top:-90px;background:#667cff}
+  .ambientGlow.two{width:360px;height:360px;right:-150px;bottom:-110px;background:#9b5fb0}
+  .app{position:relative;z-index:2;height:calc(100dvh - 24px)!important;margin:12px;gap:12px;
+    grid-template-columns:minmax(300px,360px) minmax(0,1fr)!important;background:transparent!important;
+    perspective:1400px;overflow:visible!important}
+  .side,.thread{
+    border:1px solid rgba(255,255,255,.085)!important;border-radius:22px!important;
+    background:linear-gradient(155deg,rgba(18,23,31,.88),rgba(10,13,18,.76))!important;
+    box-shadow:0 30px 80px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.035);
+    backdrop-filter:blur(24px) saturate(145%);-webkit-backdrop-filter:blur(24px) saturate(145%);
+    transform-style:preserve-3d}
+  .side{border-right:1px solid rgba(255,255,255,.085)!important}
+  .head,.threadHead,.composer{
+    background:linear-gradient(180deg,rgba(19,24,32,.82),rgba(13,17,23,.70))!important;
+    border-color:rgba(255,255,255,.07)!important;
+    backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+  .head{padding:14px 15px!important}
+  .brand{font-size:19px!important;letter-spacing:-.035em!important;
+    background:linear-gradient(135deg,#ffffff 0%,#bac8ff 58%,#d6b7e7 100%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    text-shadow:0 8px 26px rgba(111,130,216,.15)}
+  .topStats{color:#8995a4!important}
+  .iconBtn{border-color:rgba(255,255,255,.09)!important;background:rgba(255,255,255,.045)!important;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.04);transition:transform .18s ease,background .18s ease,border-color .18s ease}
+  .iconBtn:hover{background:rgba(255,255,255,.09)!important;border-color:rgba(255,255,255,.15)!important;transform:translateY(-1px)}
+  .liveStatus{box-shadow:0 0 0 1px rgba(102,240,165,.025),0 0 28px rgba(64,211,132,.08)}
+  .search{margin:11px 12px 9px!important;border-color:rgba(255,255,255,.085)!important;
+    background:rgba(255,255,255,.045)!important;border-radius:13px!important;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.025);transition:border-color .18s ease,box-shadow .18s ease}
+  .search:focus{border-color:rgba(147,166,255,.38)!important;box-shadow:0 0 0 3px rgba(105,128,228,.08)!important}
+  .filters{gap:6px!important;padding-bottom:10px!important}
+  .filter{border-color:rgba(255,255,255,.075)!important;background:rgba(255,255,255,.035)!important;color:#8f99a7!important;
+    transition:transform .16s ease,background .16s ease,color .16s ease}
+  .filter:hover{transform:translateY(-1px);background:rgba(255,255,255,.07)!important;color:#d7dde5!important}
+  .filter.active{background:linear-gradient(135deg,#f8f9fb,#dce4ff)!important;color:#10131a!important;border-color:transparent!important;
+    box-shadow:0 9px 24px rgba(110,130,220,.13)}
+  .list{padding:0 7px 7px}
+  .row{margin:0 0 5px;padding:11px 12px!important;border:1px solid transparent!important;border-radius:14px;
+    transition:transform .17s ease,background .17s ease,border-color .17s ease,box-shadow .17s ease}
+  .row:hover{background:rgba(255,255,255,.045)!important;border-color:rgba(255,255,255,.065)!important;transform:translateX(2px)}
+  .row.active{background:linear-gradient(135deg,rgba(83,103,175,.16),rgba(120,71,134,.10))!important;
+    border-color:rgba(136,154,236,.18)!important;box-shadow:0 10px 26px rgba(0,0,0,.13);transform:translateX(2px)}
+  .row.reply{padding-left:37px!important}
+  .replyDot{box-shadow:0 0 0 4px rgba(102,240,165,.08),0 0 18px rgba(102,240,165,.55)!important}
+  .preview{color:#8f9aa8!important}
+  .thread{position:relative;overflow:hidden!important}
+  .thread:before{content:"";position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(circle at 86% 8%,rgba(88,108,196,.08),transparent 25%),
+    radial-gradient(circle at 10% 90%,rgba(143,81,154,.06),transparent 28%);z-index:0}
+  .thread>*{position:relative;z-index:1}
+  .threadHead{padding:15px 18px!important}
+  .msgs{padding:22px!important;gap:10px!important}
+  .bubble{border-radius:18px!important;padding:11px 14px!important;
+    box-shadow:0 9px 24px rgba(0,0,0,.10);border-width:1px!important}
+  .in{background:linear-gradient(145deg,rgba(27,34,44,.92),rgba(21,27,35,.84))!important;
+    border-color:rgba(255,255,255,.07)!important}
+  .out{background:linear-gradient(145deg,#f7f8fb,#dfe7ff)!important;color:#11151d!important;
+    box-shadow:0 10px 28px rgba(101,123,212,.12)!important}
+  .composer{padding:11px 12px!important;gap:9px!important}
+  .composer textarea{border-color:rgba(255,255,255,.085)!important;background:rgba(255,255,255,.045)!important;
+    border-radius:14px!important;outline:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}
+  .composer textarea:focus{border-color:rgba(146,164,246,.34)!important;box-shadow:0 0 0 3px rgba(105,128,228,.07)}
+  .composer button{border-radius:13px!important;background:linear-gradient(135deg,#f8f9fb,#dbe4ff)!important;
+    box-shadow:0 9px 22px rgba(94,116,205,.14);min-width:72px}
+  .smallbtn{background:rgba(255,255,255,.055)!important;border:1px solid rgba(255,255,255,.07)!important}
+  .failurePanel{border-color:rgba(255,116,126,.14)!important;background:rgba(67,22,29,.30)!important;backdrop-filter:blur(12px)}
+  .toast{background:rgba(20,25,33,.88)!important;border-color:rgba(255,255,255,.10)!important;
+    backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 18px 48px rgba(0,0,0,.38)!important}
+  .composeOverlay{background:rgba(2,4,7,.68)!important;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+  .composeCard{background:linear-gradient(155deg,rgba(20,25,33,.96),rgba(11,14,19,.94))!important;
+    border-color:rgba(255,255,255,.10)!important;border-radius:22px!important;box-shadow:0 34px 100px rgba(0,0,0,.58)!important}
+  .composeBody input,.composeBody textarea{background:rgba(255,255,255,.045)!important;border-color:rgba(255,255,255,.085)!important;border-radius:13px!important}
+  @media(max-width:720px){
+    .ambient3d{opacity:.45}
+    .ambientGlow{opacity:.12}
+    .app{height:100dvh!important;margin:0!important;display:block!important;overflow:hidden!important}
+    .side,.thread{height:100dvh!important;border-radius:0!important;border:0!important;box-shadow:none!important}
+    .app.open .side{display:none!important}.app.open .thread{display:grid!important}
+    .head,.threadHead{padding-left:max(14px,env(safe-area-inset-left))!important;padding-right:max(14px,env(safe-area-inset-right))!important}
+    .msgs{padding:15px!important}
+    .bubble{max-width:88%!important}
+    .composer{padding-bottom:max(11px,env(safe-area-inset-bottom))!important}
+    .composeOverlay{padding:64px 12px 12px!important}
+  }
+</style><script defer src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.1/three.min.js"></script><script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script></head><body><canvas id="ambient3d" class="ambient3d" aria-hidden="true"></canvas><div class="ambientGlow one" aria-hidden="true"></div><div class="ambientGlow two" aria-hidden="true"></div><div class="app" id="app"><aside class="side"><div class="head" style="position:sticky;top:0;z-index:5;background:#0d1014"><div><div class="brand">Recover Inbox</div><div id="inboxCount" class="topStats">Loading…</div></div><div class="topActions"><button id="composeNew" class="iconBtn" type="button" title="New text message" aria-label="New text message">✎</button><button id="refresh" class="iconBtn refreshCircle" type="button" title="Refresh inbox" aria-label="Refresh inbox">↻</button><button id="liveState" class="liveStatus live" type="button" title="Messaging is live" aria-label="Messaging status"><span class="livePulse"></span><span id="liveLabel">LIVE</span></button></div></div><input id="search" class="search" placeholder="Search business, number, or message"><div class="filters"><button class="filter active" data-filter="all" type="button">All</button><button class="filter" data-filter="replies" type="button">Replies <span id="replyCount">0</span></button><button class="filter" data-filter="unread" type="button">Unread <span id="unreadCount">0</span></button><button class="filter" data-filter="drafts" type="button">Drafts <span id="draftCount">0</span></button><button class="filter" id="failuresBtn" type="button">Failures <span id="failedCount">0</span></button></div><div id="failurePanel" class="failurePanel"></div><div id="err"></div><div id="list" class="list"><div class="empty">Loading…</div></div><div class="head" style="border-top:1px solid #242a32;border-bottom:0"><span style="font-size:11px;color:#69727d">Auto-refreshes automatically</span><form method="post" action="/inbox/logout"><button class="smallbtn" type="submit">Log out</button></form></div></aside><main class="thread"><div class="threadHead"><button id="back" class="smallbtn mobileBack">←</button><div><strong id="threadPhone">Conversation</strong><div id="threadSub" style="color:#75808c;font-size:11px">SMS conversation</div></div></div><div id="messages" class="msgs"><div class="empty">Choose a conversation</div></div><form id="composer" class="composer"><textarea id="reply" maxlength="1600" placeholder="Write a reply…" disabled></textarea><button id="send" disabled>Send</button></form></main></div><div id="toast" class="toast"></div><div id="undoBar" class="undoBar"><span id="undoText">Sending in 10s…</span><button id="undoSend" type="button">Undo send</button></div><div id="composeOverlay" class="composeOverlay"><div class="composeCard" role="dialog" aria-modal="true" aria-labelledby="composeTitle"><div class="composeHead"><div id="composeTitle" class="composeTitle">New message</div><button id="composeClose" class="closeBtn" type="button" aria-label="Close">×</button></div><div class="composeBody"><input id="composePhone" type="tel" placeholder="+1 555 123 4567" autocomplete="tel"><textarea id="composeText" maxlength="1600" placeholder="Write your message…"></textarea></div><div class="composeActions"><button id="composeCancel" class="composeCancel" type="button">Cancel</button><button id="composeSend" class="composeSend" type="button">Send</button></div></div></div><script>
   const state={threads:[],selected:"",filter:"all",sse:null,lastInboundId:"",pendingSend:null,drafts:{},bulkPaused:false,sendingReady:false,sendingBlockReason:""};const q=id=>document.getElementById(id),app=q("app");
+  function initPremiumInboxVisuals(){
+    if(window.gsap){
+      window.gsap.from(".side",{x:-20,opacity:0,duration:.55,ease:"power2.out"});
+      window.gsap.from(".thread",{x:20,opacity:0,duration:.55,ease:"power2.out",delay:.05});
+      window.gsap.from(".topActions>*",{y:-5,opacity:0,duration:.35,stagger:.05,ease:"power2.out",delay:.2});
+    }
+    if(!window.THREE)return;
+    const canvas=document.getElementById("ambient3d");
+    if(!canvas)return;
+    let renderer;
+    try{renderer=new THREE.WebGLRenderer({canvas:canvas,alpha:true,antialias:true,powerPreference:"low-power"});}catch(e){return;}
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));
+    const scene=new THREE.Scene();
+    const camera=new THREE.PerspectiveCamera(46,1,.1,100);
+    camera.position.z=9;
+    const group=new THREE.Group();
+    scene.add(group);
+    scene.add(new THREE.AmbientLight(0xffffff,.9));
+    const key=new THREE.PointLight(0x8195ff,9,18);key.position.set(4,3,5);scene.add(key);
+    const fill=new THREE.PointLight(0xb26fc4,7,16);fill.position.set(-4,-2,4);scene.add(fill);
+    const matA=new THREE.MeshPhysicalMaterial({color:0x5e76d6,roughness:.28,metalness:.2,transparent:true,opacity:.20,clearcoat:.7});
+    const matB=new THREE.MeshPhysicalMaterial({color:0x9c5ba7,roughness:.34,metalness:.12,transparent:true,opacity:.17,clearcoat:.65});
+    const matC=new THREE.MeshBasicMaterial({color:0xaebcff,wireframe:true,transparent:true,opacity:.10});
+    const objects=[];
+    const sphere=new THREE.Mesh(new THREE.IcosahedronGeometry(1.45,2),matA);sphere.position.set(-4.4,2.7,-1.4);group.add(sphere);objects.push(sphere);
+    const knot=new THREE.Mesh(new THREE.TorusKnotGeometry(.95,.22,96,14),matB);knot.position.set(4.5,-2.6,-1.1);group.add(knot);objects.push(knot);
+    const orb=new THREE.Mesh(new THREE.IcosahedronGeometry(1.1,1),matC);orb.position.set(4.8,3.0,-2.2);group.add(orb);objects.push(orb);
+    if(window.innerWidth>720){
+      const torus=new THREE.Mesh(new THREE.TorusGeometry(1.15,.08,12,80),matC);torus.position.set(-4.8,-3.1,-1.8);torus.rotation.x=1.0;group.add(torus);objects.push(torus);
+    }
+    let pointerX=0,pointerY=0,active=true,raf=0;
+    function resize(){const w=window.innerWidth,h=window.innerHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
+    function move(e){pointerX=(e.clientX/window.innerWidth-.5);pointerY=(e.clientY/window.innerHeight-.5);}
+    const reduce=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    function frame(){
+      if(!active)return;
+      const t=performance.now()*.00035;
+      if(!reduce){
+        objects.forEach(function(o,i){o.rotation.x=t*(.7+i*.11);o.rotation.y=t*(.9+i*.13);});
+        group.rotation.y+=(pointerX*.18-group.rotation.y)*.025;
+        group.rotation.x+=(-pointerY*.10-group.rotation.x)*.025;
+      }
+      renderer.render(scene,camera);
+      raf=requestAnimationFrame(frame);
+    }
+    document.addEventListener("visibilitychange",function(){active=!document.hidden;if(active)frame();else cancelAnimationFrame(raf);});
+    window.addEventListener("resize",resize,{passive:true});
+    window.addEventListener("pointermove",move,{passive:true});
+    resize();frame();
+  }
+  window.addEventListener("load",initPremiumInboxVisuals,{once:true});
+
   const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const linkify=s=>esc(s).replace(/(https?:\\/\\/[^\\s<]+)/g,'<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
   const fmt=t=>{const d=new Date(t||0);return Number.isNaN(d.getTime())?"":d.toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})};
