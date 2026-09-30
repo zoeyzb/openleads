@@ -1,3 +1,4 @@
+// deployment trigger: activate law enrichment worker for Chicago MCP validation 2026-09-30
 // deployment trigger: law email-v37 current-head snapshot 2026-09-30
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
