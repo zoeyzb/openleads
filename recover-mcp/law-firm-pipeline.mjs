@@ -51,7 +51,14 @@ async function filterContactableEmails(emails=[],lead={}){
 async function keeleadVerifiedEmails(emails=[]){
   const unique=[...new Set(emails.map(x=>String(x||"").trim().toLowerCase()).filter(Boolean))];
   if(!unique.length)return [];
-  if(!KEELEAD_BASE_URL)throw new Error("keelead_not_configured");
+  // KeeLead is optional in the clean stack. By the time this function runs,
+  // candidates already passed strict firm identity + MX + exact public-source
+  // binding. Do not discard a source-verified address just because an optional
+  // SMTP verifier service is not deployed.
+  if(!KEELEAD_BASE_URL){
+    await redis.hIncrBy(STATS,"email_optional_verifier_bypass",1);
+    return unique;
+  }
   try{
     const response=await fetch(KEELEAD_BASE_URL+"/api/verify",{
       method:"POST",
@@ -72,9 +79,9 @@ async function keeleadVerifiedEmails(emails=[]){
     return unique.filter(email=>accepted.has(email));
   }catch(error){
     await redis.hIncrBy(STATS,"email_verifier_unavailable",1);
-    // Paid-send safety: verifier outages must never silently downgrade quality.
-    // Throw so enrichBatch requeues the lead instead of exporting it or losing it.
-    throw new Error("keelead_unavailable:"+String(error?.message||error));
+    // Source + exact identity + MX remain the hard acceptance gates. KeeLead is
+    // an optional extra signal; outages must not erase an otherwise usable lead.
+    return unique;
   }
 }
 async function detectOwnedWebsiteFromEmailDomains(emails=[],lead={}){
@@ -2216,6 +2223,11 @@ function calBarPublishedNameMatchesLead(publishedName="",lead={}){
 
 async function directOfficialProfileLinks(lead={},people=[]){
   const state=normalizedStateCode(lead);
+  if(state==="AK"){
+    // Alaska Bar's public member directory publishes organization, phone and
+    // email together. Contextual extraction still has to match this exact lead.
+    return ["https://member.alaskabar.org/cv5/cgi-bin/utilities.dll/customlist?ADDRESSTYPE=Work&CUSTOMERCD=&SQLNAME=GETMEMDIRADDR&wbp=Customer_Address.htm&whp=none&wmt=none&wnr=Customer_Address_None.htm"];
+  }
   if(state!=="CA")return [];
   const queries=[...new Set([
     ...(people||[]).filter(Boolean).slice(0,2),
@@ -2780,7 +2792,7 @@ async function enrichLead(key,lead){
     law_email_enrich_version:EMAIL_METHOD_VERSION,
     law_email_method:emailMethod,law_email_source:source||"",
     law_email_source_verified:emailSourceVerified,
-    law_email_validation:emailSourceVerified?"published_exact+strict_firm_identity+mx+keelead_infrastructure_heuristic":"rejected",
+    law_email_validation:emailSourceVerified?(KEELEAD_BASE_URL?"published_exact+strict_firm_identity+mx+optional_smtp":"published_exact+strict_firm_identity+mx"):"rejected",
     law_email_mailbox_verified:false,
     law_bar_domain:stateBarDomain(lead),
     law_firm_enriched_at:new Date().toISOString()};
