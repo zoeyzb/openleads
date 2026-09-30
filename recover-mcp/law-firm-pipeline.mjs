@@ -2346,8 +2346,21 @@ async function directOfficialProfileLinks(lead={},people=[]){
     for(const q of queries){
       try{
         await redis.hIncrBy(STATS,"direct_"+state.toLowerCase()+"bar_search_attempt",1);
-        const page=await fetchText("https://www.bing.com/search?q="+encodeURIComponent(q),5000);
-        const links=[...new Set(bingResultLinks(String(page?.html||"")))]
+        const [bingPage,bingRss,duckPage]=await Promise.allSettled([
+          fetchText("https://www.bing.com/search?q="+encodeURIComponent(q),5000),
+          fetchText("https://www.bing.com/search?format=rss&q="+encodeURIComponent(q),5000),
+          fetchText("https://html.duckduckgo.com/html/?q="+encodeURIComponent(q),5000)
+        ]);
+        const bingHtml=bingPage.status==="fulfilled"?String(bingPage.value?.html||""):"";
+        const rssHtml=bingRss.status==="fulfilled"?String(bingRss.value?.html||""):"";
+        const duckHtml=duckPage.status==="fulfilled"?String(duckPage.value?.html||""):"";
+        const links=[...new Set([
+          ...bingResultLinks(bingHtml),
+          ...bingRssResultLinks(rssHtml),
+          ...duckResultLinks(duckHtml),
+          ...markdownResultLinks(bingHtml),
+          ...markdownResultLinks(duckHtml)
+        ])]
           .filter(u=>{
             const h=hostOf(u);
             if(!h||!(h===host||h.endsWith("."+host)))return false;
