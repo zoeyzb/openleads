@@ -525,6 +525,14 @@ async function fetchResearchPage(url,lead={},key="",allowStealth=true){
   const directMatches=Boolean(direct?.html&&pageMatchesLead(directText,lead,direct?.final_url||url));
   if(direct?.html&&isDirectCalBarProfile(direct?.final_url||url)&&!directMatches){
     await redis.hIncrBy(STATS,"calbar_profile_identity_reject",1);
+    console.log(JSON.stringify({
+      event:"law_calbar_profile_identity_reject",
+      key,
+      name:String(lead.name||lead.title||""),
+      person:String(likelyAttorneyName(lead)||""),
+      city:String(normalizedLeadCity(lead)||""),
+      source:String(direct?.final_url||url)
+    }));
   }
   const directEvidence=directMatches&&(
     contextualEmails(direct.html,lead,url).length>0 ||
@@ -657,14 +665,27 @@ function calBarProfileMatchesLead(text="",lead={},sourceUrl=""){
   const digits=raw.replace(/\D/g,"");
   const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
   if(phone&&digits.includes(phone))return true;
+
   const plain=normalize(raw);
   const city=normalize(normalizedLeadCity(lead));
-  const person=normalize(likelyAttorneyName(lead));
-  const personTokens=person.split(" ").filter(x=>x.length>=3);
-  const personMatch=personTokens.length>=2&&personTokens.every(x=>plain.includes(x));
-  if(city&&personMatch&&plain.includes(city))return true;
-  if(phone||city)return false;
-  return personMatch;
+  const variants=attorneyNameVariants(lead)
+    .map(v=>normalize(v))
+    .filter(Boolean);
+  const exactVariant=variants.find(v=>{
+    const tokens=v.split(" ").filter(x=>x.length>=2);
+    return tokens.length>=2&&tokens.every(x=>plain.includes(x));
+  })||"";
+  if(!exactVariant)return false;
+
+  const exactTokens=exactVariant.split(" ").filter(x=>x.length>=2);
+  // Full three-part+ names are strong enough on the authoritative CalBar
+  // profile even if the current Maps listing uses a different office city.
+  if(exactTokens.length>=3)return true;
+
+  // Two-token names are more collision-prone; keep a geography/phone guard.
+  if(city&&plain.includes(city))return true;
+  if(phone)return false;
+  return !city;
 }
 function pageMatchesLead(text="",lead={},sourceUrl=""){
   const plain=normalize(text);
