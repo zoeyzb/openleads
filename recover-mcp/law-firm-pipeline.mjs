@@ -27,7 +27,7 @@ const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibili
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
 const CHICAGO_HEADCOUNT_RECOVERY_KEY="recover:law-firm:chicago-headcount-recovery-version";
-const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v5-core-person-identity";
+const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v6-firm-owner-guard";
 const ASSOCIATION_DOCKET_RECOVERY_KEY="recover:law-firm:association-docket-recovery-version";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
@@ -674,7 +674,7 @@ function likelyAttorneyName(lead={}){
     .replace(/\s*\((?:owner|attorney|lawyer|partner|principal|founder|manager|member)\)\s*$/i,"")
     .replace(/\s*[-–—|]\s*(?:owner|attorney|lawyer|partner|principal|founder|manager|member)\s*$/i,"")
     .trim();
-  const explicitLooksLikeFirm=/\b(law offices?|law office|law firm|attorneys? at law|legal group|legal services|llc|pllc|p\.?c\.?|llp|apc)\b/i.test(explicit);
+  const explicitLooksLikeFirm=/\b(law offices?|law office|law firm|attorneys? at law|legal group|legal services|associates?|partners?|group|llc|pllc|p\.?c\.?|llp|apc)\b/i.test(explicit);
   const explicitGenericRole=/^(?:at law|attorney at law|attorney|lawyer|owner|partner|principal|founder|manager|member)$/i.test(explicit);
   if(explicitRaw&&(explicitLooksLikeFirm||explicitGenericRole))void redis.hIncrBy(STATS,"owner_name_firm_label_bypass",1).catch(()=>{});
   if(explicit&&!explicitLooksLikeFirm&&!explicitGenericRole&&explicit.split(/\s+/).length>=2&&explicit.split(/\s+/).length<=5)return explicit;
