@@ -3841,11 +3841,15 @@ async function enrichBatch(){
   // source-backed and 2-10-shaped leads must not be starved by the broad solo backlog.
   const chicagoKeys=await popSetBatch(CHICAGO_PENDING_SET,Math.min(2,ENRICH_BATCH));
   const afterChicago=Math.max(0,ENRICH_BATCH-chicagoKeys.length);
-  const regularKeys=afterChicago?await popSetBatch(PENDING_SET,Math.min(8,afterChicago)):[];
+  // PENDING_SET is where source-backed / historically verified email leads are
+  // requeued for conversion. Give it half the batch before broad discovery.
+  const regularTarget=Math.max(24,Math.floor(ENRICH_BATCH*0.5));
+  const regularKeys=afterChicago?await popSetBatch(PENDING_SET,Math.min(regularTarget,afterChicago)):[];
   const afterRegular=Math.max(0,afterChicago-regularKeys.length);
-  const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(8,afterRegular)):[];
+  const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(10,afterRegular)):[];
   const afterSizeReady=Math.max(0,afterRegular-sizeReadyKeys.length);
-  const freshKeys=afterSizeReady?await popSetBatch(SOURCE_PENDING_SET,Math.min(8,afterSizeReady)):[];
+  // Keep a small guaranteed fresh slice so acquisition never stalls completely.
+  const freshKeys=afterSizeReady?await popSetBatch(SOURCE_PENDING_SET,Math.min(6,afterSizeReady)):[];
   const afterFresh=Math.max(0,afterSizeReady-freshKeys.length);
   const priorityTarget=Math.max(16,Math.floor(ENRICH_BATCH*0.6));
   const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(priorityTarget,afterFresh)):[];
