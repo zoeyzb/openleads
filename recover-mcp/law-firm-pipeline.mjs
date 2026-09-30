@@ -2584,7 +2584,17 @@ async function enrichLead(key,lead){
       sources:[...new Set(emails.map(x=>emailEvidenceSources[String(x).toLowerCase()]||source||"").filter(Boolean))].slice(0,5)
     }));
   }
-  emails=await filterContactableEmails(emails,lead);
+  // MX is mandatory. Identity-local-part heuristics are useful on generic web
+  // pages, but an authoritative bar/court source can itself establish identity.
+  // Keep those candidates alive until exact-source binding proves the address.
+  const preIdentityCandidates=[...new Set(emails)];
+  const checkedCandidates=await Promise.all(preIdentityCandidates.map(async email=>{
+    const evidence=String(emailEvidenceSources[String(email).toLowerCase()]||source||"");
+    const authoritative=lawSourceRank(evidence,lead)<=1;
+    const identityOk=emailIdentityStrong(email,lead)||authoritative;
+    return {email,ok:identityOk&&await hasMailExchange(email)};
+  }));
+  emails=checkedCandidates.filter(x=>x.ok).map(x=>x.email);
   const identityMxCount=emails.length;
   if(identityMxCount){
     await redis.hIncrBy(STATS,"email_identity_mx_pass_leads",1);
