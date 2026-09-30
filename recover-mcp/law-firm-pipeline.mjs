@@ -27,7 +27,7 @@ const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibili
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
 const CHICAGO_HEADCOUNT_RECOVERY_KEY="recover:law-firm:chicago-headcount-recovery-version";
-const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v2-pdf-deep";
+const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v3-full-pdf-evidence";
 const ASSOCIATION_DOCKET_RECOVERY_KEY="recover:law-firm:association-docket-recovery-version";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
@@ -1549,8 +1549,10 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       }
       const page=item.value,target=links[i];
       if(!page?.html)continue;
-      const pageText=stripHtml(page.html).slice(0,22000);
-      if(!pageMatchesLead(pageText,lead,page.final_url||target))continue;
+      const evidenceUrl=String(page.final_url||target);
+      const deepEvidence=/\.pdf(?:$|[?#])/i.test(evidenceUrl)||professionalDirectoryUrlLikely(evidenceUrl);
+      const pageText=stripHtml(page.html).slice(0,deepEvidence?180000:22000);
+      if(!pageMatchesLead(pageText,lead,evidenceUrl))continue;
       const matchedRank=lawSourceRank(page.final_url||target,lead);
       if(isDirectCalBarProfile(page.final_url||target)){
         const barWebsite=calBarPublishedWebsite(page.html);
