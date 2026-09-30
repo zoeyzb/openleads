@@ -2783,6 +2783,7 @@ async function enrichLead(key,lead){
       `site:inforuptcy.com "${name}" email`
     ]:[];
     const directoryEmailQueries=[
+      ...(phone?[`site:lawyers.com "${phone}"`,`site:findlaw.com "${phone}"`,`site:martindale.com "${phone}"`,`site:justia.com "${phone}"`]:[]),
       ...(name?[`site:trellis.law "${name}" "Email:"`]:[]),
       ...(name?[`site:docketalarm.com "${name}" "Email:"`]:[]),
       ...(person?[`site:trellis.law "${person}" "Email:"`]:[]),
@@ -2799,10 +2800,11 @@ async function enrichLead(key,lead){
       ...(name?[`"${name}" ${city} ${region} email`.trim()]:[]),
       ...(person?[`"${person}" ${region} attorney email`.trim()]:[]),
       ...(phone&&name?[`"${name}" "${phone}" "Email"`]:[]),
+      ...(phone?[`"${phone}" attorney "Email:"`,`"${phone}" lawyer email`,`"${phone}" "E-mail"`]:[]),
+      ...directoryEmailQueries.slice(0,4),
       ...barQueries,
       ...professionalDirectoryQueries,
       ...docketQueries,
-      ...directoryEmailQueries.slice(0,4),
       ...publicRecordQueries,
       ...(name?[`"${name}" email filetype:pdf`]:[]),
       ...(name?[`"${name}" "E-mail" filetype:pdf`]:[]),
