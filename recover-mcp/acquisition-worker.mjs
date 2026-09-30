@@ -8,8 +8,10 @@ import { isLawFirmLead, scoreLawFirmLead, matchesLawPractice, lawFirmNameShape }
 
 const REDIS_URL = process.env.ACQUISITION_REDIS_URL || process.env.REDIS_URL || "";
 const MAPS_BASE_URL = (process.env.MAPS_BASE_URL || "").replace(/\/$/, "");
-const MAPS_BASE_URLS = String(process.env.MAPS_BASE_URLS || MAPS_BASE_URL)
-  .split(",").map(x=>x.trim().replace(/\/$/,"")).filter(Boolean);
+const MAPS_BASE_URLS = [...new Set(
+  String(process.env.MAPS_BASE_URLS || MAPS_BASE_URL)
+    .split(",").map(x=>x.trim().replace(/\/$/,"")).filter(Boolean)
+)];
 const DATAFORGE_BASE_URL = (process.env.DATAFORGE_BASE_URL || "").replace(/\/$/, "");
 const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 const JOB_TTL = Number(process.env.ACQUISITION_TTL_SECONDS || 604800);
