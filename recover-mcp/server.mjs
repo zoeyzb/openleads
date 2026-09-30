@@ -1001,6 +1001,26 @@ function buildServer() {
         return { content:[{type:"text",text:"Acquisition not found or expired."}], isError:true };
       }
       const job = JSON.parse(raw);
+
+      // Self-heal stale jobs. A healthy Maps round is bounded to ~180 seconds,
+      // so a running acquisition with no update for >4 minutes is orphaned.
+      // Requeue it once so a live worker can resume from the persisted round.
+      const updatedMs=Date.parse(job.updated_at||job.created_at||0);
+      const staleMs=updatedMs?Date.now()-updatedMs:0;
+      if(job.status==="running" && staleMs>240000){
+        const queue=String(job.search_profile||"")==="law-firm"
+          ? "recover:acquisition:queue:law-firm"
+          : "recover:acquisition:queue";
+        await redis.lRem(queue,0,acquisition_id);
+        job.status="queued";
+        job.phase="stale_requeued";
+        job.error=null;
+        job.updated_at=new Date().toISOString();
+        await redis.set(`recover:acq:${acquisition_id}`,JSON.stringify(job),{EX:604800});
+        if(String(job.search_profile||"")==="law-firm") await redis.rPush(queue,acquisition_id);
+        else await redis.lPush(queue,acquisition_id);
+      }
+
       return jsonText({
         acquisition_id,
         status:job.status,
