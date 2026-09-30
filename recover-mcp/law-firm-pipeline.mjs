@@ -194,6 +194,8 @@ const READY_SET="recover:law-firm:qualified:v3";
 const EMAIL_CANDIDATE_SET="recover:law-firm:email-candidates:v1";
 const REQUALIFY_VERSION_KEY="recover:law-firm:full-requalify-version";
 const HISTORICAL_RECOVERY_VERSION_KEY="recover:law-firm:historical-recovery-version";
+const CALBAR_ADAPTER_VERSION="calbar-v5-middle-name-identity";
+const CALBAR_ADAPTER_VERSION_KEY="recover:law-firm:calbar-adapter-version";
 const HISTORICAL_QUALIFIED_KEYS=new Set(["place:ChIJ-U4jzLpzaYgRiuVOJexcUts","place:ChIJ-cZwjdl814kR3naYgZCQKWI","place:ChIJ205yYu_UyFQRWo9oRpd3T-M","place:ChIJ2ROk0Extq4kRBT2E7-tRYlw","place:ChIJ32Qgyr7wtocRGWTUwdhYGTk","place:ChIJ3QySmg_HmoARkctGxRlocHU","place:ChIJ3W-ACwxx44kR2rru4m1yG4A","place:ChIJ4W_J98Jv54gRGvAwT50QYxA","place:ChIJ4fF-dR4YhYARuNJj2qaVxFc","place:ChIJ5WPlZJCNwokRIEUL9eDQOZw","place:ChIJ5wdWFlsyMYYRWPy3nw0m03A","place:ChIJ5z3GsvfFvIcRO0k17OFS-74","place:ChIJ71pJNPiKR4gRLhF2R_ErKEk","place:ChIJ7cSewURXwokRJYKLE-zxnBw","place:ChIJ7wsutdx4bIcR6p_AksLnRyw","place:ChIJ95gGZEgg6IgRZsn5pby6rpE","place:ChIJ9zP3h5kSAIkRdWMOrKTPeI8","place:ChIJA9HEiW7rJIYR95Qpcp4Lgvg","place:ChIJAQBkSoYo3YARpPJt5RHVTWY","place:ChIJAyCOMGLOw4kR7YvAi7XZ_H4","place:ChIJBVc_u6i2hYARiPAijtV8dAY","place:ChIJD6vum6RfQogRdNScZ6vQ5Zs","place:ChIJDyWvCZZXwokRTcTR4Oj1oKQ","place:ChIJE4PSX6raxokR91IKiYlqp9k","place:ChIJF31O_YIEU4cRpSPVKS9wwtY","place:ChIJFU2oKxYzMYYRebQBKdNNm0g","place:ChIJG1VBA1HxNIgRGAJy-YLCIhI","place:ChIJGWLs2eTQhIARV7GeoY81EcE","place:ChIJH8ORLCxfVFMRiTs-1FsCUGk","place:ChIJHfJFQjomwokRSql3ngElZ5M","place:ChIJIXOHPySX-IgRBKF_bc-rke0","place:ChIJJzoh2FyGmYcRN71FnFcpY00","place:ChIJK7eQx4j5Y4gRb9qliaeIfQg","place:ChIJKYY8pmLnmoARE4mULG2YnNs","place:ChIJKer573eoZYYRC-qFdZ_Eg3A","place:ChIJKw02pnLRhIARPEIfaW4NNg0","place:ChIJLTBYQhSrw4kRMnKH-0QzcG8","place:ChIJLyxfboWMk4cRf66FH6ritxo","place:ChIJM02Gea1YXIYRyvJ5ZwPhoQw","place:ChIJM6BqOO0wq4kRTae0vIkDBVo","place:ChIJM_1lHE5ZVFMRwH1fHLVGt34","place:ChIJMbp75upAwFQRe2uTudVjsow","place:ChIJN7r7r72awoARjAesAtfbDLw","place:ChIJNycr3iOHmYcRXquelBr03KE","place:ChIJO7QVTAluAHwRVsaeyJtxK7A","place:ChIJO7lK00vF54gRQ8j3zzWyLwU","place:ChIJPRt57X_d9YgRI5UYwRJE_2U","place:ChIJQ3oMBtrRUIgR65BnUyVPft4","place:ChIJRVH9a48Tt4cR6SOOdv3Edck","place:ChIJRW1H7r3VFogRlFoHqpncZ0I","place:ChIJRYrj7X3pwogRdG_E9PJYcf0","place:ChIJTa7FEGNQ4IYRSydBoKqsl2o","place:ChIJUYXwNCnaNYgRjAdaoH_ogLw","place:ChIJVYdWQ-4Cw4kRr4bAd6NLQVY","place:ChIJVxw7O9jeJIgR1FiEkRQhZLI","place:ChIJY6aHQLRcfYcRKiqiFK5w0do","place:ChIJayky0_XFvIcRjdDZMkHLRD8","place:ChIJb2hcRZsU3okR_EKIIlGOyw8","place:ChIJb3hWSBZv_4gROY_ApeSM8wU","place:ChIJbxKvvzbu2YkRMdteRtp7klE","place:ChIJd1aP8_KVlocR8_cIhc_Dsd0","place:ChIJdTzQCQJ5hYARdGR1UtB9dkE","place:ChIJeXm0tUXM3IARGzqfb3eOmCY","place:ChIJf2DHHpm3D4gRXfghePyBLmk","place:ChIJfyFrYXdVwIcRYhnjhZT1owA","place:ChIJgx6wDyjpaIgRAC-jEra5Hjw","place:ChIJi87TdvdvwokRjr-8f8K3FG0","place:ChIJjcnM45EgnYgREsRlrRsiyGg","place:ChIJkTUAzFFwzoARxKluSnPRdWQ","place:ChIJl6VxtjJBZIgRBc4VIABoDiw","place:ChIJmbFHSgiQhYAR0v11xfpj4bw","place:ChIJn5Qcag_1UocRtfKl2ZxDBug","place:ChIJnQ8ijF_v44kRFNChrD1otkQ","place:ChIJo-hS02IU7IARMFpv8tr4RTY","place:ChIJpWJorhCs0IkRRcYffMNkoeI","place:ChIJqSz5ytfMwoARZvRZn84vWmI","place:ChIJr104108HYIgRkJT9GlF7xKw","place:ChIJs4frIbQakFQRQPUW66WTiH4","place:ChIJsRDfI5BBZIgR4v0gkMlYNgA","place:ChIJsewYiPRp6oAR6fKhe5QIWcY","place:ChIJt4aEWsHfyFYRT_jYSgVRVw4","place:ChIJt9fh31NZ54YR5ZyCFBn9ock","place:ChIJtRjaRPXgtYcR2V6WyoGvW6g","place:ChIJuzD2vZYT2YkR7dqgvdWC6DY","place:ChIJxUWzCxINkIARDdm6uFNIS-E","place:ChIJzWyZs58FU4gR5-_YQva8wr4"]);
 const REJECTED_SET="recover:law-firm:rejected:v3";
 const PENDING_SET="recover:law-firm:enrich-pending:v3";
@@ -2542,9 +2544,10 @@ async function cleanupEmailCandidateSet(){
 }
 
 async function bootstrapExistingQualified(){
-  let scanned=0,qualifiedAdded=0,qualifiedRemoved=0,queuedForEnrichment=0,alreadyQualified=0,requalifyQueued=0,historicalQualifiedMarkers=0;
+  let scanned=0,qualifiedAdded=0,qualifiedRemoved=0,queuedForEnrichment=0,alreadyQualified=0,requalifyQueued=0,historicalQualifiedMarkers=0,calbarAdapterRecoveryQueued=0;
   const fullRequalify=(await redis.get(REQUALIFY_VERSION_KEY))!==FULL_REQUAL_VERSION;
   const historicalRecovery=(await redis.get(HISTORICAL_RECOVERY_VERSION_KEY))!==HISTORICAL_RECOVERY_VERSION;
+  const calbarAdapterRecovery=(await redis.get(CALBAR_ADAPTER_VERSION_KEY))!==CALBAR_ADAPTER_VERSION;
   const readySet=new Set(await redis.sMembers(READY_SET));
   const requalSizeReady=[],requalRegular=[],requalPriority=[],requalRecoverable=[],requalAll=[];
 
@@ -2596,6 +2599,21 @@ async function bootstrapExistingQualified(){
       scanned++;
 
       const website=String(lead.website||"").trim();
+
+      // Direct CalBar adapter migrations retry only California no-website law
+      // records. This avoids a global ~36K method requeue for source-specific
+      // identity/extraction fixes.
+      if(calbarAdapterRecovery&&!website&&normalizedStateCode(lead)==="CA"){
+        await Promise.all([
+          redis.sRem(ENRICHED_SET,entry.field),
+          redis.sRem(EMAIL_CANDIDATE_SET,entry.field),
+          redis.sRem(RECOVERABLE_PENDING_SET,entry.field),
+          redis.sRem(SOURCE_PENDING_SET,entry.field),
+          redis.sRem(SIZE_READY_PENDING_SET,entry.field)
+        ]);
+        await redis.sAdd(PRIORITY_PENDING_SET,entry.field);
+        calbarAdapterRecoveryQueued++;
+      }
       const existingSource=String(lead.law_email_source||lead.email_source||lead.email_evidence_url||"").trim();
       const sourceBacked=isDirectPublishedEmailSource(existingSource);
       const identityEmails=sourceBacked?[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
@@ -2763,8 +2781,10 @@ async function bootstrapExistingQualified(){
     queuedForEnrichment+=requalifyQueued;
   }
 
+  if(calbarAdapterRecovery)await redis.set(CALBAR_ADAPTER_VERSION_KEY,CALBAR_ADAPTER_VERSION);
+
   console.log(JSON.stringify({
-    event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,FULL_REQUAL_VERSION,HISTORICAL_RECOVERY_VERSION,EMAIL_METHOD_VERSION,
+    event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,FULL_REQUAL_VERSION,HISTORICAL_RECOVERY_VERSION,EMAIL_METHOD_VERSION,CALBAR_ADAPTER_VERSION,calbarAdapterRecoveryQueued,
     queuedForEnrichment,requalifyQueued,fullRequalify,
     requalifySizeReady:requalSizeReady.length,requalifyRegular:requalRegular.length,requalifyPriority:requalPriority.length,requalifyRecoverable:requalRecoverable.length,
     historicalQualifiedMarkers
