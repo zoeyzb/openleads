@@ -401,9 +401,9 @@ async function preflightAreaSkip(redis,job) {
     const netNew=Number(newRaw||0);
     const duplicates=Number(dupRaw||0);
     const saturated=profile==="law-firm"
-      ? ((attempts>=1&&netNew===0&&duplicates>=10) ||
-         (attempts>=2&&netNew===0&&duplicates>=5) ||
-         (attempts>=4&&netNew/Math.max(1,attempts)<0.5&&duplicates>=10&&duplicates>netNew*3))
+      ? ((attempts>=1&&netNew===0&&duplicates>=5) ||
+         (attempts>=2&&netNew<=1&&duplicates>=5&&duplicates>netNew*2) ||
+         (attempts>=3&&netNew/Math.max(1,attempts)<1&&duplicates>=8&&duplicates>netNew*2))
       : ((attempts>=1&&netNew===0&&duplicates>=5) ||
          (attempts>=2&&netNew===0&&duplicates>=2) ||
          (attempts>=4&&netNew/Math.max(1,attempts)<0.5&&duplicates>=10&&duplicates>netNew*3));
