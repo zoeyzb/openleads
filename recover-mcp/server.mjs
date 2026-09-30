@@ -973,7 +973,8 @@ function buildServer() {
       };
       await redis.set(`recover:acq:${id}`, JSON.stringify(job), { EX: 604800 });
       await redis.sAdd("recover:acq:index", id);
-      await redis.lPush(isLawAcquisition ? "recover:acquisition:queue:law-firm" : "recover:acquisition:queue", id);
+      if (isLawAcquisition) await redis.rPush("recover:acquisition:queue:law-firm", id);
+      else await redis.lPush("recover:acquisition:queue", id);
       return jsonText({
         status:"queued",
         acquisition_id:id,
