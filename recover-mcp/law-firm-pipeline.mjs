@@ -2742,6 +2742,8 @@ async function enrichLead(key,lead){
   if(emailMethod==="none"){
     const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
     const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
+    const phonePretty=phone.length===10?phone.slice(0,3)+"-"+phone.slice(3,6)+"-"+phone.slice(6):"";
+    const phoneParen=phone.length===10?"("+phone.slice(0,3)+") "+phone.slice(3,6)+"-"+phone.slice(6):"";
     const city=normalizedLeadCity(lead),region=normalizedStateCode(lead)||String(lead.region||lead.state||lead.acquisition_location||"").trim();
     const people=attorneyNameVariants(lead);
     const person=people[0]||"";
@@ -2751,8 +2753,8 @@ async function enrichLead(key,lead){
     const state=normalizedStateCode(lead);
     const directOfficialLinks=await directOfficialProfileLinks(lead,people);
     const publicRecordQueries=[
-      ...(person&&phone?[`"${person}" "${phone}" email filetype:pdf`]:[]),
-      ...(name&&phone?[`"${name}" "${phone}" email`]:[]),
+      ...(person&&phone?[`"${person}" "${phonePretty||phone}" email filetype:pdf`]:[]),
+      ...(name&&phone?[`"${name}" "${phonePretty||phone}" email`]:[]),
       ...(person?[`"${person}" "${region}" "E-mail address" filetype:pdf`]:[]),
       ...(name?[
         `"${name}" "notice to creditors" email`,
@@ -2775,7 +2777,7 @@ async function enrichLead(key,lead){
       `"${name}" "${city}" association email filetype:pdf`,
       `"${name}" "${region}" "affiliate" email`,
       `"${name}" "${region}" "estate planning council" email`,
-      `"${name}" "${phone}" filetype:pdf email`
+      `"${name}" "${phonePretty||phone}" filetype:pdf email`
     ].filter(Boolean):[];
     const docketQueries=highValueLawResearchLead(lead)&&name?[
       `site:bkalerts.com "${name}" email`,
@@ -2783,7 +2785,7 @@ async function enrichLead(key,lead){
       `site:inforuptcy.com "${name}" email`
     ]:[];
     const directoryEmailQueries=[
-      ...(phone?[`site:lawyers.com "${phone}"`,`site:findlaw.com "${phone}"`,`site:martindale.com "${phone}"`,`site:justia.com "${phone}"`]:[]),
+      ...(phone?[`site:lawyers.com "${phonePretty||phone}"`,`site:findlaw.com "${phonePretty||phone}"`,`site:martindale.com "${phonePretty||phone}"`,`site:justia.com "${phonePretty||phone}"`]:[]),
       ...(name?[`site:trellis.law "${name}" "Email:"`]:[]),
       ...(name?[`site:docketalarm.com "${name}" "Email:"`]:[]),
       ...(person?[`site:trellis.law "${person}" "Email:"`]:[]),
@@ -2799,8 +2801,8 @@ async function enrichLead(key,lead){
       // Wave 1: direct identity + authoritative/public records.
       ...(name?[`"${name}" ${city} ${region} email`.trim()]:[]),
       ...(person?[`"${person}" ${region} attorney email`.trim()]:[]),
-      ...(phone&&name?[`"${name}" "${phone}" "Email"`]:[]),
-      ...(phone?[`"${phone}" attorney "Email:"`,`"${phone}" lawyer email`,`"${phone}" "E-mail"`]:[]),
+      ...(phone&&name?[`"${name}" "${phonePretty||phone}" "Email"`]:[]),
+      ...(phone?[`"${phonePretty||phone}" attorney "Email:"`,`"${phonePretty||phone}" lawyer email`,...(phoneParen?[`"${phoneParen}" attorney email`]:[])]:[]),
       ...directoryEmailQueries.slice(0,4),
       ...barQueries,
       ...professionalDirectoryQueries,
@@ -2812,8 +2814,8 @@ async function enrichLead(key,lead){
       ...(name?[`"${name}" ${city} ${region} contact email`.trim()]:[]),
       ...directoryEmailQueries.slice(4),
       ...(name?[`"${name}" ${region} "E-mail"`.trim()]:[]),
-      ...(phone?[`"${phone}" attorney email`]:[]),
-      ...(phone&&name?[`"${name}" "${phone}"`]:[]),
+      ...(phone?[`"${phonePretty||phone}" attorney email`]:[]),
+      ...(phone&&name?[`"${name}" "${phonePretty||phone}"`]:[]),
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ].filter(Boolean))];
     const highValue=highValueLawResearchLead(lead);
