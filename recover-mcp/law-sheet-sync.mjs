@@ -1,6 +1,7 @@
 import { createSign } from "node:crypto";
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, qualifiesNoWebsiteLawLead, isUsableLawEmail, isLawFirmLead } from "./law-firm-targeting.mjs";
 
+// Law sheet sync deploy rev: email-first-v2
 const TOKEN_URL="https://oauth2.googleapis.com/token";
 const SHEETS_API="https://sheets.googleapis.com/v4/spreadsheets";
 const SCOPE="https://www.googleapis.com/auth/spreadsheets";
