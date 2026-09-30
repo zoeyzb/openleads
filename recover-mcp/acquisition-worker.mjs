@@ -715,6 +715,31 @@ const queryVariants=(industry,location,practiceFocus="",coveragePass="")=>{
       g2,
       firmBase[2]||firmBase[0]
     ].filter(Boolean);
+
+    // Chicago is too dense for one city-center Maps result set. Search the
+    // actual city by neighborhood while keeping the acquisition location as
+    // Chicago, IL so location qualification remains city-scoped.
+    const chicago=/\bchicago\b/.test(normalizeText(location))&&/\bil\b|illinois/.test(normalizeText(location));
+    if(chicago){
+      const areas=[
+        "The Loop, Chicago, IL","River North, Chicago, IL","West Loop, Chicago, IL",
+        "South Loop, Chicago, IL","Lincoln Park, Chicago, IL","Lakeview, Chicago, IL",
+        "Wicker Park, Chicago, IL","Logan Square, Chicago, IL","Hyde Park, Chicago, IL",
+        "Rogers Park, Chicago, IL","Uptown, Chicago, IL","Pilsen, Chicago, IL",
+        "Bridgeport, Chicago, IL","Albany Park, Chicago, IL","Portage Park, Chicago, IL",
+        "Beverly, Chicago, IL","Bronzeville, Chicago, IL","Near North Side, Chicago, IL",
+        "Near West Side, Chicago, IL","Edgewater, Chicago, IL","Avondale, Chicago, IL",
+        "Irving Park, Chicago, IL","Jefferson Park, Chicago, IL","North Center, Chicago, IL"
+      ];
+      const chicagoTerms=[
+        "small law firm","law group","law partners","law associates","law firm PC","law firm LLC",
+        "personal injury law firm","family law firm","criminal defense law firm","immigration law firm",
+        "estate planning law firm","real estate law firm","bankruptcy law firm","employment law firm",
+        "workers compensation law firm","civil litigation law firm"
+      ];
+      const expanded=areas.map((area,i)=>`${chicagoTerms[i%chicagoTerms.length]} in ${area}`);
+      return [...new Set(expanded)].slice(0,24);
+    }
     return [...new Set(mixed)].map(q=>`${q} in ${location}`);
   }
   if (isHomeComfortTarget(industry)) return HOME_COMFORT_QUERIES.map(q=>`${q} in ${location}`);
@@ -1050,12 +1075,15 @@ async function processAcquisition(id) {
       }
       variants=[...new Set(chosen)].slice(0,bundleCount);
     }
-    const maxRounds=Math.min(isFastHomeService ? Math.min(2,configuredMaxRounds) : configuredMaxRounds,variants.length);
+    const isLawFirmJob=String(job.search_profile||"")==="law-firm";
+    const lawBundleSize=isLawFirmJob?4:1;
+    const availableRounds=Math.ceil(variants.length/lawBundleSize);
+    const maxRounds=Math.min(isFastHomeService ? Math.min(2,configuredMaxRounds) : configuredMaxRounds,availableRounds);
 
     for (let round=Number(job.round||0); round<maxRounds; round++) {
       job.round=round;
       job.rounds_completed=round;
-      job.current_query=variants[round];
+      job.current_query=variants[round*lawBundleSize]||variants[round];
       job.phase="maps";
       await saveJob(job);
 
@@ -1068,7 +1096,11 @@ async function processAcquisition(id) {
       const fastNyMaxTime=isFastHomeService
         ? (currentCoveragePass>=5 ? (denseArea?150:90) : (currentCoveragePass>=3?90:60))
         : MAPS_ROUND_MAX_TIME_SECONDS;
-      let mapsKeywords=(isFastHomeService && configuredMaxRounds===1) ? variants : [variants[round]];
+      let mapsKeywords=(isFastHomeService && configuredMaxRounds===1)
+        ? variants
+        : (isLawFirmJob
+          ? variants.slice(round*lawBundleSize,(round+1)*lawBundleSize)
+          : [variants[round]]);
       const geoBias=isFastHomeService?geoBiasForJob(job,currentCoveragePass):null;
       if(geoBias && String(job.query_family||"").trim()){
         // With a coordinate-biased search, omit "in City, ST" so Maps ranks
@@ -1306,7 +1338,10 @@ async function processAcquisition(id) {
 
       // Fast NY milestone mode: do not waste rounds on a ZIP that has stopped yielding.
       // Require at least two completed rounds so the first query still gets one follow-up.
-      if ((round>=1 && stagnantRounds>=1) || (isFastHomeService && permanentStats.newAdded===0 && permanentStats.duplicates>=5)) {
+      // Do not terminate law-firm discovery just because one query family
+      // duplicated globally. Dense metros need multiple neighborhood/practice
+      // slices before we can call the city exhausted.
+      if ((!isLawFirmJob && round>=1 && stagnantRounds>=1) || (isFastHomeService && permanentStats.newAdded===0 && permanentStats.duplicates>=5)) {
         job.status="partial_complete";
         job.phase="complete";
         job.reason="stagnant_round_exit";
