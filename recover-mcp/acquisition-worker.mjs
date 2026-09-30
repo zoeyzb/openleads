@@ -557,8 +557,14 @@ async function persistPermanentQualified(redis, job, leads) {
           await redis.hSet("recover:leadstore:qualified",key,JSON.stringify({...lead,law_name_shape:shape}));
         }
       }
-      if(fast.length)await redis.sAdd("recover:law-firm:enrich-pending:v2",fast);
-      if(background.length)await redis.sAdd("recover:law-firm:enrich-recoverable:v1",background);
+      const chicago=/\bchicago\b/i.test(String(job.location||""));
+      if(chicago){
+        const chicagoCandidates=[...new Set([...fast,...background])];
+        if(chicagoCandidates.length)await redis.sAdd("recover:law-firm:chicago-priority:v1",chicagoCandidates);
+      }else{
+        if(fast.length)await redis.sAdd("recover:law-firm:enrich-pending:v2",fast);
+        if(background.length)await redis.sAdd("recover:law-firm:enrich-recoverable:v1",background);
+      }
       if(fast.length||background.length)console.log(JSON.stringify({
         event:"law_email_lane_split",fast:fast.length,background:background.length,solo:solo.length,
         fastShare:Number((fast.length/Math.max(1,fast.length+background.length)).toFixed(3))
