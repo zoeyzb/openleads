@@ -608,7 +608,15 @@ async function fetchResearchPage(url,lead={},key="",allowStealth=true){
     if(jina?.html){
       const fullJinaText=stripHtml(jina.html);
       const directCalBar=isDirectCalBarProfile(url);
-      const jinaText=directCalBar?fullJinaText.slice(0,220000):fullJinaText.slice(0,24000);
+      const pdfOrProfessional=/\.pdf(?:$|[?#])/i.test(String(url))||professionalDirectoryUrlLikely(url);
+      // Association/member PDFs can be long and the target firm may appear
+      // well beyond the first 24k chars. Keep normal pages cheap, but allow a
+      // deeper public-text window for these high-yield source types.
+      const jinaText=directCalBar
+        ? fullJinaText.slice(0,220000)
+        : pdfOrProfessional
+          ? fullJinaText.slice(0,180000)
+          : fullJinaText.slice(0,24000);
       if(directCalBar){
         const normalizedJina=String(jinaText||"");
         const profileIdx=normalizedJina.search(/Attorney\s+Profile/i);
