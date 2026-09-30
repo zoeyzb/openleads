@@ -722,14 +722,32 @@ const queryVariants=(industry,location,practiceFocus="",coveragePass="")=>{
     const chicago=/\bchicago\b/.test(normalizeText(location))&&/\bil\b|illinois/.test(normalizeText(location));
     if(chicago){
       const areas=[
-        "The Loop, Chicago, IL","River North, Chicago, IL","West Loop, Chicago, IL",
-        "South Loop, Chicago, IL","Lincoln Park, Chicago, IL","Lakeview, Chicago, IL",
-        "Wicker Park, Chicago, IL","Logan Square, Chicago, IL","Hyde Park, Chicago, IL",
-        "Rogers Park, Chicago, IL","Uptown, Chicago, IL","Pilsen, Chicago, IL",
-        "Bridgeport, Chicago, IL","Albany Park, Chicago, IL","Portage Park, Chicago, IL",
-        "Beverly, Chicago, IL","Bronzeville, Chicago, IL","Near North Side, Chicago, IL",
-        "Near West Side, Chicago, IL","Edgewater, Chicago, IL","Avondale, Chicago, IL",
-        "Irving Park, Chicago, IL","Jefferson Park, Chicago, IL","North Center, Chicago, IL"
+        "Rogers Park, Chicago, IL","West Ridge, Chicago, IL","Uptown, Chicago, IL",
+        "Lincoln Square, Chicago, IL","North Center, Chicago, IL","Lake View, Chicago, IL",
+        "Lincoln Park, Chicago, IL","Near North Side, Chicago, IL","Edison Park, Chicago, IL",
+        "Norwood Park, Chicago, IL","Jefferson Park, Chicago, IL","Forest Glen, Chicago, IL",
+        "North Park, Chicago, IL","Albany Park, Chicago, IL","Portage Park, Chicago, IL",
+        "Irving Park, Chicago, IL","Dunning, Chicago, IL","Montclare, Chicago, IL",
+        "Belmont Cragin, Chicago, IL","Hermosa, Chicago, IL","Avondale, Chicago, IL",
+        "Logan Square, Chicago, IL","Humboldt Park, Chicago, IL","West Town, Chicago, IL",
+        "Austin, Chicago, IL","West Garfield Park, Chicago, IL","East Garfield Park, Chicago, IL",
+        "Near West Side, Chicago, IL","North Lawndale, Chicago, IL","South Lawndale, Chicago, IL",
+        "Lower West Side, Chicago, IL","The Loop, Chicago, IL","Near South Side, Chicago, IL",
+        "Armour Square, Chicago, IL","Douglas, Chicago, IL","Oakland, Chicago, IL",
+        "Fuller Park, Chicago, IL","Grand Boulevard, Chicago, IL","Kenwood, Chicago, IL",
+        "Washington Park, Chicago, IL","Hyde Park, Chicago, IL","Woodlawn, Chicago, IL",
+        "South Shore, Chicago, IL","Chatham, Chicago, IL","Avalon Park, Chicago, IL",
+        "South Chicago, Chicago, IL","Burnside, Chicago, IL","Calumet Heights, Chicago, IL",
+        "Roseland, Chicago, IL","Pullman, Chicago, IL","South Deering, Chicago, IL",
+        "East Side, Chicago, IL","West Pullman, Chicago, IL","Riverdale, Chicago, IL",
+        "Hegewisch, Chicago, IL","Garfield Ridge, Chicago, IL","Archer Heights, Chicago, IL",
+        "Brighton Park, Chicago, IL","McKinley Park, Chicago, IL","Bridgeport, Chicago, IL",
+        "New City, Chicago, IL","West Elsdon, Chicago, IL","Gage Park, Chicago, IL",
+        "Clearing, Chicago, IL","West Lawn, Chicago, IL","Chicago Lawn, Chicago, IL",
+        "West Englewood, Chicago, IL","Englewood, Chicago, IL","Greater Grand Crossing, Chicago, IL",
+        "Ashburn, Chicago, IL","Auburn Gresham, Chicago, IL","Beverly, Chicago, IL",
+        "Washington Heights, Chicago, IL","Mount Greenwood, Chicago, IL","Morgan Park, Chicago, IL",
+        "O'Hare, Chicago, IL","Edgewater, Chicago, IL"
       ];
       const chicagoTerms=[
         "small law firm","law group","law partners","law associates","law firm PC","law firm LLC",
@@ -738,7 +756,7 @@ const queryVariants=(industry,location,practiceFocus="",coveragePass="")=>{
         "workers compensation law firm","civil litigation law firm"
       ];
       const expanded=areas.map((area,i)=>`${chicagoTerms[i%chicagoTerms.length]} in ${area}`);
-      return [...new Set(expanded)].slice(0,24);
+      return [...new Set(expanded)];
     }
     return [...new Set(mixed)].map(q=>`${q} in ${location}`);
   }
