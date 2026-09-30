@@ -2499,18 +2499,21 @@ async function enrichLead(key,lead){
       ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[])
     ].filter(Boolean))];
     const highValue=highValueLawResearchLead(lead);
-    const dualSearch=highValue||emailRecoveryPriority(lead)>=5;
-    // Strong-identity prospects used to run Bing and then a full Duck pass
-    // sequentially, regularly exhausting the 75s lead budget. Run both engines
-    // concurrently; keep the non-high-value Bing page budget bounded.
+    const hasDirectOfficial=directOfficialLinks.length>0;
+    const dualSearch=!hasDirectOfficial&&(highValue||emailRecoveryPriority(lead)>=5);
+    const effectiveQueries=hasDirectOfficial?bingQueries.slice(0,4):bingQueries;
+    // When an official directory profile is already known, do not burn dozens
+    // of generic search requests first. Fetch the authoritative profile plus a
+    // tiny fallback set; only fan out to multiple engines when direct lookup
+    // produced no profile at all.
     const [bingResult,duckResult]=await Promise.allSettled([
       bingFallback(
         lead,
-        bingQueries,
-        highValue?10:(dualSearch?8:7),
+        effectiveQueries,
+        hasDirectOfficial?4:(highValue?10:(dualSearch?8:7)),
         key,
         [],
-        highValue?2:1,
+        hasDirectOfficial?1:(highValue?2:1),
         directOfficialLinks
       ),
       dualSearch
