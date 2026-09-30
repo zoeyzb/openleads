@@ -823,8 +823,14 @@ function ownedWebsiteFromMatchedPage(url="",text="",lead={}){
   const domainAffinity=tokens.some(t=>tokenAffinity(hostStem,t));
   const tokenHits=tokens.filter(t=>plain.includes(t)).length;
   const identityTokens=tokens.length===1?tokenHits>=1:tokenHits>=Math.min(2,tokens.length);
-  // A directory can copy name/phone, but it will not normally have a domain
-  // derived from the firm's distinctive name. Require both.
+  // Unknown rank-6 domains can be acronym/brand domains that do not share
+  // obvious tokens with the Maps business name. Exact firm identity + exact
+  // phone on the page is strong enough to identify the firm's own site.
+  const fullName=normalize(lead.name||lead.title||"");
+  const exactFirmName=Boolean(fullName.length>=8&&plain.includes(fullName));
+  if(exactFirmName&&phoneMatch)return "https://"+host;
+  // Otherwise retain domain-affinity protection so copied directory pages are
+  // not mislabeled as owned websites.
   if(domainAffinity&&identityTokens&&phoneMatch)return "https://"+host;
   if(domainAffinity&&identityTokens&&geoMatch)return "https://"+host;
   return "";
@@ -2618,14 +2624,19 @@ async function cleanupWebsiteRefreshReady(){
   return {kept:rows.length-remove.length,removed:remove.length};
 }
 
-function lawyerComFirmSlug(lead={}){
-  return String(lead.name||lead.title||"")
-    .toLowerCase()
-    .replace(/\b(?:esq|esquire)\.?\b/g,"")
-    .replace(/&/g," and ")
-    .replace(/[^a-z0-9]+/g,"-")
-    .replace(/^-+|-+$/g,"")
-    .replace(/-+/g,"-");
+function lawyerComFirmSlugs(lead={}){
+  const slugify=value=>String(value||"")
+    .toLowerCase().replace(/\b(?:esq|esquire)\.?\b/g,"")
+    .replace(/&/g," and ").replace(/[^a-z0-9]+/g,"-")
+    .replace(/^-+|-+$/g,"").replace(/-+/g,"-");
+  const raw=String(lead.name||lead.title||"").trim();
+  const person=likelyAttorneyName(lead);
+  const values=[slugify(raw)];
+  if(person){
+    const p=slugify(person);
+    values.push(p,`law-offices-of-${p}`,`law-office-of-${p}`);
+  }
+  return [...new Set(values.filter(Boolean))].slice(0,4);
 }
 function outboundFirmWebsiteFromDirectory(html="",lead={}){
   const raw=String(html||"");
@@ -2644,23 +2655,22 @@ function outboundFirmWebsiteFromDirectory(html="",lead={}){
   return candidates[0]||"";
 }
 async function lawyerComCandidateEvidence(lead={}){
-  const slug=lawyerComFirmSlug(lead);
-  if(!slug)return {count:0,source:"",website:""};
-  const url="https://www.lawyer.com/firm/"+slug+".html";
-  try{
-    const page=await fetchText(url,5000);
-    if(!page?.html)return {count:0,source:"",website:""};
-    const text=stripHtml(page.html).slice(0,50000);
-    const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
-    const identity=pageMatchesLead(text,lead,page.final_url||url)||
-      Boolean(phone&&String(text).replace(/\D/g,"").includes(phone));
-    if(!identity)return {count:0,source:"",website:""};
-    const count=attorneyEstimate(page.html,text);
-    const website=outboundFirmWebsiteFromDirectory(page.html,lead);
-    return {count,source:page.final_url||url,website};
-  }catch{
-    return {count:0,source:"",website:""};
+  for(const slug of lawyerComFirmSlugs(lead)){
+    const url="https://www.lawyer.com/firm/"+slug+".html";
+    try{
+      const page=await fetchText(url,5000);
+      if(!page?.html)continue;
+      const text=stripHtml(page.html).slice(0,50000);
+      const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+      const identity=pageMatchesLead(text,lead,page.final_url||url)||
+        Boolean(phone&&String(text).replace(/\D/g,"").includes(phone));
+      if(!identity)continue;
+      const count=attorneyEstimate(page.html,text);
+      const website=outboundFirmWebsiteFromDirectory(page.html,lead);
+      return {count,source:page.final_url||url,website};
+    }catch{}
   }
+  return {count:0,source:"",website:""};
 }
 
 async function cleanupEmailCandidateSet(){
