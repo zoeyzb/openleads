@@ -562,7 +562,10 @@ async function persistPermanentQualified(redis, job, leads) {
 
       const chicago=/\bchicago\b/i.test(String(job.location||""));
       if(chicago){
-        const chicagoCandidates=[...new Set([...fast,...background])];
+        // Phone-first campaign cannot infer firm size from the business name.
+        // Queue every callable no-site Chicago law lead; verified headcount,
+        // not a "solo-looking" name, decides whether it is 2-10.
+        const chicagoCandidates=[...new Set([...fast,...background,...solo])];
         if(chicagoCandidates.length)await redis.sAdd("recover:law-firm:chicago-priority:v1",chicagoCandidates);
       }else{
         if(fast.length)await redis.sAdd("recover:law-firm:enrich-pending:v2",fast);
