@@ -3796,7 +3796,30 @@ async function bootstrapExistingQualified(){
 
       const website=String(lead.website||"").trim();
 
-      if(sizeReadyWebsiteAudit&&!website&&lead.attorney_count_evidence_verified===true){
+      let bootstrapHeadcountValid=lead.attorney_count_evidence_verified===true&&isPublishedHeadcountSource(String(lead.attorney_count_source||""),lead);
+      if(lead.attorney_count_evidence_verified===true&&!bootstrapHeadcountValid){
+        const bootstrapEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+          .map(x=>String(x||"").trim().toLowerCase()).filter(isUsableLawEmail);
+        lead={...lead,attorney_count_evidence_verified:false,attorney_count_estimate:0,attorney_count_source:"",firm_size_tier:"unknown",preferred_firm_size:false,qualified_lead:false};
+        await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(lead));
+        await redis.hDel(VERIFIED_HEADCOUNT_EVIDENCE_HASH,entry.field);
+        await Promise.all([
+          redis.sRem(UNIQUE_VERIFIED_HEADCOUNT_SET,entry.field),
+          redis.sRem(UNIQUE_ELIGIBLE_SET,entry.field),
+          redis.sRem(READY_SET,entry.field),
+          redis.sRem(ENRICHED_SET,entry.field),
+          redis.sRem(SIZE_READY_PENDING_SET,entry.field)
+        ]);
+        readySet.delete(entry.field);
+        if(!website){
+          await moveToEmailQueue(entry.field,bootstrapEmails.length?PENDING_SET:(highValueLawResearchLead(lead)?PRIORITY_PENDING_SET:RECOVERABLE_PENDING_SET));
+          queuedForEnrichment++;
+        }
+        await redis.hIncrBy(STATS,"bootstrap_invalid_bar_headcount_cleared",1);
+        bootstrapHeadcountValid=false;
+      }
+
+      if(sizeReadyWebsiteAudit&&!website&&bootstrapHeadcountValid){
         const n=Number(lead.attorney_count_estimate||0);
         if(n>=2&&n<=10){
           await Promise.all([
@@ -3933,7 +3956,7 @@ async function bootstrapExistingQualified(){
       const practiceKeys=[...new Set([...storedKeys,...observedKeys,...(focus?[focus]:[])])];
 
       let effectiveWebsite=website;
-      const bootstrapHeadcountValid=lead.attorney_count_evidence_verified===true&&isPublishedHeadcountSource(String(lead.attorney_count_source||""),lead);
+      bootstrapHeadcountValid=lead.attorney_count_evidence_verified===true&&isPublishedHeadcountSource(String(lead.attorney_count_source||""),lead);
       const bootstrapSizeReady=bootstrapHeadcountValid&&Number(lead.attorney_count_estimate||0)>=2&&Number(lead.attorney_count_estimate||0)<=10;
       if(!fullRequalify&&!website&&bootstrapSizeReady&&(!sourceBacked||!emails.length)){
         await redis.sRem(ENRICHED_SET,entry.field);
