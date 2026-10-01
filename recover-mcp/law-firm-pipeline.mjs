@@ -5082,13 +5082,22 @@ function extractDirectoryPhone(text=""){
 }
 
 function directoryCardFirmAnchor(beforeHtml=""){
-  const anchors=[...String(beforeHtml||"").matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{1,500}?)<\/a>/gi)];
-  for(let i=anchors.length-1;i>=0;i--){
-    const href=absoluteLawyersUrl(anchors[i][1]);
+  const raw=String(beforeHtml||"");
+  const candidates=[];
+  for(const m of raw.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{1,500}?)<\/a>/gi)){
+    candidates.push({href:m[1],name:stripHtml(String(m[2]||"")),index:m.index||0});
+  }
+  // Jina Reader returns markdown. Lawyers.com firm cards preserve their firm-profile links.
+  for(const m of raw.matchAll(/\[([^\]]{2,180})\]\((https?:\/\/[^)\s]+)\)/g)){
+    candidates.push({href:m[2],name:String(m[1]||""),index:m.index||0});
+  }
+  candidates.sort((a,b)=>a.index-b.index);
+  for(let i=candidates.length-1;i>=0;i--){
+    const href=absoluteLawyersUrl(candidates[i].href);
     if(!href||!/-f\/?(?:[?#].*)?$/i.test(href))continue;
-    const name=stripHtml(String(anchors[i][2]||"")).replace(/\s+/g," ").trim();
+    const name=stripHtml(String(candidates[i].name||"")).replace(/\s+/g," ").trim();
     if(!name||name.length<3||name.length>180)continue;
-    return {href,name,index:anchors[i].index||0};
+    return {href,name,index:candidates[i].index||0};
   }
   return null;
 }
@@ -5143,32 +5152,46 @@ async function verifyDirectoryCandidate(candidate={}){
     const seedLead={
       name:candidate.name,phone:candidate.phone,address:candidate.address,
       city:candidate.city,region:candidate.state,state:candidate.state,
-      industry:"LAW_FIRM",search_profile:"law-firm",website:""
+      industry:"LAW_FIRM",search_profile:"law-firm",website:"",
+      conversion_headcount_priority:true
     };
-    const page=await fetchText(candidate.profileUrl,6500);
+    let page=null;
+    try{page=await fetchText(candidate.profileUrl,6000);}catch{}
+    if(!page?.html){
+      try{page=await callJinaReader(candidate.profileUrl,seedLead);}catch{}
+    }
+    if(!page?.html){
+      try{page=await callScrapling(candidate.profileUrl,{allowBrowser:false});}catch{}
+    }
     if(!page?.html)return null;
     const source=String(page.final_url||candidate.profileUrl);
     if(!/(^|\.)lawyers\.com$/i.test(hostOf(source)))return null;
-    const text=stripHtml(page.html).slice(0,80000);
-    if(!strictDirectoryFirmIdentity(page.html,source,seedLead))return null;
+    const text=stripHtml(page.html).slice(0,100000);
+    const normText=normalize(text);
+    const fullName=normalize(candidate.name);
+    const exactNameMatch=Boolean(fullName.length>=6&&normText.includes(fullName));
+    const htmlIdentity=strictDirectoryFirmIdentity(page.html,source,seedLead);
+    if(!htmlIdentity&&!exactNameMatch)return null;
 
     const phoneDigits=normalizeLawPhone(candidate.phone);
     const profilePhoneMatch=Boolean(phoneDigits&&String(text).replace(/\D/g,"").includes(phoneDigits));
     const profileCount=officialFirmSizeEstimate(text);
-    const rosterCount=strictFirmPageRosterCount(page.html,source,seedLead);
+    const rosterCount=page.via==="jina"?0:strictFirmPageRosterCount(page.html,source,seedLead);
     const count=profileCount>0?profileCount:rosterCount;
     if(count<2||count>10)return null;
 
-    // Require the dedicated profile to corroborate either the exact office phone
-    // or the same 2-10 count published on the city listing.
+    // The city listing and dedicated profile are independent pages on the same
+    // legal directory. Require exact phone OR exact agreement on the published size.
     if(!profilePhoneMatch&&count!==Number(candidate.attorneyCount||0))return null;
 
-    const profileWebsite=outboundFirmWebsiteFromDirectory(page.html,seedLead);
-    if(profileWebsite){
-      const verifiedWebsite=await verifyOwnedWebsiteCandidate(profileWebsite,seedLead);
-      if(verifiedWebsite)return {...candidate,rejectWebsite:verifiedWebsite,count,source};
+    if(page.via!=="jina"){
+      const profileWebsite=outboundFirmWebsiteFromDirectory(page.html,seedLead);
+      if(profileWebsite){
+        const verifiedWebsite=await verifyOwnedWebsiteCandidate(profileWebsite,seedLead);
+        if(verifiedWebsite)return {...candidate,rejectWebsite:verifiedWebsite,count,source};
+      }
     }
-    return {...candidate,count,source,profilePhoneMatch};
+    return {...candidate,count,source,profilePhoneMatch,profileVia:String(page.via||"direct")};
   }catch{return null;}
 }
 
@@ -5253,7 +5276,7 @@ async function persistDirectorySeed(candidate={}){
 async function seedLawyersComDirectory(cities=[]){
   if(!DIRECTORY_DISCOVERY_ENABLED||!cities.length)return {cities:0,candidates:0,verified:0,added:0,ownedWebsite:0};
   let cursor=Math.max(0,Number(await redis.get(DIRECTORY_CURSOR_KEY)||0));
-  let citiesDone=0,candidatesFound=0,verified=0,added=0,ownedWebsite=0,fetchErrors=0;
+  let citiesDone=0,candidatesFound=0,verified=0,added=0,ownedWebsite=0,fetchErrors=0,directPages=0,jinaPages=0,scraplingPages=0;
 
   for(let slot=0;slot<DIRECTORY_DISCOVERY_BATCH;slot++){
     let area=null,guard=0;
@@ -5274,19 +5297,36 @@ async function seedLawyersComDirectory(cities=[]){
     for(let page=1;page<=DIRECTORY_DISCOVERY_PAGES;page++){
       const url=lawyersComCityUrl(area,page);
       if(url)pageTasks.push((async()=>{
+        const areaLead={
+          name:String(area.city||"")+" law firms",
+          city:String(area.city||""),region:String(area.state||""),state:String(area.state||""),
+          industry:"LAW_FIRM",search_profile:"law-firm",conversion_headcount_priority:true
+        };
         try{
-          const result=await fetchText(url,7500);
-          return {url,html:String(result?.html||"")};
-        }catch{return {url,html:"",error:true};}
+          const direct=await fetchText(url,6000);
+          if(direct?.html)return {url,html:String(direct.html),via:"direct"};
+        }catch{}
+        try{
+          const jina=await callJinaReader(url,areaLead);
+          if(jina?.html)return {url,html:String(jina.html),via:"jina"};
+        }catch{}
+        try{
+          const scrap=await callScrapling(url,{allowBrowser:false});
+          if(scrap?.html)return {url,html:String(scrap.html),via:"scrapling"};
+        }catch{}
+        return {url,html:"",error:true};
       })());
     }
     const pages=await Promise.all(pageTasks);
 
     const rawCandidates=[];
+    const pageVia={direct:0,jina:0,scrapling:0};
     for(const page of pages){
       if(page.error||!page.html){fetchErrors++;continue;}
+      if(page.via)pageVia[page.via]=(pageVia[page.via]||0)+1;
       rawCandidates.push(...extractLawyersComDirectoryCandidates(page.html,page.url,area));
     }
+    directPages+=pageVia.direct||0;jinaPages+=pageVia.jina||0;scraplingPages+=pageVia.scrapling||0;
     const byPhone=new Map();
     for(const item of rawCandidates){
       const phone=normalizeLawPhone(item.phone);
@@ -5309,7 +5349,7 @@ async function seedLawyersComDirectory(cities=[]){
   if(citiesDone||added||fetchErrors){
     console.log(JSON.stringify({
       event:"law_directory_seed_cycle",cities:citiesDone,candidates:candidatesFound,
-      verified,added,ownedWebsite,fetchErrors,cursor
+      verified,added,ownedWebsite,fetchErrors,directPages,jinaPages,scraplingPages,cursor
     }));
   }
   if(added)await redis.hIncrBy(STATS,"directory_source_first_added",added);
