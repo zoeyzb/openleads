@@ -23,6 +23,7 @@ const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||
 const ENRICH_BATCH=Math.max(1,Math.min(128,Number(process.env.LAW_FIRM_ENRICH_BATCH||64)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(40,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||20)));
 const EMAIL_METHOD_VERSION="email-v67-recovery-diversity-free-mail";
+const HEADCOUNT_IDENTITY_VERSION="directory-identity-v2";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
@@ -1384,6 +1385,29 @@ async function probeLikelyOwnedDomains(lead={},key=""){
   return "";
 }
 
+function strictDirectoryFirmIdentity(html="",source="",lead={}){
+  const raw=String(html||"");
+  const h1=stripHtml(String(raw.match(/<h1\b[^>]*>([\s\S]{1,320}?)<\/h1>/i)?.[1]||""));
+  const title=stripHtml(String(raw.match(/<title\b[^>]*>([\s\S]{1,320}?)<\/title>/i)?.[1]||""));
+  const identity=normalize((h1+" "+title).trim());
+  if(!identity)return false;
+
+  const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+  const phoneMatch=Boolean(phone&&raw.replace(/\D/g,"").includes(phone));
+  const fullName=normalize(lead.name||lead.title||"");
+  const tokens=leadNameTokens(lead).filter(x=>x.length>=4);
+  const hits=tokens.filter(t=>identity.includes(t)).length;
+  const exactName=Boolean(fullName.length>=8&&identity.includes(fullName));
+
+  // A generic directory page may mention many nearby firms in body text.
+  // Accept headcount only when the page's own H1/title identifies this firm,
+  // with phone as corroboration for short/ambiguous names.
+  if(exactName)return true;
+  if(tokens.length>=2&&hits>=Math.min(2,tokens.length))return true;
+  if(tokens.length===1&&hits===1&&phoneMatch)return true;
+  return false;
+}
+
 async function directDirectorySizeEvidence(lead={},key=""){
   const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
   if(!name)return {count:0,source:"",website:""};
@@ -1433,7 +1457,7 @@ async function directDirectorySizeEvidence(lead={},key=""){
       if(!page?.html)continue;
       const source=String(page.final_url||url);
       const text=stripHtml(page.html).slice(0,70000);
-      if(!pageMatchesLead(text,lead,source)&&!sourcePageMatchesFirmIdentity(text,lead,source))continue;
+      if(!strictDirectoryFirmIdentity(page.html,source,lead))continue;
       const explicitCount=attorneyEstimate(page.html,text);
       const host=hostOf(source);
       const rosterCount=/(^|\.)(?:lawyers|martindale|lawyer|findlaw)\.com$/i.test(host)
@@ -1582,7 +1606,7 @@ async function directLawyerComSizeEvidence(lead={},key=""){
     const source=String(page.final_url||urls[i]);
     if(!/(^|\.)lawyer\.com$/i.test(hostOf(source)))continue;
     const text=stripHtml(page.html).slice(0,36000);
-    if(!pageMatchesLead(text,lead,source))continue;
+    if(!strictDirectoryFirmIdentity(page.html,source,lead))continue;
     const explicitCount=attorneyEstimate(page.html,text);
     const rosterCount=directoryRosterCount(page.html,source,lead);
     const count=explicitCount>0?explicitCount:rosterCount;
@@ -3112,6 +3136,7 @@ async function enrichLead(key,lead){
         attorney_count_evidence_verified:true,
         attorney_count_source:earlySource,
         attorney_count_verified_at:new Date().toISOString(),
+        headcount_identity_version:HEADCOUNT_IDENTITY_VERSION,
         preferred_firm_size:earlyCount>=2&&earlyCount<=10,
         firm_size_tier:firmSizeTier(earlyCount)
       };
@@ -4792,7 +4817,16 @@ async function bootstrapPhoneFirstInventory(){
 
       const n=Number(lead.attorney_count_estimate||lead.attorney_count||0);
       const source=String(lead.attorney_count_source||"");
-      const verified=lead.attorney_count_evidence_verified===true&&n>0&&isPublishedHeadcountSource(source,lead);
+      const sourceHost=hostOf(source);
+      const legacyLooseDirectoryEvidence=(sourceHost==="lawyer.com"||sourceHost.endsWith(".lawyer.com")) &&
+        String(lead.headcount_identity_version||"")!==HEADCOUNT_IDENTITY_VERSION;
+      const verified=lead.attorney_count_evidence_verified===true&&n>0&&isPublishedHeadcountSource(source,lead)&&!legacyLooseDirectoryEvidence;
+      if(legacyLooseDirectoryEvidence){
+        lead={...lead,attorney_count_evidence_verified:false,preferred_firm_size:false,firm_size_tier:"unknown"};
+        await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(lead));
+        await redis.sRem(UNIQUE_VERIFIED_HEADCOUNT_SET,entry.field);
+        await redis.hDel(VERIFIED_HEADCOUNT_EVIDENCE_HASH,entry.field);
+      }
       if(verified){
         if(n>=2&&n<=10)readyChunk.push(entry.field);
         else wrongSizeKnown++;
