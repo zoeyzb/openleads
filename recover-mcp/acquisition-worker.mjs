@@ -258,8 +258,31 @@ function sameRequestedState(lead,job={}){
   return new RegExp("\\b"+requested.replace(/[^a-z]/g,"")+"\\b").test(address);
 }
 function locationCandidateSet(records=[],job={}){
-  if(String(job.search_profile||"")!=="core-home-service") return records.filter(lead=>matchesAcquisitionLocation(lead,job));
+  const profile=String(job.search_profile||"");
+  if(profile!=="core-home-service"&&profile!=="law-firm") return records.filter(lead=>matchesAcquisitionLocation(lead,job));
+
   const strict=records.filter(lead=>matchesAcquisitionLocation(lead,job));
+  const strictKeys=new Set(strict.map(permanentLeadIdentity));
+
+  if(profile==="law-firm"){
+    // Maps city queries routinely spill into nearby suburbs. For this campaign
+    // the deliverable is nationwide, not city-exclusive, so throwing away
+    // same-state results only because Maps placed them outside the exact city
+    // destroys no-website yield. Keep exact-city matches first, then a bounded
+    // same-state tail from the SAME query result set. Global identity dedupe
+    // prevents the same nearby firm from being stored repeatedly.
+    const fallbackCap=60;
+    if(strict.length>=fallbackCap)return strict;
+    const nearby=records
+      .filter(lead=>!strictKeys.has(permanentLeadIdentity(lead))&&sameRequestedState(lead,job))
+      .slice(0,Math.max(0,fallbackCap-strict.length));
+    if(nearby.length)console.log(JSON.stringify({
+      event:"law_location_relaxation",acquisition_id:job.id,strict:strict.length,
+      nearby:nearby.length,cap:fallbackCap,coverage_pass:job.coverage_pass,location:job.location
+    }));
+    return [...strict,...nearby];
+  }
+
   const passNum=Number(String(job.coverage_pass||"").match(/p(\d+)$/)?.[1]||1);
   const fallbackCap=passNum>=4?24:12;
   if(strict.length>=fallbackCap) return strict;
@@ -267,7 +290,6 @@ function locationCandidateSet(records=[],job={}){
   // Keep strict matches first, then admit a bounded same-state tail from the
   // same Maps result set. Later passes widen this tail because those passes are
   // explicitly for discovering businesses missed by the exact ZIP/city slice.
-  const strictKeys=new Set(strict.map(permanentLeadIdentity));
   const nearby=records
     .filter(lead=>!strictKeys.has(permanentLeadIdentity(lead))&&sameRequestedState(lead,job))
     .slice(0,Math.max(0,fallbackCap-strict.length));
