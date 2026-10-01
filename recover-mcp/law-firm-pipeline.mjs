@@ -4158,45 +4158,42 @@ async function bootstrapExistingQualified(){
         }
       }
 
-      // Always prioritize Chicago no-website firms whose 2-10 headcount is
-      // still unknown. This is the user's active campaign and must not sit
-      // behind the nationwide historical email backlog.
+      // Phone-first Chicago campaign: any callable no-site law record with
+      // unknown headcount must be researched. Business-name shape is only a
+      // ranking signal; it is not evidence of firm size.
       if(!website &&
          /\bchicago\b/i.test(String(lead.acquisition_location||lead.target_area||"")) &&
+         isUsableLawPhone(lead.phone) &&
          lead.attorney_count_evidence_verified!==true){
-        const chicagoShape=lawFirmNameShape(lead);
-        if(chicagoShape!=="solo"){
-          await Promise.all([
-            redis.sRem(ENRICHED_SET,entry.field),
-            redis.sRem(REJECTED_SET,entry.field),
-            redis.sRem(RECOVERABLE_PENDING_SET,entry.field),
-            redis.sRem(SOURCE_PENDING_SET,entry.field),
-            redis.sRem(SIZE_READY_PENDING_SET,entry.field),
-            redis.sRem(PRIORITY_PENDING_SET,entry.field),
-            redis.sRem(PENDING_SET,entry.field)
-          ]);
-          await redis.sAdd(CHICAGO_PENDING_SET,entry.field);
-        }
+        await Promise.all([
+          redis.sRem(ENRICHED_SET,entry.field),
+          redis.sRem(REJECTED_SET,entry.field),
+          redis.sRem(RECOVERABLE_PENDING_SET,entry.field),
+          redis.sRem(SOURCE_PENDING_SET,entry.field),
+          redis.sRem(SIZE_READY_PENDING_SET,entry.field),
+          redis.sRem(PRIORITY_PENDING_SET,entry.field),
+          redis.sRem(PENDING_SET,entry.field)
+        ]);
+        await redis.sAdd(CHICAGO_PENDING_SET,entry.field);
       }
 
-      // One-time recovery for the Chicago website-build campaign: old runs
-      // marked fresh firms enriched before proving the requested 2-10 size.
-      // Re-open only no-website, firm/multi-shaped Chicago records.
+      // One-time recovery for legacy Chicago records created before the
+      // phone-first campaign. Re-open every callable no-site record whose
+      // headcount is still unverified; verified size decides eligibility.
       if(chicagoHeadcountRecovery && !website &&
          /\bchicago\b/i.test(String(lead.acquisition_location||lead.target_area||"")) &&
+         isUsableLawPhone(lead.phone) &&
          lead.attorney_count_evidence_verified!==true){
-        const shape=lawFirmNameShape(lead);
-        if(shape==="multi"||shape==="firm"){
-          await Promise.all([
-            redis.sRem(ENRICHED_SET,entry.field),
-            redis.sRem(REJECTED_SET,entry.field),
-            redis.sRem(RECOVERABLE_PENDING_SET,entry.field),
-            redis.sRem(SOURCE_PENDING_SET,entry.field),
-            redis.sRem(SIZE_READY_PENDING_SET,entry.field)
-          ]);
-          await redis.sAdd(PRIORITY_PENDING_SET,entry.field);
-          chicagoHeadcountRecoveryQueued++;
-        }
+        await Promise.all([
+          redis.sRem(ENRICHED_SET,entry.field),
+          redis.sRem(REJECTED_SET,entry.field),
+          redis.sRem(RECOVERABLE_PENDING_SET,entry.field),
+          redis.sRem(SOURCE_PENDING_SET,entry.field),
+          redis.sRem(SIZE_READY_PENDING_SET,entry.field),
+          redis.sRem(PENDING_SET,entry.field)
+        ]);
+        await redis.sAdd(CHICAGO_PENDING_SET,entry.field);
+        chicagoHeadcountRecoveryQueued++;
       }
 
       // One-time recovery for the association/court-record email adapter.
