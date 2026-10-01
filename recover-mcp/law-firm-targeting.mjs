@@ -133,13 +133,19 @@ export function lawResearchQueries(lead={}){
   const city=String(lead.city||lead.locality||"").trim();
   const region=String(lead.region||lead.state||lead.state_code||"").trim();
   const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
+  const phoneDash=phone.length===10?`${phone.slice(0,3)}-${phone.slice(3,6)}-${phone.slice(6)}`:"";
+  const phoneParen=phone.length===10?`(${phone.slice(0,3)}) ${phone.slice(3,6)}-${phone.slice(6)}`:"";
   if(!name)return [];
   const where=[city,region].filter(Boolean).join(" ");
   const queries=[];
   if(phone){
     queries.push(
-      `"${phone}" "${name}"`,
-      `"${phone}" "${name}" email`
+      `"${phoneDash||phone}" "${name}"`,
+      `"${phoneParen||phone}" "${name}"`,
+      `"${phoneDash||phone}" email`,
+      `"${phoneParen||phone}" attorney email`,
+      `"${phoneDash||phone}" "notice to creditors"`,
+      `"${phoneDash||phone}" lawyer`
     );
   }
   queries.push(
@@ -158,7 +164,7 @@ export function lawResearchQueries(lead={}){
     `"${name}" ${region} site:justia.com`.trim(),
     `"${name}" ${region} site:lawyers.com`.trim()
   );
-  return [...new Set(queries)].slice(0,14);
+  return [...new Set(queries)].slice(0,18);
 }
 
 export function isLawFirmLead(lead={}){
