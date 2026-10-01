@@ -86,6 +86,29 @@ export function isPreferredLawFirmSize(value=0){
   return Number.isFinite(n)&&n>=2&&n<=10;
 }
 
+export function normalizeLawPhone(value=""){
+  let digits=String(value||"").replace(/\D+/g,"");
+  if(digits.length===11&&digits.startsWith("1"))digits=digits.slice(1);
+  return digits;
+}
+
+export function isUsableLawPhone(value=""){
+  const digits=normalizeLawPhone(value);
+  if(!/^[2-9]\d{2}[2-9]\d{6}$/.test(digits))return false;
+  if(/^(\d)\1{9}$/.test(digits))return false;
+  return true;
+}
+
+export function qualifiesCallReadyNoWebsiteLawLead(lead={}){
+  const website=String(lead.website||lead.website_url||"").trim();
+  const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+  const sizeEvidenceVerified=lead.attorney_count_evidence_verified===true;
+  return !/^https?:\/\//i.test(website) &&
+    sizeEvidenceVerified &&
+    isPreferredLawFirmSize(attorneyCount) &&
+    isUsableLawPhone(lead.phone);
+}
+
 export function qualifiesNoWebsiteLawLead(lead={}){
   const website=String(lead.website||"").trim();
   const contacts=Array.isArray(lead.emails)?lead.emails:[lead.email].filter(Boolean);
