@@ -1537,6 +1537,25 @@ function bingRssResultRecords(xml=""){
   return out.slice(0,12);
 }
 
+function duckResultRecords(html=""){
+  const out=[];
+  const raw=String(html||"");
+  for(const m of raw.matchAll(/<div\b[^>]*class=["'][^"']*\bresult\b[^"']*["'][^>]*>([\s\S]*?)(?=<div\b[^>]*class=["'][^"']*\bresult\b|$)/gi)){
+    const block=String(m[1]||"");
+    const href=String(block.match(/<a\b[^>]*class=["'][^"']*result__a[^"']*["'][^>]*href=["']([^"']+)["']/i)?.[1]||"");
+    if(!href)continue;
+    let url="";
+    try{
+      const u=new URL(href.replace(/&amp;/g,"&"),"https://html.duckduckgo.com");
+      const uddg=u.searchParams.get("uddg");
+      url=uddg?decodeURIComponent(uddg):u.href;
+    }catch{url=href;}
+    if(!/^https?:\/\//i.test(url))continue;
+    out.push({url,text:stripHtml(block).slice(0,5000)});
+  }
+  return out.slice(0,12);
+}
+
 function indexedDirectoryHeadcountEvidence(records=[],lead={}){
   const phone=normalizeLawPhone(lead.phone);
   const fullName=normalize(lead.name||lead.title||"");
@@ -1598,7 +1617,7 @@ async function directDirectorySizeEvidence(lead={},key=""){
         ...bingResultLinks(html),...bingRssResultLinks(rss),
         ...duckResultLinks(duck),...markdownResultLinks(duck)
       ])],
-      records:[...bingResultRecords(html),...bingRssResultRecords(rss)]
+      records:[...bingResultRecords(html),...bingRssResultRecords(rss),...duckResultRecords(duck)]
     };
   }));
 
