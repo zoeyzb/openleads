@@ -2903,7 +2903,14 @@ async function enrichLead(key,lead){
     const barDomain=stateBarDomain(lead);
     const barQueries=stateBarQueries(lead,people);
     const state=normalizedStateCode(lead);
-    const directOfficialLinks=await directOfficialProfileLinks(lead,people);
+    const discoveredOfficialLinks=await directOfficialProfileLinks(lead,people);
+    // If firm size was already proven from an official bar/court profile, that
+    // exact page is our highest-value email source. Reuse it directly instead
+    // of rediscovering the same identity through generic search.
+    const directOfficialLinks=[...new Set([
+      ...discoveredOfficialLinks,
+      ...(attorneyCountSource&&trustedLawSource(attorneyCountSource,lead)?[attorneyCountSource]:[])
+    ])];
     const publicRecordQueries=[
       ...(person&&phone?[`"${person}" "${phonePretty||phone}" email filetype:pdf`]:[]),
       ...(name&&phone?[`"${name}" "${phonePretty||phone}" email`]:[]),
