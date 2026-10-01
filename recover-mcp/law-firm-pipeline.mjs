@@ -29,7 +29,7 @@ const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
 const CHICAGO_HEADCOUNT_RECOVERY_KEY="recover:law-firm:chicago-headcount-recovery-version";
 const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v6-firm-owner-guard";
 const ASSOCIATION_DOCKET_RECOVERY_KEY="recover:law-firm:association-docket-recovery-version";
-const SIZE_READY_WEBSITE_AUDIT_VERSION="size-ready-website-audit-v2-duck-profile";
+const SIZE_READY_WEBSITE_AUDIT_VERSION="size-ready-website-audit-v2-duck";
 const SIZE_READY_WEBSITE_AUDIT_KEY="recover:law-firm:size-ready-website-audit-version";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
@@ -3527,10 +3527,6 @@ function outboundFirmWebsiteFromDirectory(html="",lead={}){
   const raw=String(html||"");
   const blocked=/^(?:www\.)?(?:lawyer\.com|martindale\.com|avvo\.com|justia\.com|findlaw\.com|facebook\.com|linkedin\.com|instagram\.com|x\.com|twitter\.com|youtube\.com)$/i;
   const candidates=[];
-  for(const m of raw.matchAll(/(?:https?:\/\/|www\.)[a-z0-9.-]+(?:\/[a-z0-9._~:/?#\[\]@!function outboundFirmWebsiteFromDirectory(html="",lead={}){
-  const raw=String(html||"");
-  const blocked=/^(?:www\.)?(?:lawyer\.com|martindale\.com|avvo\.com|justia\.com|findlaw\.com|facebook\.com|linkedin\.com|instagram\.com|x\.com|twitter\.com|youtube\.com)$/i;
-  const candidates=[];
   for(const m of raw.matchAll(/(?:https?:\/\/|www\.)[a-z0-9.-]+(?:\/[a-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?/ig)){
     let value=String(m[0]||"").replace(/[),.;]+$/,"");
     if(/^www\./i.test(value))value="https://"+value;
@@ -3543,61 +3539,27 @@ function outboundFirmWebsiteFromDirectory(html="",lead={}){
   }
   return candidates[0]||"";
 }
-'()*+,;=%-]*)?/ig)){
-    let value=String(m[0]||"").replace(/[),.;]+$/,"");
-    if(/^www\./i.test(value))value="https://"+value;
-    try{
-      const u=new URL(value);
-      const host=u.hostname.toLowerCase().replace(/^www\./,"");
-      if(blocked.test(host)||lawSourceRank(u.href,lead)<=4)continue;
-      if(!candidates.includes(u.origin))candidates.push(u.origin);
-    }catch{}
-  }
-  return candidates[0]||"";
-}
-
 async function ownedWebsiteFromTrustedProfile(source="",lead={},key=""){
   if(!source||!trustedLawSource(source,lead))return "";
   try{
     const page=await fetchResearchPage(source,lead,key,true);
     if(!page?.html)return "";
-    const raw=String(page.html||"");
+    const html=String(page.html||"");
     const sourceHost=hostOf(page.final_url||source);
-    const candidates=[];
-    for(const m of raw.matchAll(/(?:href=["']([^"']+)["']|(?:https?:\/\/|www\.)[a-z0-9.-]+(?:\/[a-z0-9._~:/?#\[\]@!function outboundFirmWebsiteFromDirectory(html="",lead={}){
-  const raw=String(html||"");
-  const blocked=/^(?:www\.)?(?:lawyer\.com|martindale\.com|avvo\.com|justia\.com|findlaw\.com|facebook\.com|linkedin\.com|instagram\.com|x\.com|twitter\.com|youtube\.com)$/i;
-  const candidates=[];
-  for(const m of raw.matchAll(/(?:https?:\/\/|www\.)[a-z0-9.-]+(?:\/[a-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?/ig)){
-    let value=String(m[0]||"").replace(/[),.;]+$/,"");
-    if(/^www\./i.test(value))value="https://"+value;
-    try{
-      const u=new URL(value);
-      const host=u.hostname.toLowerCase().replace(/^www\./,"");
-      if(blocked.test(host)||lawSourceRank(u.href,lead)<=4)continue;
-      if(!candidates.includes(u.origin))candidates.push(u.origin);
-    }catch{}
-  }
-  return candidates[0]||"";
-}
-'()*+,;=%-]*)?)/ig)){
-      let value=String(m[1]||m[0]||"").replace(/^href=["']|["']$/g,"").replace(/[),.;]+$/,"");
-      if(/^www\./i.test(value))value="https://"+value;
+    const hrefs=[...html.matchAll(/href=["']([^"']+)["']/gi)].map(m=>String(m[1]||""));
+    for(const href of hrefs.slice(0,80)){
       try{
-        const u=new URL(value,page.final_url||source);
-        const h=u.hostname.toLowerCase().replace(/^www\./,"");
-        if(!/^https?:$/.test(u.protocol)||h===sourceHost||knownThirdPartyDirectoryHost(u.href)||lawSourceRank(u.href,lead)<=4)continue;
-        if(!candidates.includes(u.origin))candidates.push(u.origin);
+        const u=new URL(href,page.final_url||source);
+        const host=u.hostname.toLowerCase().replace(/^www\./,"");
+        if(!/^https?:$/.test(u.protocol)||host===sourceHost||knownThirdPartyDirectoryHost(u.href)||lawSourceRank(u.href,lead)<=4)continue;
+        const verified=await verifyOwnedWebsiteCandidate(u.origin,lead);
+        if(verified)return verified;
       }catch{}
-      if(candidates.length>=12)break;
-    }
-    for(const candidate of candidates){
-      const verified=await verifyOwnedWebsiteCandidate(candidate,lead);
-      if(verified)return verified;
     }
   }catch{}
   return "";
 }
+
 async function lawyerComCandidateEvidence(lead={}){
   for(const slug of lawyerComFirmSlugs(lead)){
     const url="https://www.lawyer.com/firm/"+slug+".html";
