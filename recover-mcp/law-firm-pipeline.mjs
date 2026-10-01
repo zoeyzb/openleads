@@ -4250,6 +4250,17 @@ async function bootstrapExistingQualified(){
   if(associationDocketRecovery)await redis.set(ASSOCIATION_DOCKET_RECOVERY_KEY,ASSOCIATION_DOCKET_RECOVERY_VERSION);
   if(sizeReadyWebsiteAudit)await redis.set(SIZE_READY_WEBSITE_AUDIT_KEY,SIZE_READY_WEBSITE_AUDIT_VERSION);
 
+  // READY_SET is revalidated record-by-record above. Keep the secondary
+  // UNIQUE_ELIGIBLE_SET exactly aligned so monitoring/export counts cannot
+  // retain stale leads after a website/size/email rejection.
+  const validatedReady=[...readySet];
+  await redis.del(UNIQUE_ELIGIBLE_SET);
+  if(validatedReady.length){
+    for(let i=0;i<validatedReady.length;i+=500){
+      await redis.sAdd(UNIQUE_ELIGIBLE_SET,validatedReady.slice(i,i+500));
+    }
+  }
+
   console.log(JSON.stringify({
     event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,FULL_REQUAL_VERSION,HISTORICAL_RECOVERY_VERSION,EMAIL_METHOD_VERSION,CALBAR_ADAPTER_VERSION,calbarAdapterRecoveryQueued,floridaDirectRecoveryQueued:floridaRecoveryKeys.length,chicagoHeadcountRecoveryQueued,associationDocketRecoveryQueued,
     queuedForEnrichment,requalifyQueued,fullRequalify,
@@ -4571,6 +4582,24 @@ async function enrichmentLoop(){
   }
 }
 
+async function statusLoop(){
+  while(true){
+    try{
+      const [qualified,uniqueEligible,verifiedEmails,verifiedHeadcounts,emailCandidates,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady]=await Promise.all([
+        redis.sCard(READY_SET),redis.sCard(UNIQUE_ELIGIBLE_SET),
+        redis.sCard(UNIQUE_VERIFIED_EMAIL_SET),redis.sCard(UNIQUE_VERIFIED_HEADCOUNT_SET),
+        redis.sCard(EMAIL_CANDIDATE_SET),redis.sCard(PENDING_SET),
+        redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),
+        redis.sCard(SIZE_READY_PENDING_SET)
+      ]);
+      console.log(JSON.stringify({event:"law_firm_pipeline_heartbeat",qualified,uniqueEligible,verifiedEmails,verifiedHeadcounts,emailCandidates,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady}));
+    }catch(error){
+      console.error("law_firm_status_loop_error",error?.stack||error?.message||error);
+    }
+    await sleep(30000);
+  }
+}
+
 async function websiteAuditLoop(){
   while(true){
     try{
@@ -4587,4 +4616,4 @@ async function websiteAuditLoop(){
   }
 }
 
-await Promise.all([seedLoop(),enrichmentLoop()]);
+await Promise.all([seedLoop(),enrichmentLoop(),statusLoop()]);
