@@ -5328,7 +5328,7 @@ async function seedLawyersComDirectory(cities=[]){
     }
     directPages+=pageVia.direct||0;jinaPages+=pageVia.jina||0;scraplingPages+=pageVia.scrapling||0;
     if(!rawCandidates.length){
-      const diagnosticPage=pages.find(page=>page?.html&&/Law\s+(?:Firm|Office)\s+with\s+\d{1,2}\s+lawyers?/i.test(String(page.html)));
+      const diagnosticPage=pages.find(page=>page?.html);
       if(diagnosticPage){
         const raw=String(diagnosticPage.html);
         const m=/Law\s+(?:Firm|Office)\s+with\s+\d{1,2}\s+lawyers?/i.exec(raw);
@@ -5336,7 +5336,9 @@ async function seedLawyersComDirectory(cities=[]){
         console.log(JSON.stringify({
           event:"law_directory_parse_diagnostic",
           url:diagnosticPage.url,via:diagnosticPage.via||"",
-          excerpt:raw.slice(Math.max(0,idx-1800),Math.min(raw.length,idx+900)).replace(/\s+/g," ").slice(0,2700)
+          hasSizePhrase:Boolean(m),
+          chars:raw.length,
+          excerpt:raw.slice(Math.max(0,idx-400),Math.min(raw.length,idx+1400)).replace(/\s+/g," ").slice(0,1800)
         }));
       }
     }
