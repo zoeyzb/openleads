@@ -3591,8 +3591,31 @@ async function enrichLead(key,lead){
     email_source_verified:emailSourceVerified
   });
   const callReady=!effectiveWebsite&&isUsableLawPhone(lead.phone)&&attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10;
-  if(callReady)await redis.sAdd(CALL_READY_SET,key);
-  else await redis.sRem(CALL_READY_SET,key);
+  if(callReady){
+    const wasCallReady=await redis.sIsMember(CALL_READY_SET,key);
+    await redis.sAdd(CALL_READY_SET,key);
+    if(!wasCallReady){
+      console.log(JSON.stringify({
+        event:"law_call_ready_new",
+        key,
+        firm:String(lead.name||lead.title||"").trim(),
+        phone:String(lead.phone||"").trim(),
+        email:emailSourceVerified?(emails[0]||""):"",
+        emailEligible:Boolean(emailSourceVerified&&emails.length),
+        attorneys:attorneyCount,
+        headcountSource:String(attorneyCountSource||""),
+        address:String(lead.address||""),
+        city:String(lead.city||""),
+        state:String(lead.region||lead.state||""),
+        maps:String(lead.google_maps_url||lead.maps_url||""),
+        priority:Number(priority||0),
+        practiceKeys,
+        practiceAreas:practices,
+        personalAngle:String(p.fact||""),
+        source:emailSourceVerified?String(source||""):String(attorneyCountSource||lead.personalization_source||lead.google_maps_url||lead.maps_url||"")
+      }));
+    }
+  }else await redis.sRem(CALL_READY_SET,key);
   const priority=priorityScore({
     attorneyCount,
     reviewCount:lead.review_count,
@@ -4559,7 +4582,7 @@ async function seed(cities){
     const coveragePass=`law-email-v19-w${wave+1}`;
     const job={id,batch_id:"us-law-firm-email-qualified-v7",industry:"LAW_FIRM",search_profile:"law-firm",practice_focus:focus.key,coverage_pass:coveragePass,location:area.location,
       partition_state:area.state,partition_city:area.city,source_population:area.population,target:18,min_score:45,
-      require_phone:false,require_email:false,require_contact:false,require_no_website:true,include_no_website:true,
+      require_phone:true,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,
       max_rounds:1,depth:4,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,
       qualified_count:0,stored_count:0,created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
       source:"law_firm_pipeline_v7"};
