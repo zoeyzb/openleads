@@ -5302,17 +5302,20 @@ async function seedLawyersComDirectory(cities=[]){
           city:String(area.city||""),region:String(area.state||""),state:String(area.state||""),
           industry:"LAW_FIRM",search_profile:"law-firm",conversion_headcount_priority:true
         };
+        const hasDirectoryRows=html=>/Law\s+(?:Firm|Office)\s+with\s+\d{1,2}\s+lawyers?/i.test(String(html||""));
         try{
           const direct=await fetchText(url,6000);
-          if(direct?.html)return {url,html:String(direct.html),via:"direct"};
+          if(direct?.html&&hasDirectoryRows(direct.html))return {url,html:String(direct.html),via:"direct"};
         }catch{}
         try{
           const jina=await callJinaReader(url,areaLead);
-          if(jina?.html)return {url,html:String(jina.html),via:"jina"};
+          if(jina?.html&&hasDirectoryRows(jina.html))return {url,html:String(jina.html),via:"jina"};
         }catch{}
         try{
-          const scrap=await callScrapling(url,{allowBrowser:false});
-          if(scrap?.html)return {url,html:String(scrap.html),via:"scrapling"};
+          // Only pay for a browser fallback when the cheap readers returned a
+          // shell/challenge page without actual firm rows.
+          const scrap=await callScrapling(url,{allowBrowser:true});
+          if(scrap?.html&&hasDirectoryRows(scrap.html))return {url,html:String(scrap.html),via:"scrapling"};
         }catch{}
         return {url,html:"",error:true};
       })());
