@@ -242,7 +242,7 @@ const CALBAR_ADAPTER_VERSION="calbar-v10-strong-email-accept";
 const CALBAR_ADAPTER_VERSION_KEY="recover:law-firm:calbar-adapter-version";
 const FLORIDA_DIRECT_RECOVERY_VERSION="florida-direct-firm-v4-top-priority";
 const FLORIDA_DIRECT_RECOVERY_KEY="recover:law-firm:florida-direct-recovery-version";
-const CANDIDATE_SIZE_RESEARCH_VERSION="candidate-size-v9-phone-roster";
+const CANDIDATE_SIZE_RESEARCH_VERSION="candidate-size-v10-cross-source-roster";
 const CANDIDATE_SIZE_RESEARCH_VERSION_KEY="recover:law-firm:candidate-size-research-version";
 const HISTORICAL_QUALIFIED_KEYS=new Set(["place:ChIJ-U4jzLpzaYgRiuVOJexcUts","place:ChIJ-cZwjdl814kR3naYgZCQKWI","place:ChIJ205yYu_UyFQRWo9oRpd3T-M","place:ChIJ2ROk0Extq4kRBT2E7-tRYlw","place:ChIJ32Qgyr7wtocRGWTUwdhYGTk","place:ChIJ3QySmg_HmoARkctGxRlocHU","place:ChIJ3W-ACwxx44kR2rru4m1yG4A","place:ChIJ4W_J98Jv54gRGvAwT50QYxA","place:ChIJ4fF-dR4YhYARuNJj2qaVxFc","place:ChIJ5WPlZJCNwokRIEUL9eDQOZw","place:ChIJ5wdWFlsyMYYRWPy3nw0m03A","place:ChIJ5z3GsvfFvIcRO0k17OFS-74","place:ChIJ71pJNPiKR4gRLhF2R_ErKEk","place:ChIJ7cSewURXwokRJYKLE-zxnBw","place:ChIJ7wsutdx4bIcR6p_AksLnRyw","place:ChIJ95gGZEgg6IgRZsn5pby6rpE","place:ChIJ9zP3h5kSAIkRdWMOrKTPeI8","place:ChIJA9HEiW7rJIYR95Qpcp4Lgvg","place:ChIJAQBkSoYo3YARpPJt5RHVTWY","place:ChIJAyCOMGLOw4kR7YvAi7XZ_H4","place:ChIJBVc_u6i2hYARiPAijtV8dAY","place:ChIJD6vum6RfQogRdNScZ6vQ5Zs","place:ChIJDyWvCZZXwokRTcTR4Oj1oKQ","place:ChIJE4PSX6raxokR91IKiYlqp9k","place:ChIJF31O_YIEU4cRpSPVKS9wwtY","place:ChIJFU2oKxYzMYYRebQBKdNNm0g","place:ChIJG1VBA1HxNIgRGAJy-YLCIhI","place:ChIJGWLs2eTQhIARV7GeoY81EcE","place:ChIJH8ORLCxfVFMRiTs-1FsCUGk","place:ChIJHfJFQjomwokRSql3ngElZ5M","place:ChIJIXOHPySX-IgRBKF_bc-rke0","place:ChIJJzoh2FyGmYcRN71FnFcpY00","place:ChIJK7eQx4j5Y4gRb9qliaeIfQg","place:ChIJKYY8pmLnmoARE4mULG2YnNs","place:ChIJKer573eoZYYRC-qFdZ_Eg3A","place:ChIJKw02pnLRhIARPEIfaW4NNg0","place:ChIJLTBYQhSrw4kRMnKH-0QzcG8","place:ChIJLyxfboWMk4cRf66FH6ritxo","place:ChIJM02Gea1YXIYRyvJ5ZwPhoQw","place:ChIJM6BqOO0wq4kRTae0vIkDBVo","place:ChIJM_1lHE5ZVFMRwH1fHLVGt34","place:ChIJMbp75upAwFQRe2uTudVjsow","place:ChIJN7r7r72awoARjAesAtfbDLw","place:ChIJNycr3iOHmYcRXquelBr03KE","place:ChIJO7QVTAluAHwRVsaeyJtxK7A","place:ChIJO7lK00vF54gRQ8j3zzWyLwU","place:ChIJPRt57X_d9YgRI5UYwRJE_2U","place:ChIJQ3oMBtrRUIgR65BnUyVPft4","place:ChIJRVH9a48Tt4cR6SOOdv3Edck","place:ChIJRW1H7r3VFogRlFoHqpncZ0I","place:ChIJRYrj7X3pwogRdG_E9PJYcf0","place:ChIJTa7FEGNQ4IYRSydBoKqsl2o","place:ChIJUYXwNCnaNYgRjAdaoH_ogLw","place:ChIJVYdWQ-4Cw4kRr4bAd6NLQVY","place:ChIJVxw7O9jeJIgR1FiEkRQhZLI","place:ChIJY6aHQLRcfYcRKiqiFK5w0do","place:ChIJayky0_XFvIcRjdDZMkHLRD8","place:ChIJb2hcRZsU3okR_EKIIlGOyw8","place:ChIJb3hWSBZv_4gROY_ApeSM8wU","place:ChIJbxKvvzbu2YkRMdteRtp7klE","place:ChIJd1aP8_KVlocR8_cIhc_Dsd0","place:ChIJdTzQCQJ5hYARdGR1UtB9dkE","place:ChIJeXm0tUXM3IARGzqfb3eOmCY","place:ChIJf2DHHpm3D4gRXfghePyBLmk","place:ChIJfyFrYXdVwIcRYhnjhZT1owA","place:ChIJgx6wDyjpaIgRAC-jEra5Hjw","place:ChIJi87TdvdvwokRjr-8f8K3FG0","place:ChIJjcnM45EgnYgREsRlrRsiyGg","place:ChIJkTUAzFFwzoARxKluSnPRdWQ","place:ChIJl6VxtjJBZIgRBc4VIABoDiw","place:ChIJmbFHSgiQhYAR0v11xfpj4bw","place:ChIJn5Qcag_1UocRtfKl2ZxDBug","place:ChIJnQ8ijF_v44kRFNChrD1otkQ","place:ChIJo-hS02IU7IARMFpv8tr4RTY","place:ChIJpWJorhCs0IkRRcYffMNkoeI","place:ChIJqSz5ytfMwoARZvRZn84vWmI","place:ChIJr104108HYIgRkJT9GlF7xKw","place:ChIJs4frIbQakFQRQPUW66WTiH4","place:ChIJsRDfI5BBZIgR4v0gkMlYNgA","place:ChIJsewYiPRp6oAR6fKhe5QIWcY","place:ChIJt4aEWsHfyFYRT_jYSgVRVw4","place:ChIJt9fh31NZ54YR5ZyCFBn9ock","place:ChIJtRjaRPXgtYcR2V6WyoGvW6g","place:ChIJuzD2vZYT2YkR7dqgvdWC6DY","place:ChIJxUWzCxINkIARDdm6uFNIS-E","place:ChIJzWyZs58FU4gR5-_YQva8wr4"]);
 const REJECTED_SET="recover:law-firm:rejected:v3";
@@ -1274,14 +1274,12 @@ async function directDirectorySizeEvidence(lead={},key=""){
   const state=normalizedStateCode(lead)||String(lead.region||lead.state||"").trim();
   const people=attorneyNameVariants(lead).slice(0,2);
   const identityTerms=[name,...people].filter(Boolean);
+  const hosts=["lawyers.com","martindale.com","findlaw.com","lawyer.com","justia.com"];
   const queries=[...new Set([
-    ...(phonePretty?[`site:lawyers.com "${phonePretty}"`,`site:martindale.com "${phonePretty}"`,`site:findlaw.com "${phonePretty}"`]:[]),
-    ...identityTerms.flatMap(term=>[
-      `site:lawyers.com "${term}" "${city}" "${state}"`,
-      `site:martindale.com "${term}" "${city}" "${state}"`,
-      `site:findlaw.com "${term}" "${city}" "${state}"`
-    ])
-  ])].slice(0,9);
+    ...(phonePretty?hosts.slice(0,4).map(host=>`site:${host} "${phonePretty}"`):[]),
+    ...identityTerms.flatMap(term=>hosts.slice(0,4).map(host=>`site:${host} "${term}" "${city}" "${state}"`))
+  ])].slice(0,14);
+
   const resultPages=[];
   for(const query of queries){
     try{
@@ -1300,38 +1298,81 @@ async function directDirectorySizeEvidence(lead={},key=""){
         ...markdownResultLinks(duck)
       ])]){
         const host=hostOf(url);
-        if(!/(^|\.)(?:lawyers|martindale|findlaw)\.com$/i.test(host))continue;
+        if(!hosts.some(h=>host===h||host.endsWith("."+h)))continue;
         if(!resultPages.includes(url))resultPages.push(url);
-        if(resultPages.length>=8)break;
+        if(resultPages.length>=12)break;
       }
+      if(resultPages.length>=12)break;
     }catch{}
   }
+
+  const evidence=[];
+  let verifiedWebsite="";
   for(const url of resultPages){
     try{
-      // Legal directories commonly block plain HTTP fetches. Reuse the
-      // research fetcher so Jina/static Scrapling can read the public firm page
-      // before we count its attorney roster.
       const page=await fetchResearchPage(url,{...lead,conversion_headcount_priority:true},key,true);
       if(!page?.html)continue;
       const source=String(page.final_url||url);
       const text=stripHtml(page.html).slice(0,70000);
-      if(!pageMatchesLead(text,lead,source))continue;
+      if(!pageMatchesLead(text,lead,source)&&!sourcePageMatchesFirmIdentity(text,lead,source))continue;
       const explicitCount=attorneyEstimate(page.html,text);
-      const rosterCount=directoryRosterCount(page.html,source,lead);
+      const host=hostOf(source);
+      const rosterCount=/(^|\.)(?:lawyers|martindale|lawyer|findlaw)\.com$/i.test(host)
+        ? directoryRosterCount(page.html,source,lead)
+        : 0;
       const count=explicitCount>0?explicitCount:rosterCount;
       const websiteCandidate=outboundFirmWebsiteFromDirectory(page.html,lead);
-      const website=websiteCandidate?await verifyOwnedWebsiteCandidate(websiteCandidate,lead):"";
+      if(!verifiedWebsite&&websiteCandidate){
+        verifiedWebsite=await verifyOwnedWebsiteCandidate(websiteCandidate,lead);
+      }
       if(count>0){
-        await redis.hIncrBy(STATS,"direct_directory_size_hit",1);
-        console.log(JSON.stringify({event:"law_direct_directory_size_hit",key,name,count,source,website:website||""}));
-        return {count,source,website};
+        evidence.push({count,source,host,explicit:explicitCount>0});
       }
     }catch{}
   }
-  await redis.hIncrBy(STATS,"direct_directory_size_miss",1);
-  return {count:0,source:"",website:""};
-}
 
+  if(!evidence.length){
+    await redis.hIncrBy(STATS,"direct_directory_size_miss",1);
+    return {count:0,source:"",website:verifiedWebsite||""};
+  }
+
+  // Conservative resolution across independent public directories.
+  // Any 11+ evidence wins so we never accidentally qualify a large firm.
+  const oversized=evidence.filter(x=>x.count>10).sort((a,b)=>b.count-a.count)[0];
+  if(oversized){
+    await redis.hIncrBy(STATS,"direct_directory_size_hit",1);
+    await redis.hIncrBy(STATS,"direct_directory_size_cross_source_oversized",1);
+    console.log(JSON.stringify({event:"law_direct_directory_size_hit",key,name,count:oversized.count,source:oversized.source,website:verifiedWebsite||"",evidence:evidence.slice(0,8)}));
+    return {count:oversized.count,source:oversized.source,website:verifiedWebsite||""};
+  }
+
+  const target=evidence.filter(x=>x.count>=2&&x.count<=10)
+    .sort((a,b)=>b.count-a.count||Number(b.explicit)-Number(a.explicit))[0];
+  if(target){
+    await redis.hIncrBy(STATS,"direct_directory_size_hit",1);
+    if(new Set(evidence.filter(x=>x.count>=2&&x.count<=10).map(x=>x.host)).size>=2){
+      await redis.hIncrBy(STATS,"direct_directory_size_cross_source_target",1);
+    }
+    console.log(JSON.stringify({event:"law_direct_directory_size_hit",key,name,count:target.count,source:target.source,website:verifiedWebsite||"",evidence:evidence.slice(0,8)}));
+    return {count:target.count,source:target.source,website:verifiedWebsite||""};
+  }
+
+  // Do not reject a firm as solo from one incomplete roster page. Require
+  // explicit solo evidence or corroboration by two independent directory hosts.
+  const solo=evidence.filter(x=>x.count===1);
+  const explicitSolo=solo.find(x=>x.explicit);
+  const soloHosts=new Set(solo.map(x=>x.host));
+  if(explicitSolo||soloHosts.size>=2){
+    const chosen=explicitSolo||solo[0];
+    await redis.hIncrBy(STATS,"direct_directory_size_hit",1);
+    await redis.hIncrBy(STATS,"direct_directory_size_solo_confirmed",1);
+    console.log(JSON.stringify({event:"law_direct_directory_size_hit",key,name,count:1,source:chosen.source,website:verifiedWebsite||"",evidence:evidence.slice(0,8)}));
+    return {count:1,source:chosen.source,website:verifiedWebsite||""};
+  }
+
+  await redis.hIncrBy(STATS,"direct_directory_size_ambiguous_solo",1);
+  return {count:0,source:"",website:verifiedWebsite||""};
+}
 async function phoneRosterHeadcountEvidence(lead={},key=""){
   const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
   if(phone.length!==10)return {count:0,source:""};
