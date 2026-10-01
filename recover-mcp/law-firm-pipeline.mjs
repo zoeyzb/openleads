@@ -29,7 +29,7 @@ const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
 const CHICAGO_HEADCOUNT_RECOVERY_KEY="recover:law-firm:chicago-headcount-recovery-version";
 const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v6-firm-owner-guard";
 const ASSOCIATION_DOCKET_RECOVERY_KEY="recover:law-firm:association-docket-recovery-version";
-const SIZE_READY_WEBSITE_AUDIT_VERSION="size-ready-website-audit-v1";
+const SIZE_READY_WEBSITE_AUDIT_VERSION="size-ready-website-audit-v2-duck-profile";
 const SIZE_READY_WEBSITE_AUDIT_KEY="recover:law-firm:size-ready-website-audit-version";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
@@ -1561,19 +1561,29 @@ async function findOwnedWebsitePreflight(lead,key="",force=false){
   const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
   const city=normalizedLeadCity(lead);
   const region=normalizedStateCode(lead)||String(lead.region||lead.state||lead.state_code||lead.acquisition_location||"").trim();
+  const person=likelyAttorneyName(lead);
   const queries=[...new Set([
-    ...(phone?[`"${name}" "${phone}"`]:[]),
-    `"${name}" ${city} ${region} website`.trim()
-  ].filter(Boolean))].slice(0,2);
+    ...(phone?[`"${name}" "${phone}" website`]:[]),
+    `"${name}" ${city} ${region} law firm website`.trim(),
+    ...(person?[`"${person}" ${city} ${region} attorney website`.trim()]:[])
+  ].filter(Boolean))].slice(0,3);
   const searchResults=await Promise.allSettled(queries.map(async q=>{
-    const url="https://www.bing.com/search?q="+encodeURIComponent(q);
-    const [htmlResult,rssResult]=await Promise.allSettled([
-      fetchText(url,4200),
-      fetchText("https://www.bing.com/search?format=rss&q="+encodeURIComponent(q),4200)
+    const bingUrl="https://www.bing.com/search?q="+encodeURIComponent(q);
+    const duckUrl="https://html.duckduckgo.com/html/?q="+encodeURIComponent(q);
+    const [htmlResult,rssResult,duckResult]=await Promise.allSettled([
+      fetchText(bingUrl,4200),
+      fetchText("https://www.bing.com/search?format=rss&q="+encodeURIComponent(q),4200),
+      fetchText(duckUrl,4200)
     ]);
     const html=htmlResult.status==="fulfilled"?htmlResult.value?.html||"":"";
     const rss=rssResult.status==="fulfilled"?rssResult.value?.html||"":"";
-    return [...new Set([...bingResultLinks(html),...bingRssResultLinks(rss)])];
+    const duck=duckResult.status==="fulfilled"?duckResult.value?.html||"":"";
+    return [...new Set([
+      ...bingResultLinks(html),
+      ...bingRssResultLinks(rss),
+      ...duckResultLinks(duck),
+      ...markdownResultLinks(duck)
+    ])];
   }));
   const links=[];
   for(const result of searchResults){
@@ -1585,10 +1595,10 @@ async function findOwnedWebsitePreflight(lead,key="",force=false){
       // let ownedWebsiteFromMatchedPage enforce exact identity/phone evidence.
       if(lawSourceRank(url,lead)!==6)continue;
       if(!links.includes(url))links.push(url);
-      if(links.length>=8)break;
+      if(links.length>=16)break;
     }
   }
-  const pages=await Promise.allSettled(links.slice(0,6).map(async url=>{
+  const pages=await Promise.allSettled(links.slice(0,12).map(async url=>{
     try{return {url,page:await fetchText(url,3500)};}catch{return {url,page:null};}
   }));
   for(const item of pages){
@@ -2812,7 +2822,8 @@ async function enrichLead(key,lead){
   // These are the only records close enough to revenue to justify an exact
   // owned-site search on every pass.
   if(knownSizeReady){
-    const discoveredSizeReadySite=await findOwnedWebsitePreflight({...lead,conversion_headcount_priority:false},key,true);
+    const profileSite=await ownedWebsiteFromTrustedProfile(String(lead.attorney_count_source||""),lead,key);
+    const discoveredSizeReadySite=profileSite||await findOwnedWebsitePreflight({...lead,conversion_headcount_priority:false},key,true);
     if(discoveredSizeReadySite){
       const updated={...lead,website:discoveredSizeReadySite,website_opportunity:"website_refresh",owned_website_evidence_source:"size_ready_preflight"};
       await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
@@ -3516,6 +3527,10 @@ function outboundFirmWebsiteFromDirectory(html="",lead={}){
   const raw=String(html||"");
   const blocked=/^(?:www\.)?(?:lawyer\.com|martindale\.com|avvo\.com|justia\.com|findlaw\.com|facebook\.com|linkedin\.com|instagram\.com|x\.com|twitter\.com|youtube\.com)$/i;
   const candidates=[];
+  for(const m of raw.matchAll(/(?:https?:\/\/|www\.)[a-z0-9.-]+(?:\/[a-z0-9._~:/?#\[\]@!function outboundFirmWebsiteFromDirectory(html="",lead={}){
+  const raw=String(html||"");
+  const blocked=/^(?:www\.)?(?:lawyer\.com|martindale\.com|avvo\.com|justia\.com|findlaw\.com|facebook\.com|linkedin\.com|instagram\.com|x\.com|twitter\.com|youtube\.com)$/i;
+  const candidates=[];
   for(const m of raw.matchAll(/(?:https?:\/\/|www\.)[a-z0-9.-]+(?:\/[a-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?/ig)){
     let value=String(m[0]||"").replace(/[),.;]+$/,"");
     if(/^www\./i.test(value))value="https://"+value;
@@ -3527,6 +3542,61 @@ function outboundFirmWebsiteFromDirectory(html="",lead={}){
     }catch{}
   }
   return candidates[0]||"";
+}
+'()*+,;=%-]*)?/ig)){
+    let value=String(m[0]||"").replace(/[),.;]+$/,"");
+    if(/^www\./i.test(value))value="https://"+value;
+    try{
+      const u=new URL(value);
+      const host=u.hostname.toLowerCase().replace(/^www\./,"");
+      if(blocked.test(host)||lawSourceRank(u.href,lead)<=4)continue;
+      if(!candidates.includes(u.origin))candidates.push(u.origin);
+    }catch{}
+  }
+  return candidates[0]||"";
+}
+
+async function ownedWebsiteFromTrustedProfile(source="",lead={},key=""){
+  if(!source||!trustedLawSource(source,lead))return "";
+  try{
+    const page=await fetchResearchPage(source,lead,key,true);
+    if(!page?.html)return "";
+    const raw=String(page.html||"");
+    const sourceHost=hostOf(page.final_url||source);
+    const candidates=[];
+    for(const m of raw.matchAll(/(?:href=["']([^"']+)["']|(?:https?:\/\/|www\.)[a-z0-9.-]+(?:\/[a-z0-9._~:/?#\[\]@!function outboundFirmWebsiteFromDirectory(html="",lead={}){
+  const raw=String(html||"");
+  const blocked=/^(?:www\.)?(?:lawyer\.com|martindale\.com|avvo\.com|justia\.com|findlaw\.com|facebook\.com|linkedin\.com|instagram\.com|x\.com|twitter\.com|youtube\.com)$/i;
+  const candidates=[];
+  for(const m of raw.matchAll(/(?:https?:\/\/|www\.)[a-z0-9.-]+(?:\/[a-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?/ig)){
+    let value=String(m[0]||"").replace(/[),.;]+$/,"");
+    if(/^www\./i.test(value))value="https://"+value;
+    try{
+      const u=new URL(value);
+      const host=u.hostname.toLowerCase().replace(/^www\./,"");
+      if(blocked.test(host)||lawSourceRank(u.href,lead)<=4)continue;
+      if(!candidates.includes(u.origin))candidates.push(u.origin);
+    }catch{}
+  }
+  return candidates[0]||"";
+}
+'()*+,;=%-]*)?)/ig)){
+      let value=String(m[1]||m[0]||"").replace(/^href=["']|["']$/g,"").replace(/[),.;]+$/,"");
+      if(/^www\./i.test(value))value="https://"+value;
+      try{
+        const u=new URL(value,page.final_url||source);
+        const h=u.hostname.toLowerCase().replace(/^www\./,"");
+        if(!/^https?:$/.test(u.protocol)||h===sourceHost||knownThirdPartyDirectoryHost(u.href)||lawSourceRank(u.href,lead)<=4)continue;
+        if(!candidates.includes(u.origin))candidates.push(u.origin);
+      }catch{}
+      if(candidates.length>=12)break;
+    }
+    for(const candidate of candidates){
+      const verified=await verifyOwnedWebsiteCandidate(candidate,lead);
+      if(verified)return verified;
+    }
+  }catch{}
+  return "";
 }
 async function lawyerComCandidateEvidence(lead={}){
   for(const slug of lawyerComFirmSlugs(lead)){
