@@ -73,7 +73,7 @@ async function collectRows(redis){
   const out=[];
   // Phone-first call list: use the durable verified-headcount cohort, then require
   // a usable public phone and no owned website. Email is optional here.
-  const readyKeys=await redis.sMembers("recover:law-firm:unique-verified-headcount:v1");
+  const readyKeys=await redis.sMembers("recover:law-firm:call-ready:v1");
   for(let offset=0;offset<readyKeys.length;offset+=250){
     const keys=readyKeys.slice(offset,offset+250);
     const values=await redis.hmGet("recover:leadstore:qualified",keys);
