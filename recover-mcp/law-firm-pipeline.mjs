@@ -3065,27 +3065,12 @@ async function enrichLead(key,lead){
     }
   }
 
-  // Maps can omit a firm's real website. For the active Chicago website-build
-  // campaign, verify the no-owned-website condition before spending headcount
-  // research. This removes false positives such as firms whose site is absent
-  // from the Maps row but discoverable by exact firm identity + phone.
+  // Phone-first throughput: do NOT run the expensive owned-site search on
+  // every callable record. Prove 2-10 attorneys first, then spend website
+  // verification only on the much smaller cohort that could actually qualify.
+  // Existing verified-size records still use the knownSizeReady gate above.
   if(chicagoHeadcountCampaign){
-    const discoveredSite=await findOwnedWebsitePreflight(lead,key,true);
-    if(discoveredSite){
-      const updated={...lead,website:discoveredSite,website_opportunity:"website_refresh",owned_website_evidence_source:"chicago_preflight"};
-      await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
-      await Promise.all([
-        redis.sRem(READY_SET,key),
-        redis.sRem(EMAIL_CANDIDATE_SET,key),
-        redis.sRem(UNIQUE_ELIGIBLE_SET,key),
-        redis.sRem(CHICAGO_PENDING_SET,key)
-      ]);
-      await redis.sAdd(REJECTED_SET,key);
-      await redis.sAdd(ENRICHED_SET,key);
-      await redis.hIncrBy(STATS,"website_preflight_hit",1);
-      console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:0,emailMethod:"none",attorneyCount:null,attorneyCountVerified:false,attorneyCountSource:"",effectiveWebsite:discoveredSite,sizeTier:"unknown",practice:"",painPoint:"Has website",qualified:false,rejectReason:"has_owned_website_chicago_preflight",priority:0,personalizationQuality:"basic",elapsedMs:Date.now()-enrichStartedAt}));
-      return true;
-    }
+    await redis.hIncrBy(STATS,"website_preflight_deferred_until_size",1);
   }else{
     await redis.hIncrBy(STATS,"website_preflight_deferred",1);
   }
@@ -3199,6 +3184,24 @@ async function enrichLead(key,lead){
           redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)
         ]);
         await redis.hIncrBy(STATS,"phone_first_wrong_size_short_circuit",1);
+        return true;
+      }
+
+      // Now that 2-10 is actually proven, verify the no-owned-website gate.
+      // This preserves lead quality without wasting website research on the
+      // thousands of solos, oversized firms, and unresolved headcounts.
+      const profileSite=await ownedWebsiteFromTrustedProfile(earlySource,lead,key);
+      const discoveredSite=profileSite||await findOwnedWebsitePreflight({...lead,conversion_headcount_priority:false},key,true);
+      if(discoveredSite){
+        const websiteLead={...lead,website:discoveredSite,website_opportunity:"website_refresh",owned_website_evidence_source:profileSite?earlySource:"post_size_preflight"};
+        await redis.hSet(LEAD_HASH,key,JSON.stringify(websiteLead));
+        await Promise.all([
+          redis.sRem(CALL_READY_SET,key),redis.sRem(CHICAGO_PENDING_SET,key),
+          redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)
+        ]);
+        await redis.sAdd(REJECTED_SET,key);
+        await redis.sAdd(ENRICHED_SET,key);
+        await redis.hIncrBy(STATS,"phone_first_post_size_owned_website_hit",1);
         return true;
       }
 
