@@ -3113,7 +3113,11 @@ function isPublishedHeadcountSource(source="",lead={}){
 const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v3-official-phone-roster";
 
 function headcountSourceNeedsV2Identity(source=""){
-  return /(^|\.)lawyer\.com$/i.test(hostOf(source));
+  const host=hostOf(source);
+  return /(^|\.)(?:lawyer|lawyers|martindale|findlaw|justia)\.com$/i.test(host) ||
+    /^(?:lawyers\.)?law\.cornell\.edu$/i.test(host) ||
+    /^lawyers\.oyez\.org$/i.test(host) ||
+    /^lawyers\.lawyerlegion\.com$/i.test(host);
 }
 
 function hasValidStoredHeadcount(lead={}){
@@ -5114,7 +5118,7 @@ async function seed(cities){
 
 
 async function bootstrapPhoneFirstInventory(){
-  let scanned=0,callableNoSite=0,queuedHeadcount=0,seededCallReady=0,wrongSizeKnown=0;
+  let scanned=0,callableNoSite=0,queuedHeadcount=0,seededCallReady=0,wrongSizeKnown=0,verifiedSolo=0,verifiedTarget=0,verifiedOversize=0;
   const pendingChunk=[],priorityChunk=[],readyChunk=[],sizeReadyEmailChunk=[];
   await Promise.all([redis.del(CALL_READY_SET),redis.del(PHONE_HEADCOUNT_PRIORITY_SET),redis.del(CHICAGO_PENDING_SET)]);
 
@@ -5167,11 +5171,15 @@ async function bootstrapPhoneFirstInventory(){
       }
       if(verified){
         if(n>=2&&n<=10){
+          verifiedTarget++;
           readyChunk.push(entry.field);
           const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email].filter(isUsableLawEmail);
           const sourceVerifiedEmail=(lead.law_email_source_verified===true||lead.email_source_verified===true)&&existingEmails.length>0;
           if(!sourceVerifiedEmail)sizeReadyEmailChunk.push(entry.field);
-        }else wrongSizeKnown++;
+        }else{
+          wrongSizeKnown++;
+          if(n===1)verifiedSolo++; else if(n>10)verifiedOversize++;
+        }
       }else{
         const exhaustedCurrentMethod=
           String(lead.phone_headcount_status||"")==="unverified" &&
