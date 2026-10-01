@@ -3059,13 +3059,36 @@ async function enrichLead(key,lead){
   const phoneHeadcountPriority=!website&&isUsableLawPhone(lead.phone);
   if(!attorneyCountVerified&&phoneHeadcountPriority){
     let earlyCount=0,earlySource="",earlyWebsite="";
+    // Cheap-to-expensive headcount waterfall. The previous order launched up
+    // to 14 directory searches per lead before trying exact-phone roster lookup,
+    // which made a 10k calling target impossible.
     try{
-      const direct=await directDirectorySizeEvidence(lead,key);
-      earlyCount=Number(direct?.count||0);
-      earlySource=String(direct?.source||"");
-      earlyWebsite=String(direct?.website||"");
-      if(earlyCount>0)await redis.hIncrBy(STATS,"phone_first_headcount_direct_directory",1);
-    }catch{await redis.hIncrBy(STATS,"phone_first_headcount_direct_directory_fail",1);}
+      const roster=await phoneRosterHeadcountEvidence(lead,key);
+      if(Number(roster?.count||0)>0&&isPublishedHeadcountSource(String(roster?.source||""),lead)){
+        earlyCount=Number(roster.count);earlySource=String(roster.source);
+        await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster",1);
+      }
+    }catch{await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster_fail",1);}
+
+    if(!earlyCount){
+      try{
+        const lawyer=await directLawyerComSizeEvidence(lead,key);
+        if(Number(lawyer?.count||0)>0&&isPublishedHeadcountSource(String(lawyer?.source||""),lead)){
+          earlyCount=Number(lawyer.count);earlySource=String(lawyer.source);
+          await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom",1);
+        }
+      }catch{await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom_fail",1);}
+    }
+
+    if(!earlyCount){
+      try{
+        const direct=await directDirectorySizeEvidence(lead,key);
+        earlyCount=Number(direct?.count||0);
+        earlySource=String(direct?.source||"");
+        earlyWebsite=String(direct?.website||"");
+        if(earlyCount>0)await redis.hIncrBy(STATS,"phone_first_headcount_direct_directory",1);
+      }catch{await redis.hIncrBy(STATS,"phone_first_headcount_direct_directory_fail",1);}
+    }
 
     if(earlyWebsite){
       const updated={...lead,website:earlyWebsite,website_opportunity:"website_refresh",owned_website_evidence_source:earlySource||"phone_first_directory"};
@@ -3078,26 +3101,6 @@ async function enrichLead(key,lead){
       await redis.sAdd(ENRICHED_SET,key);
       await redis.hIncrBy(STATS,"phone_first_owned_website_hit",1);
       return true;
-    }
-
-    if(!(earlyCount>0&&isPublishedHeadcountSource(earlySource,lead))){
-      earlyCount=0;earlySource="";
-      try{
-        const roster=await phoneRosterHeadcountEvidence(lead,key);
-        if(Number(roster?.count||0)>0&&isPublishedHeadcountSource(String(roster?.source||""),lead)){
-          earlyCount=Number(roster.count);earlySource=String(roster.source);
-          await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster",1);
-        }
-      }catch{await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster_fail",1);}
-    }
-    if(!earlyCount){
-      try{
-        const lawyer=await directLawyerComSizeEvidence(lead,key);
-        if(Number(lawyer?.count||0)>0&&isPublishedHeadcountSource(String(lawyer?.source||""),lead)){
-          earlyCount=Number(lawyer.count);earlySource=String(lawyer.source);
-          await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom",1);
-        }
-      }catch{await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom_fail",1);}
     }
 
     if(earlyCount>0&&earlySource){
