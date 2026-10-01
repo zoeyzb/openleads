@@ -4758,9 +4758,74 @@ async function seed(cities){
   return added;
 }
 
-console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"bootstrap_existing"}));
-await bootstrapExistingQualified();
-await normalizeEmailQueues();
+
+async function bootstrapPhoneFirstInventory(){
+  let scanned=0,callableNoSite=0,queuedHeadcount=0,seededCallReady=0,wrongSizeKnown=0;
+  const pendingChunk=[],readyChunk=[];
+  await redis.del(CALL_READY_SET);
+
+  const flush=async()=>{
+    if(pendingChunk.length){
+      await redis.sAdd(CHICAGO_PENDING_SET,[...pendingChunk]);
+      queuedHeadcount+=pendingChunk.length;
+      pendingChunk.length=0;
+    }
+    if(readyChunk.length){
+      await redis.sAdd(CALL_READY_SET,[...readyChunk]);
+      seededCallReady+=readyChunk.length;
+      readyChunk.length=0;
+    }
+  };
+
+  for await(const page of redis.hScanIterator(LEAD_HASH,{COUNT:1500})){
+    for(const entry of (Array.isArray(page)?page:[page])){
+      if(!entry?.field||entry.value===undefined)continue;
+      scanned++;
+      let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
+      const isLaw=(String(lead.search_profile||"")==="law-firm"||normalize(lead.industry)==="law firm")&&isLawFirmLead(lead);
+      if(!isLaw)continue;
+
+      const website=String(lead.website||lead.website_url||lead.discovered_website||lead.owned_website||"").trim();
+      if(/^https?:\/\//i.test(website))continue;
+      if(!isUsableLawPhone(lead.phone))continue;
+      callableNoSite++;
+
+      const n=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+      const source=String(lead.attorney_count_source||"");
+      const verified=lead.attorney_count_evidence_verified===true&&n>0&&isPublishedHeadcountSource(source,lead);
+      if(verified){
+        if(n>=2&&n<=10)readyChunk.push(entry.field);
+        else wrongSizeKnown++;
+      }else{
+        pendingChunk.push(entry.field);
+      }
+
+      if(pendingChunk.length+readyChunk.length>=750)await flush();
+    }
+  }
+  await flush();
+  console.log(JSON.stringify({
+    event:"law_phone_first_fast_bootstrap",
+    scanned,callableNoSite,queuedHeadcount,seededCallReady,wrongSizeKnown,
+    headcountQueue:await redis.sCard(CHICAGO_PENDING_SET),
+    callReady:await redis.sCard(CALL_READY_SET)
+  }));
+  return {scanned,callableNoSite,queuedHeadcount,seededCallReady,wrongSizeKnown};
+}
+
+console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"phone_first_fast_bootstrap"}));
+await bootstrapPhoneFirstInventory();
+
+// The old email-first bootstrap does useful cleanup and email evidence recovery,
+// but it is too expensive to sit on the critical path. Run it in the background
+// while the phone/headcount workers start immediately.
+void (async()=>{
+  console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"background_legacy_bootstrap"}));
+  await bootstrapExistingQualified();
+  await normalizeEmailQueues();
+  console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"background_legacy_bootstrap_complete"}));
+})().catch(error=>console.error("law_background_bootstrap_error",error?.stack||error?.message||error));
+
 // Email is bonus for the calling campaign. Do not block the entire production
 // pipeline on expensive candidate cleanup before headcount workers can start.
 setTimeout(()=>{
