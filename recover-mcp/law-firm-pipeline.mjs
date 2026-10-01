@@ -937,11 +937,13 @@ function ownedWebsiteFromMatchedPage(url="",text="",lead={}){
   // phone on the page is strong enough to identify the firm's own site.
   const fullName=normalize(lead.name||lead.title||"");
   const exactFirmName=Boolean(fullName.length>=8&&plain.includes(fullName));
-  if(exactFirmName&&phoneMatch)return "https://"+host;
-  // Otherwise retain domain-affinity protection so copied directory pages are
-  // not mislabeled as owned websites.
-  if(domainAffinity&&identityTokens&&phoneMatch)return "https://"+host;
-  if(domainAffinity&&identityTokens&&geoMatch)return "https://"+host;
+  const legalContext=/\b(?:attorney|attorneys|lawyer|lawyers|law firm|law office|law offices|legal services|practice areas?|litigation|counsel)\b/i.test(String(text||""));
+  // Common surnames/business words can collide with unrelated plumbers, schools,
+  // retailers, stylists, etc. Unknown/alias domains now require clear legal
+  // content in addition to exact identity evidence before they count as owned.
+  if(exactFirmName&&phoneMatch&&legalContext)return "https://"+host;
+  if(domainAffinity&&identityTokens&&phoneMatch&&legalContext)return "https://"+host;
+  if(domainAffinity&&identityTokens&&geoMatch&&legalContext)return "https://"+host;
   return "";
 }
 function knownThirdPartyDirectoryHost(url=""){
@@ -2971,8 +2973,22 @@ async function enrichLead(key,lead){
     const highValue=highValueLawResearchLead(lead);
     const soloShape=lawFirmNameShape(lead)==="solo";
     const hasDirectOfficial=directOfficialLinks.length>0;
-    const dualSearch=!hasDirectOfficial&&((!soloShape&&(highValue||emailRecoveryPriority(lead)>=5))||Number(lead.email_recovery_attempts||0)>=1);
-    const effectiveQueries=hasDirectOfficial?bingQueries.slice(0,4):(soloShape?bingQueries.slice(0,5):bingQueries);
+    const sizeReadyEmailPriority=attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10;
+    const dualSearch=!hasDirectOfficial&&(sizeReadyEmailPriority||(!soloShape&&(highValue||emailRecoveryPriority(lead)>=5))||Number(lead.email_recovery_attempts||0)>=1);
+    // Already-proven 2-10 firms are the closest-to-revenue cohort. Use a
+    // source-first query set (bar/court/public records + exact phone/name)
+    // instead of spending most requests on broad generic discovery.
+    const sizeReadyQueries=sizeReadyEmailPriority?[...new Set([
+      ...barQueries,
+      ...publicRecordQueries,
+      ...(phone&&name?[`"${name}" "${phonePretty||phone}" email`]:[]),
+      ...(person?[`"${person}" "${region}" attorney email`]:[]),
+      ...(name?[`"${name}" "${region}" email filetype:pdf`]:[]),
+      ...directoryEmailQueries.slice(0,6)
+    ].filter(Boolean))].slice(0,12):[];
+    const effectiveQueries=sizeReadyEmailPriority
+      ? sizeReadyQueries
+      : (hasDirectOfficial?bingQueries.slice(0,4):(soloShape?bingQueries.slice(0,5):bingQueries));
     // When an official directory profile is already known, do not burn dozens
     // of generic search requests first. Fetch the authoritative profile plus a
     // tiny fallback set; only fan out to multiple engines when direct lookup
@@ -3044,7 +3060,7 @@ async function enrichLead(key,lead){
   // Independent last-resort discovery lane. Run only after search engines miss,
   // and only when we have a plausible attorney identity. Any result still has
   // to survive exact-source binding below, so this cannot export guessed mail.
-  if(!emails.length&&!researchOwnedWebsite&&attorneyNameVariants(lead).length&&(emailRecoveryPriority(lead)>=5||Number(lead.email_recovery_attempts||0)>=1)){
+  if(!emails.length&&!researchOwnedWebsite&&attorneyNameVariants(lead).length&&((attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10)||emailRecoveryPriority(lead)>=5||Number(lead.email_recovery_attempts||0)>=1)){
     try{
       const zeroCost=await zeroCostEmailFallback(lead);
       if(zeroCost.emails.length){
@@ -4111,7 +4127,7 @@ async function enrichBatch(){
   const regularTarget=Math.max(24,Math.floor(ENRICH_BATCH*0.5));
   const regularKeys=afterChicago?await popSetBatch(PENDING_SET,Math.min(regularTarget,afterChicago)):[];
   const afterRegular=Math.max(0,afterChicago-regularKeys.length);
-  const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(10,afterRegular)):[];
+  const sizeReadyKeys=afterRegular?await popSetBatch(SIZE_READY_PENDING_SET,Math.min(24,afterRegular)):[];
   const afterSizeReady=Math.max(0,afterRegular-sizeReadyKeys.length);
   // Keep a small guaranteed fresh slice so acquisition never stalls completely.
   const freshKeys=afterSizeReady?await popSetBatch(SOURCE_PENDING_SET,Math.min(6,afterSizeReady)):[];
@@ -4278,15 +4294,15 @@ async function enrichmentLoop(){
   while(true){
     try{
       const enriched=await enrichBatch();
-      const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,currentEmailCandidates,uniqueVerifiedEmails,uniqueVerifiedHeadcounts,uniqueEligibleLeads,emailStats]=await Promise.all([
+      const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,pendingSizeReady,websitePending,websiteReady,currentEmailCandidates,uniqueVerifiedEmails,uniqueVerifiedHeadcounts,uniqueEligibleLeads,emailStats]=await Promise.all([
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
-        redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),
+        redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),redis.sCard(SIZE_READY_PENDING_SET),
         redis.sCard(WEBSITE_AUDIT_PENDING_SET),redis.sCard(WEBSITE_REFRESH_READY_SET),redis.sCard(EMAIL_CANDIDATE_SET),
         redis.sCard(UNIQUE_VERIFIED_EMAIL_SET),redis.sCard(UNIQUE_VERIFIED_HEADCOUNT_SET),redis.sCard(UNIQUE_ELIGIBLE_SET),
         redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","scrapling_search_hit","bing_source_links","bing_source_pages_matched","bing_source_email_pages","email_raw_candidate_leads","email_identity_mx_pass_leads","email_identity_mx_reject_leads","email_keelead_pass_leads","email_keelead_reject_leads","email_source_verified_leads","jina_source_hit","jina_source_fail","email_existing_recorroborated","email_existing_recorroboration_miss","post_email_headcount_verified","post_email_headcount_miss","post_email_headcount_bing","post_email_headcount_duck","rejected_no_verified_email","rejected_unverified_attorney_count","rejected_wrong_size","rejected_has_website","scrapling_static_hit","scrapling_static_fail","bing_queries_with_links","bing_source_page_fetch_reject","bing_rss_query_hit","bing_query_fetch_reject","bing_fallback_error","email_source_binding_reject_leads","scrapling_generic_skip","owned_website_research_hit","website_preflight_hit","website_preflight_miss","bar_query_hit","bar_source_page_matched","bar_email_page","email_zero_cost_fail","email_source_binding_page_miss","email_source_binding_identity_reject","email_source_binding_exact_email_miss","email_source_binding_fetch_error","website_preflight_deferred","scrapling_browser_skip","bing_relative_result_links","scrapling_broad_discovery_skip","bing_source_raw_email_pages","bing_source_context_reject_email_pages","duck_source_raw_email_pages","duck_source_context_reject_email_pages","owned_website_verified_email_hit","bing_generic_link_reject","calbar_decoy_email_reject","bing_trusted_link_reject","expected_bar_query_with_links","expected_bar_result_links","expected_bar_page_matched","expected_bar_email_page","yahoo_expected_bar_query_hit","yahoo_expected_bar_result_links","yahoo_expected_bar_query_miss","yahoo_expected_bar_fetch_error","expected_bar_eligible_query_checks","expected_bar_query_executed","expected_bar_state_direct","expected_bar_state_derived","direct_calbar_search_attempt","direct_calbar_profile_links","direct_calbar_search_error","direct_calbar_page_matched","direct_calbar_email_page","candidate_owned_website_recheck_hit","calbar_profile_identity_reject","calbar_profile_website_hit","candidate_calbar_identity_reject","candidate_calbar_website_hit","owner_name_firm_label_bypass","direct_calbar_unique_profile","direct_calbar_deep_read_attempt","direct_calbar_deep_read_match","enrich_non_destructive_batch_selected","direct_calbar_deep_read_chars","direct_calbar_active_from_search","direct_calbar_unique_active","calbar_strong_email_accept","direct_calbar_search_identity_reject","direct_lawyercom_size_attempt","direct_lawyercom_size_hit","direct_lawyercom_size_miss","post_email_headcount_direct_lawyercom","candidate_source_owned_website_hit","candidate_lawyercom_size_hit","candidate_lawyercom_website_hit","candidate_source_email_phone_owned_hit","candidate_source_jina_recheck","direct_txbar_search_attempt","direct_txbar_profile_links","direct_txbar_search_error","direct_ilbar_search_attempt","direct_ilbar_profile_links","direct_ilbar_search_error","direct_gabar_search_attempt","direct_gabar_profile_links","direct_gabar_search_error","direct_ncbar_search_attempt","direct_ncbar_profile_links","direct_ncbar_search_error","direct_wabar_search_attempt","direct_wabar_profile_links","direct_wabar_search_error","direct_floridabar_search_attempt","direct_floridabar_profile_links","direct_floridabar_search_error"])
       ]);
       console.log(JSON.stringify({
-        event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,websitePending,websiteReady,
+        event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,pendingSizeReady,websitePending,websiteReady,
         emailExisting:Number(emailStats?.[0]||0),emailDuck:Number(emailStats?.[1]||0),emailBing:Number(emailStats?.[2]||0),
         emailZeroCost:Number(emailStats?.[3]||0),emailNoHit:Number(emailStats?.[4]||0),
         scraplingSourceHit:Number(emailStats?.[5]||0),scraplingSourceFail:Number(emailStats?.[6]||0),
