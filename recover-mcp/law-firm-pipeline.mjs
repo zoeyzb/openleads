@@ -1197,6 +1197,23 @@ function directoryRosterCount(html="",source="",lead={}){
   return names.length>=1?names.length:0;
 }
 
+function officialFirmSizeEstimate(text=""){
+  const plain=String(text||"").replace(/\s+/g," ").trim();
+  if(!plain)return 0;
+  const range=plain.match(/\bfirm\s+size\s*:?\s*(\d{1,2})\s*(?:to|[-–])\s*(\d{1,2})\b/i);
+  if(range){
+    const lo=Number(range[1]),hi=Number(range[2]);
+    if(lo>0&&hi>=lo&&hi<=100)return lo>=2?hi:1;
+  }
+  const exact=plain.match(/\bfirm\s+size\s*:?\s*(\d{1,3})\b/i);
+  if(exact){
+    const n=Number(exact[1]);
+    if(n>0&&n<=500)return n;
+  }
+  if(/\bfirm\s+size\s*:?\s*(?:solo|sole\s+practi(?:tioner|oner))\b/i.test(plain))return 1;
+  return 0;
+}
+
 function attorneyEstimate(html="",text=""){
   const plain=String(text||stripHtml(String(html||""))).replace(/\s+/g," ").trim();
   if(!plain)return 0;
@@ -1800,7 +1817,10 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       const pageEmails=wantedSet.size?discoveredEmails.filter(x=>wantedSet.has(String(x).toLowerCase())):discoveredEmails;
       emails.push(...pageEmails);texts.push(pageText);
       const headcountSource=String(page.final_url||target);
-      const estimate=isPublishedHeadcountSource(headcountSource,lead)?attorneyEstimate(page.html,pageText):0;
+      const sourceRank=lawSourceRank(headcountSource,lead);
+      const estimate=isPublishedHeadcountSource(headcountSource,lead)
+        ? (sourceRank<=1?officialFirmSizeEstimate(pageText):attorneyEstimate(page.html,pageText))
+        : 0;
       if(estimate>attorneyCount){attorneyCount=estimate;attorneyCountSource=headcountSource;}
       if(!personalFact){
         const fact=specificFactFromText(pageText,lead);
@@ -1959,7 +1979,10 @@ async function duckFallback(lead,key=""){
       }
     }
     texts.push(pageText);
-    const estimate=isPublishedHeadcountSource(finalUrl,lead)?attorneyEstimate(html,pageText):0;
+    const sourceRank=lawSourceRank(finalUrl,lead);
+    const estimate=isPublishedHeadcountSource(finalUrl,lead)
+      ? (sourceRank<=1?officialFirmSizeEstimate(pageText):attorneyEstimate(html,pageText))
+      : 0;
     if(estimate>attorneyCount){attorneyCount=estimate;attorneyCountSource=finalUrl;}
     if(!personalFact){
       const fact=specificFactFromText(pageText,lead);
@@ -2744,11 +2767,11 @@ function isPublishedHeadcountSource(source="",lead={}){
     const u=new URL(String(source||""));
     const host=u.hostname.toLowerCase().replace(/^www\./,"");
     if(!/^https?:$/.test(u.protocol))return false;
-    // Individual state-bar member profiles prove attorney identity/email, not
-    // total firm headcount. They were producing repeated bogus "5 attorney"
-    // counts from unrelated page text. Only firm/directory sources that expose
-    // an explicit firm-size or same-phone attorney roster may verify 2-10.
-    return /(^|\.)(lawyers|martindale|lawyer|findlaw|justia)\.com$/i.test(host);
+    if(/(^|\.)(lawyers|martindale|lawyer|findlaw|justia)\.com$/i.test(host))return true;
+    const expected=expectedBarHost(lead);
+    if(expected&&(host===expected||host.endsWith("."+expected)))return true;
+    if(normalizedStateCode(lead)==="GA"&&host==="gabar.reliaguide.com")return true;
+    return false;
   }catch{return false;}
 }
 
@@ -3408,6 +3431,23 @@ async function enrichLead(key,lead){
       }));
     }
   }
+  if(attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10&&trustedLawSource(attorneyCountSource,lead)){
+    const officialProfileWebsite=await ownedWebsiteFromTrustedProfile(attorneyCountSource,lead,key);
+    if(officialProfileWebsite){
+      const updated={...lead,website:officialProfileWebsite,website_opportunity:"website_refresh",owned_website_evidence_source:attorneyCountSource,attorney_count_estimate:attorneyCount,attorney_count_evidence_verified:true,attorney_count_source:attorneyCountSource};
+      await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
+      await Promise.all([
+        redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),
+        redis.sRem(UNIQUE_ELIGIBLE_SET,key),redis.sRem(SIZE_READY_PENDING_SET,key)
+      ]);
+      await redis.sAdd(REJECTED_SET,key);
+      await redis.sAdd(ENRICHED_SET,key);
+      await redis.hIncrBy(STATS,"official_profile_owned_website_hit",1);
+      console.log(JSON.stringify({event:"law_official_profile_owned_website_reject",key,name:String(lead.name||lead.title||""),website:officialProfileWebsite,attorneyCount,source:attorneyCountSource}));
+      return true;
+    }
+  }
+
   const painPoint="No website";
   const evidenceOwnedWebsite="";
   const discoveredOwnedWebsite="";
