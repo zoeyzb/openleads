@@ -29,6 +29,8 @@ const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
 const CHICAGO_HEADCOUNT_RECOVERY_KEY="recover:law-firm:chicago-headcount-recovery-version";
 const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v6-firm-owner-guard";
 const ASSOCIATION_DOCKET_RECOVERY_KEY="recover:law-firm:association-docket-recovery-version";
+const SIZE_READY_WEBSITE_AUDIT_VERSION="size-ready-website-audit-v1";
+const SIZE_READY_WEBSITE_AUDIT_KEY="recover:law-firm:size-ready-website-audit-version";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
@@ -1553,7 +1555,7 @@ function yahooResultLinks(html=""){
   return [...new Set(out)].slice(0,12);
 }
 async function findOwnedWebsitePreflight(lead,key="",force=false){
-  if((!force&&!highValueLawResearchLead(lead))||lead.conversion_headcount_priority===true)return "";
+  if(!force&&(!highValueLawResearchLead(lead)||lead.conversion_headcount_priority===true))return "";
   const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
   if(!name)return "";
   const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
@@ -2759,6 +2761,7 @@ async function enrichLead(key,lead){
     await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
   }
   const knownVerifiedCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
+  const knownSizeReady=knownVerifiedCount>=2&&knownVerifiedCount<=10;
   if(knownVerifiedCount>0&&(knownVerifiedCount<2||knownVerifiedCount>10)){
     await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
     await redis.sAdd(ENRICHED_SET,key);
@@ -2803,6 +2806,29 @@ async function enrichLead(key,lead){
     await Promise.all([redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(CHICAGO_PENDING_SET,key)]);
     await redis.hIncrBy(STATS,"rejected_has_website",1);
     return true;
+  }
+
+  // Final no-website integrity gate for the tiny verified 2-10 cohort.
+  // These are the only records close enough to revenue to justify an exact
+  // owned-site search on every pass.
+  if(knownSizeReady){
+    const discoveredSizeReadySite=await findOwnedWebsitePreflight({...lead,conversion_headcount_priority:false},key,true);
+    if(discoveredSizeReadySite){
+      const updated={...lead,website:discoveredSizeReadySite,website_opportunity:"website_refresh",owned_website_evidence_source:"size_ready_preflight"};
+      await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
+      await Promise.all([
+        redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),
+        redis.sRem(PENDING_SET,key),redis.sRem(PRIORITY_PENDING_SET,key),
+        redis.sRem(RECOVERABLE_PENDING_SET,key),redis.sRem(SOURCE_PENDING_SET,key),
+        redis.sRem(SIZE_READY_PENDING_SET,key)
+      ]);
+      await redis.sAdd(REJECTED_SET,key);
+      await redis.sAdd(ENRICHED_SET,key);
+      await redis.sRem(UNIQUE_ELIGIBLE_SET,key);
+      await redis.hIncrBy(STATS,"size_ready_owned_website_hit",1);
+      console.log(JSON.stringify({event:"law_size_ready_owned_website_reject",key,name:String(lead.name||lead.title||""),website:discoveredSizeReadySite,attorneyCount:knownVerifiedCount}));
+      return true;
+    }
   }
 
   // Maps can omit a firm's real website. For the active Chicago website-build
@@ -2913,6 +2939,8 @@ async function enrichLead(key,lead){
     ])];
     const publicRecordQueries=[
       ...(person&&phone?[`"${person}" "${phonePretty||phone}" email filetype:pdf`]:[]),
+      ...(name?[`site:docs.justia.com "${name}" email`,`site:cases.justia.com "${name}" email`,`site:govinfo.gov "${name}" email`]:[]),
+      ...(state==="FL"&&person?[`site:floridabar.org/about/volbars "${person}" email`]:[]),
       ...(name&&phone?[`"${name}" "${phonePretty||phone}" email`]:[]),
       ...(person?[`"${person}" "${region}" "E-mail address" filetype:pdf`]:[]),
       ...(name?[
@@ -2981,7 +3009,7 @@ async function enrichLead(key,lead){
     const soloShape=lawFirmNameShape(lead)==="solo";
     const hasDirectOfficial=directOfficialLinks.length>0;
     const sizeReadyEmailPriority=attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10;
-    const dualSearch=!hasDirectOfficial&&(sizeReadyEmailPriority||(!soloShape&&(highValue||emailRecoveryPriority(lead)>=5))||Number(lead.email_recovery_attempts||0)>=1);
+    const dualSearch=sizeReadyEmailPriority||(!hasDirectOfficial&&((!soloShape&&(highValue||emailRecoveryPriority(lead)>=5))||Number(lead.email_recovery_attempts||0)>=1));
     // Already-proven 2-10 firms are the closest-to-revenue cohort. Use a
     // source-first query set (bar/court/public records + exact phone/name)
     // instead of spending most requests on broad generic discovery.
@@ -3004,10 +3032,10 @@ async function enrichLead(key,lead){
       bingFallback(
         lead,
         effectiveQueries,
-        hasDirectOfficial?4:(soloShape?5:(highValue?10:(dualSearch?8:7))),
+        sizeReadyEmailPriority?10:(hasDirectOfficial?4:(soloShape?5:(highValue?10:(dualSearch?8:7)))),
         key,
         [],
-        hasDirectOfficial?1:(highValue?2:1),
+        sizeReadyEmailPriority?3:(hasDirectOfficial?1:(highValue?2:1)),
         directOfficialLinks
       ),
       dualSearch
@@ -3636,6 +3664,7 @@ async function bootstrapExistingQualified(){
   const candidateSizeRecovery=(await redis.get(CANDIDATE_SIZE_RESEARCH_VERSION_KEY))!==CANDIDATE_SIZE_RESEARCH_VERSION;
   const chicagoHeadcountRecovery=(await redis.get(CHICAGO_HEADCOUNT_RECOVERY_KEY))!==CHICAGO_HEADCOUNT_RECOVERY_VERSION;
   const associationDocketRecovery=(await redis.get(ASSOCIATION_DOCKET_RECOVERY_KEY))!==ASSOCIATION_DOCKET_RECOVERY_VERSION;
+  const sizeReadyWebsiteAudit=(await redis.get(SIZE_READY_WEBSITE_AUDIT_KEY))!==SIZE_READY_WEBSITE_AUDIT_VERSION;
   const readySet=new Set(await redis.sMembers(READY_SET));
   const requalSizeReady=[],requalRegular=[],requalPriority=[],requalRecoverable=[],requalAll=[],floridaRecoveryKeys=[];
 
@@ -3713,6 +3742,22 @@ async function bootstrapExistingQualified(){
       scanned++;
 
       const website=String(lead.website||"").trim();
+
+      if(sizeReadyWebsiteAudit&&!website&&lead.attorney_count_evidence_verified===true){
+        const n=Number(lead.attorney_count_estimate||0);
+        if(n>=2&&n<=10){
+          await Promise.all([
+            redis.sRem(ENRICHED_SET,entry.field),
+            redis.sRem(REJECTED_SET,entry.field),
+            redis.sRem(PRIORITY_PENDING_SET,entry.field),
+            redis.sRem(RECOVERABLE_PENDING_SET,entry.field),
+            redis.sRem(SOURCE_PENDING_SET,entry.field),
+            redis.sRem(PENDING_SET,entry.field)
+          ]);
+          await redis.sAdd(SIZE_READY_PENDING_SET,entry.field);
+          queuedForEnrichment++;
+        }
+      }
 
       // Always prioritize Chicago no-website firms whose 2-10 headcount is
       // still unknown. This is the user's active campaign and must not sit
@@ -4006,6 +4051,7 @@ async function bootstrapExistingQualified(){
   if(calbarAdapterRecovery)await redis.set(CALBAR_ADAPTER_VERSION_KEY,CALBAR_ADAPTER_VERSION);
   if(chicagoHeadcountRecovery)await redis.set(CHICAGO_HEADCOUNT_RECOVERY_KEY,CHICAGO_HEADCOUNT_RECOVERY_VERSION);
   if(associationDocketRecovery)await redis.set(ASSOCIATION_DOCKET_RECOVERY_KEY,ASSOCIATION_DOCKET_RECOVERY_VERSION);
+  if(sizeReadyWebsiteAudit)await redis.set(SIZE_READY_WEBSITE_AUDIT_KEY,SIZE_READY_WEBSITE_AUDIT_VERSION);
 
   console.log(JSON.stringify({
     event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,FULL_REQUAL_VERSION,HISTORICAL_RECOVERY_VERSION,EMAIL_METHOD_VERSION,CALBAR_ADAPTER_VERSION,calbarAdapterRecoveryQueued,floridaDirectRecoveryQueued:floridaRecoveryKeys.length,chicagoHeadcountRecoveryQueued,associationDocketRecoveryQueued,
