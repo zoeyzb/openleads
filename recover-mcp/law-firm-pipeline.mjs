@@ -255,7 +255,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v6-official-bar-roster-strict-directory";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v7-indexed-directory-size";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -5149,7 +5149,7 @@ async function enrichBatch(){
         const needsPhoneHeadcount=!/^https?:\/\//i.test(retryWebsite)&&isUsableLawPhone(retryLead.phone)&&retryLead.attorney_count_evidence_verified!==true;
         if(needsPhoneHeadcount){
           const shape=lawFirmNameShape(retryLead);
-          await redis.sAdd(shape==="multi"?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
+          await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
         }else{
           const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(isUsableLawEmail);
           const retrySet=retryEmails.length?PENDING_SET:(emailRecoveryPriority(retryLead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET);
@@ -5653,7 +5653,7 @@ async function bootstrapPhoneFirstInventory(){
           String(lead.phone_headcount_method_version||"")===PHONE_HEADCOUNT_METHOD_VERSION;
         if(!exhaustedCurrentMethod){
           const shape=lawFirmNameShape(lead);
-          if(shape==="multi")priorityChunk.push(entry.field);
+          if(shape==="multi"||shape==="firm")priorityChunk.push(entry.field);
           else pendingChunk.push(entry.field);
         }
       }
