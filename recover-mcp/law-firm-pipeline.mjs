@@ -1799,8 +1799,9 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       const wantedSet=new Set((wantedEmails||[]).map(x=>String(x||"").trim().toLowerCase()));
       const pageEmails=wantedSet.size?discoveredEmails.filter(x=>wantedSet.has(String(x).toLowerCase())):discoveredEmails;
       emails.push(...pageEmails);texts.push(pageText);
-      const estimate=attorneyEstimate(page.html,pageText);
-      if(estimate>attorneyCount){attorneyCount=estimate;attorneyCountSource=page.final_url||target;}
+      const headcountSource=String(page.final_url||target);
+      const estimate=isPublishedHeadcountSource(headcountSource,lead)?attorneyEstimate(page.html,pageText):0;
+      if(estimate>attorneyCount){attorneyCount=estimate;attorneyCountSource=headcountSource;}
       if(!personalFact){
         const fact=specificFactFromText(pageText,lead);
         if(fact){personalFact=fact;personalFactSource=page.final_url||target;}
@@ -1958,7 +1959,7 @@ async function duckFallback(lead,key=""){
       }
     }
     texts.push(pageText);
-    const estimate=attorneyEstimate(html,pageText);
+    const estimate=isPublishedHeadcountSource(finalUrl,lead)?attorneyEstimate(html,pageText):0;
     if(estimate>attorneyCount){attorneyCount=estimate;attorneyCountSource=finalUrl;}
     if(!personalFact){
       const fact=specificFactFromText(pageText,lead);
@@ -2743,12 +2744,11 @@ function isPublishedHeadcountSource(source="",lead={}){
     const u=new URL(String(source||""));
     const host=u.hostname.toLowerCase().replace(/^www\./,"");
     if(!/^https?:$/.test(u.protocol))return false;
-    if(/(^|\.)(bing\.com|google\.com|duckduckgo\.com|yahoo\.com)$/.test(host))return false;
-    const expected=expectedBarHost(lead);
-    if(expected&&(host===expected||host.endsWith("."+expected)))return true;
-    if(normalizedStateCode(lead)==="GA"&&host==="gabar.reliaguide.com")return true;
-    return /(^|\.)(lawyers|martindale|lawyer|findlaw|justia)\.com$/i.test(host)||
-      /statebar|barassociation|supremecourt|disciplinaryboard|nycourts\.gov|iardc\.org/i.test(host);
+    // Individual state-bar member profiles prove attorney identity/email, not
+    // total firm headcount. They were producing repeated bogus "5 attorney"
+    // counts from unrelated page text. Only firm/directory sources that expose
+    // an explicit firm-size or same-phone attorney roster may verify 2-10.
+    return /(^|\.)(lawyers|martindale|lawyer|findlaw|justia)\.com$/i.test(host);
   }catch{return false;}
 }
 
@@ -2779,7 +2779,19 @@ async function enrichLead(key,lead){
     await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
     await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
   }
-  const knownVerifiedCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
+  const storedHeadcountValid=lead.attorney_count_evidence_verified===true&&isPublishedHeadcountSource(String(lead.attorney_count_source||""),lead);
+  if(lead.attorney_count_evidence_verified===true&&!storedHeadcountValid){
+    lead={...lead,attorney_count_evidence_verified:false,attorney_count_estimate:0,attorney_count_source:"",firm_size_tier:"unknown",preferred_firm_size:false};
+    await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
+    await Promise.all([
+      redis.sRem(UNIQUE_VERIFIED_HEADCOUNT_SET,key),
+      redis.sRem(UNIQUE_ELIGIBLE_SET,key),
+      redis.sRem(READY_SET,key)
+    ]);
+    await redis.hDel(VERIFIED_HEADCOUNT_EVIDENCE_HASH,key);
+    await redis.hIncrBy(STATS,"invalid_bar_headcount_cleared",1);
+  }
+  const knownVerifiedCount=storedHeadcountValid?Number(lead.attorney_count_estimate||0):0;
   const knownSizeReady=knownVerifiedCount>=2&&knownVerifiedCount<=10;
   if(knownVerifiedCount>0&&(knownVerifiedCount<2||knownVerifiedCount>10)){
     await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
@@ -2922,7 +2934,7 @@ async function enrichLead(key,lead){
       for(const email of exactResult.emails||[]){emailEvidenceSources[String(email).toLowerCase()]=String(exactResult.emailSources?.[String(email).toLowerCase()]||exactResult.source||source||"");}
       const exactCount=Number(exactResult.attorneyCount||0);
       const exactCountSource=String(exactResult.attorneyCountSource||"");
-      if(exactCount>0&&isDirectPublishedEmailSource(exactCountSource)){
+      if(exactCount>0&&isPublishedHeadcountSource(exactCountSource,lead)){
         attorneyCount=exactCount;
         attorneyCountVerified=true;
         attorneyCountSource=exactCountSource;
@@ -3071,7 +3083,7 @@ async function enrichLead(key,lead){
       if(targetedDuck.ownedWebsite)researchOwnedWebsite=targetedDuck.ownedWebsite;
       const tdCount=Number(targetedDuck.attorneyCount||0);
       const tdSource=String(targetedDuck.attorneyCountSource||"");
-      if(tdCount>0&&isDirectPublishedEmailSource(tdSource)){
+      if(tdCount>0&&isPublishedHeadcountSource(tdSource,lead)){
         attorneyCountVerified=true;
         if(tdCount>=attorneyCount){attorneyCount=tdCount;attorneyCountSource=tdSource;}
       }
@@ -3091,7 +3103,7 @@ async function enrichLead(key,lead){
       if(bf.ownedWebsite)researchOwnedWebsite=bf.ownedWebsite;
       const bfCount=Number(bf.attorneyCount||0);
       const bfCountSource=String(bf.attorneyCountSource||"");
-      if(bfCount>0&&isDirectPublishedEmailSource(bfCountSource)){
+      if(bfCount>0&&isPublishedHeadcountSource(bfCountSource,lead)){
         attorneyCountVerified=true;
         if(bfCount>=attorneyCount){attorneyCount=bfCount;attorneyCountSource=bfCountSource;}
       }
@@ -3921,7 +3933,8 @@ async function bootstrapExistingQualified(){
       const practiceKeys=[...new Set([...storedKeys,...observedKeys,...(focus?[focus]:[])])];
 
       let effectiveWebsite=website;
-      const bootstrapSizeReady=lead.attorney_count_evidence_verified===true&&Number(lead.attorney_count_estimate||0)>=2&&Number(lead.attorney_count_estimate||0)<=10;
+      const bootstrapHeadcountValid=lead.attorney_count_evidence_verified===true&&isPublishedHeadcountSource(String(lead.attorney_count_source||""),lead);
+      const bootstrapSizeReady=bootstrapHeadcountValid&&Number(lead.attorney_count_estimate||0)>=2&&Number(lead.attorney_count_estimate||0)<=10;
       if(!fullRequalify&&!website&&bootstrapSizeReady&&(!sourceBacked||!emails.length)){
         await redis.sRem(ENRICHED_SET,entry.field);
         await moveToEmailQueue(entry.field,SIZE_READY_PENDING_SET);
@@ -3945,7 +3958,7 @@ async function bootstrapExistingQualified(){
         if(historicalQualified)historicalQualifiedMarkers++;
         requalAll.push(entry.field);
         const nameShape=lawFirmNameShape(lead);
-        const sizeReady=lead.attorney_count_evidence_verified===true&&Number(lead.attorney_count_estimate||0)>=2&&Number(lead.attorney_count_estimate||0)<=10;
+        const sizeReady=lead.attorney_count_evidence_verified===true&&isPublishedHeadcountSource(String(lead.attorney_count_source||""),lead)&&Number(lead.attorney_count_estimate||0)>=2&&Number(lead.attorney_count_estimate||0)<=10;
         if(sizeReady)requalSizeReady.push(entry.field);
         else if(historicalQualified||existingUsable)requalRegular.push(entry.field);
         else if(nameShape==="multi"||nameShape==="firm"||multiName||emailRecoveryPriority(lead)>=5)requalPriority.push(entry.field);
@@ -3958,7 +3971,7 @@ async function bootstrapExistingQualified(){
         emails,
         practice_keys:practiceKeys,
         attorney_count_estimate:attorneyCount,
-        attorney_count_evidence_verified:lead.attorney_count_evidence_verified===true,
+        attorney_count_evidence_verified:bootstrapHeadcountValid,
         email_source_verified:sourceBacked&&emails.length>0
       });
 
