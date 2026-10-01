@@ -918,7 +918,7 @@ function sourcePageMatchesFirmIdentity(text="",lead={},sourceUrl=""){
 }
 function ownedWebsiteFromMatchedPage(url="",text="",lead={}){
   const rank=lawSourceRank(url,lead);
-  if(rank<=4||rank>=90)return "";
+  if(rank<=4||rank>=90||knownThirdPartyDirectoryHost(url))return "";
   const host=hostOf(url);
   if(!host||/\.pdf(?:$|[?#])/i.test(String(url)))return "";
   const plain=normalize(text);
@@ -946,7 +946,7 @@ function ownedWebsiteFromMatchedPage(url="",text="",lead={}){
 }
 function knownThirdPartyDirectoryHost(url=""){
   const host=hostOf(url);
-  return /(?:^|\.)(?:reachattorneys\.com|lawyer\.com|lawyers\.com|martindale\.com|avvo\.com|justia\.com|findlaw\.com|superlawyers\.com|attorneydir\.com|lawyer-map\.com|allbiz\.com|chamberofcommerce\.com|manta\.com|bbb\.org|yellowpages\.com|yelp\.com|birdeye\.com|mapquest\.com)$/i.test(host);
+  return /(?:^|\.)(?:reachattorneys\.com|lawyer\.com|lawyers\.com|martindale\.com|avvo\.com|justia\.com|findlaw\.com|superlawyers\.com|attorneydir\.com|lawyer-map\.com|lawyerdb\.org|411\.info|allbiz\.com|chamberofcommerce\.com|manta\.com|bbb\.org|yellowpages\.com|yelp\.com|birdeye\.com|mapquest\.com)$/i.test(host);
 }
 function ownedDomainAffinity(url="",lead={}){
   const host=hostOf(url).replace(/[^a-z0-9]/g,"");
