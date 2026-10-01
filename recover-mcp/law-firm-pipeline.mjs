@@ -29,7 +29,7 @@ const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
 const CHICAGO_HEADCOUNT_RECOVERY_KEY="recover:law-firm:chicago-headcount-recovery-version";
 const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v6-firm-owner-guard";
 const ASSOCIATION_DOCKET_RECOVERY_KEY="recover:law-firm:association-docket-recovery-version";
-const SIZE_READY_WEBSITE_AUDIT_VERSION="size-ready-website-audit-v3-domain-probe";
+const SIZE_READY_WEBSITE_AUDIT_VERSION="size-ready-website-audit-v4-fast-domain-probe";
 const SIZE_READY_WEBSITE_AUDIT_KEY="recover:law-firm:size-ready-website-audit-version";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
@@ -1308,11 +1308,22 @@ function likelyOwnedDomainCandidates(lead={}){
 }
 
 async function probeLikelyOwnedDomains(lead={},key=""){
-  const candidates=likelyOwnedDomainCandidates(lead);
+  const candidates=likelyOwnedDomainCandidates(lead).slice(0,6);
   if(!candidates.length)return "";
+  // Guessed domains are cheap candidates, so probe them with bounded direct HTTP
+  // rather than the heavy research stack. This keeps send-ready audits below the
+  // enrich job timeout and avoids orphaned Promise.race work mutating Redis later.
   const checks=await Promise.allSettled(candidates.map(async url=>{
-    const verified=await verifyOwnedWebsiteCandidate(url,lead);
-    return verified||"";
+    try{
+      const page=await fetchText(url,4500);
+      if(!page?.html)return "";
+      const finalUrl=String(page.final_url||url);
+      const text=stripHtml(page.html).slice(0,36000);
+      const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+      const phoneMatch=Boolean(phone&&String(text).replace(/\D/g,"").includes(phone));
+      if(!pageMatchesLead(text,lead,finalUrl)&&!phoneMatch)return "";
+      return ownedWebsiteFromMatchedPage(finalUrl,text,lead)||new URL(finalUrl).origin;
+    }catch{return "";}
   }));
   for(const item of checks){
     if(item.status==="fulfilled"&&item.value){
