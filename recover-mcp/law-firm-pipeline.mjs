@@ -4914,7 +4914,7 @@ async function seed(cities){
 async function bootstrapPhoneFirstInventory(){
   let scanned=0,callableNoSite=0,queuedHeadcount=0,seededCallReady=0,wrongSizeKnown=0;
   const pendingChunk=[],priorityChunk=[],readyChunk=[];
-  await redis.del(CALL_READY_SET);
+  await Promise.all([redis.del(CALL_READY_SET),redis.del(PHONE_HEADCOUNT_PRIORITY_SET),redis.del(CHICAGO_PENDING_SET)]);
 
   const flush=async()=>{
     if(priorityChunk.length){
