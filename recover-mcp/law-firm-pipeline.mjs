@@ -4957,9 +4957,9 @@ async function seed(cities){
     const id=randomUUID();
     const coveragePass=`law-email-v19-w${wave+1}`;
     const job={id,batch_id:"us-law-firm-email-qualified-v7",industry:"LAW_FIRM",search_profile:"law-firm",practice_focus:focus.key,coverage_pass:coveragePass,location:area.location,
-      partition_state:area.state,partition_city:area.city,source_population:area.population,target:18,min_score:45,
+      partition_state:area.state,partition_city:area.city,source_population:area.population,target:40,min_score:45,
       require_phone:true,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,
-      max_rounds:1,depth:4,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,
+      max_rounds:1,depth:8,status:"queued",phase:"queued",round:0,rounds_completed:0,raw_count:0,unique_count:0,
       qualified_count:0,stored_count:0,created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
       source:"law_firm_pipeline_v7"};
 
