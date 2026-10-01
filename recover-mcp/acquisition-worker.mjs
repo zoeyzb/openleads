@@ -1,3 +1,4 @@
+// 2026-10-02: force rebuild to apply law phone-first worker concurrency.
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { matchesRequestedLocation, mergeLeadRecords, upsertQualifiedLeads } from "./acquisition-persistence.mjs";
