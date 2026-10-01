@@ -1306,17 +1306,29 @@ function strictFirmPageRosterCount(html="",source="",lead={}){
 function officialFirmSizeEstimate(text=""){
   const plain=String(text||"").replace(/\s+/g," ").trim();
   if(!plain)return 0;
-  const range=plain.match(/\bfirm\s+size\s*:?\s*(\d{1,2})\s*(?:to|[-–])\s*(\d{1,2})\b/i);
+  const range=plain.match(/\b(?:firm|office)\s+size\s*:?\s*(\d{1,2})\s*(?:to|[-–])\s*(\d{1,2})\b/i);
   if(range){
     const lo=Number(range[1]),hi=Number(range[2]);
     if(lo>0&&hi>=lo&&hi<=100)return lo>=2?hi:1;
   }
-  const exact=plain.match(/\bfirm\s+size\s*:?\s*(\d{1,3})\b/i);
+  const exact=plain.match(/\b(?:firm|office)\s+size\s*:?\s*(\d{1,3})\b/i);
   if(exact){
     const n=Number(exact[1]);
     if(n>0&&n<=500)return n;
   }
-  if(/\bfirm\s+size\s*:?\s*(?:solo|sole\s+practi(?:tioner|oner))\b/i.test(plain))return 1;
+  // Lawyers.com/Martindale wording on dedicated firm pages:
+  // "At this office location, there are 2 lawyers" / "there is 1 lawyer".
+  const officeLocation=plain.match(/\bat\s+this\s+office\s+location\s*,?\s+there\s+(?:are|is)\s+(\d{1,3})\s+(?:lawyers?|attorneys?)\b/i);
+  if(officeLocation){
+    const n=Number(officeLocation[1]);
+    if(n>0&&n<=500)return n;
+  }
+  const meetTeam=plain.match(/\bmeet\s+(?:all\s+)?(\d{1,3})\s+(?:lawyers?|attorneys?)\b/i);
+  if(meetTeam){
+    const n=Number(meetTeam[1]);
+    if(n>0&&n<=500)return n;
+  }
+  if(/\b(?:firm|office)\s+size\s*:?\s*(?:solo|sole\s+practi(?:tioner|oner))\b/i.test(plain))return 1;
   return 0;
 }
 
@@ -1500,9 +1512,11 @@ async function directDirectorySizeEvidence(lead={},key=""){
   // a handful of network calls, which is required for a 10k calling pipeline.
   const queries=[...new Set([
     ...(phonePretty?[`"${phonePretty}" attorney lawyer`,`"${phonePretty}" "firm size"`]:[]),
+    `site:lawyers.com "${name}" "${city}" "${state}"`.trim(),
+    `site:martindale.com "${name}" "${city}" "${state}"`.trim(),
     `"${name}" "${state}" attorneys lawyers`.trim(),
     `"${name}" "${city}" "${state}" "firm size"`.trim()
-  ].filter(Boolean))].slice(0,4);
+  ].filter(Boolean))].slice(0,6);
 
   const searchResults=await Promise.allSettled(queries.map(async query=>{
     const [htmlResult,rssResult,duckResult]=await Promise.allSettled([
