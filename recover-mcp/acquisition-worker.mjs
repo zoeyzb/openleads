@@ -566,7 +566,7 @@ async function persistPermanentQualified(redis, job, leads) {
       // serialized hundreds of Redis round trips and could stall a dense city
       // acquisition for minutes after Maps had already finished.
       const fast=[],background=[],solo=[],shapeUpdates=[];
-      const phoneHeadcountMethodVersion="phone-headcount-v6-official-bar-roster-strict-directory";
+      const phoneHeadcountMethodVersion="phone-headcount-v7-indexed-directory-size";
       for(let offset=0;offset<identities.length;offset+=500){
         const chunk=identities.slice(offset,offset+500);
         const values=await redis.hmGet("recover:leadstore:qualified",chunk);
@@ -580,7 +580,7 @@ async function persistPermanentQualified(redis, job, leads) {
           if(!exhaustedCurrentMethod){
             // Explicit plural/multi-name signals get first headcount capacity.
             // Generic "Law Firm"/PC/PLLC branding is frequently still a solo.
-            if(shape==="multi")fast.push(key);
+            if(shape==="multi"||shape==="firm")fast.push(key);
             else if(shape==="solo")solo.push(key);
             else background.push(key);
           }
