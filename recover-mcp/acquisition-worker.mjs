@@ -544,6 +544,7 @@ async function persistPermanentQualified(redis, job, leads) {
       // serialized hundreds of Redis round trips and could stall a dense city
       // acquisition for minutes after Maps had already finished.
       const fast=[],background=[],solo=[],shapeUpdates=[];
+      const phoneHeadcountMethodVersion="phone-headcount-v5-priority-official-roster";
       for(let offset=0;offset<identities.length;offset+=500){
         const chunk=identities.slice(offset,offset+500);
         const values=await redis.hmGet("recover:leadstore:qualified",chunk);
@@ -551,9 +552,14 @@ async function persistPermanentQualified(redis, job, leads) {
           const key=chunk[i];
           let lead={};try{lead=values?.[i]?JSON.parse(values[i]):{};}catch{}
           const shape=lawFirmNameShape(lead);
-          if(shape==="multi"||shape==="firm")fast.push(key);
-          else if(shape==="solo")solo.push(key);
-          else background.push(key);
+          const exhaustedCurrentMethod=
+            String(lead.phone_headcount_status||"")==="unverified" &&
+            String(lead.phone_headcount_method_version||"")===phoneHeadcountMethodVersion;
+          if(!exhaustedCurrentMethod){
+            if(shape==="multi"||shape==="firm")fast.push(key);
+            else if(shape==="solo")solo.push(key);
+            else background.push(key);
+          }
           if(lead&&typeof lead==="object"&&lead.law_name_shape!==shape){
             shapeUpdates.push(key,JSON.stringify({...lead,law_name_shape:shape}));
           }
@@ -561,17 +567,22 @@ async function persistPermanentQualified(redis, job, leads) {
       }
       if(shapeUpdates.length)await redis.hSet("recover:leadstore:qualified",shapeUpdates);
 
-      // Phone-first calling campaign is nationwide. Every persisted law record
-      // from this acquisition already passed require_phone + no-website gates,
-      // so route ALL name shapes into the dedicated headcount lane. Do not let
-      // the old email-first fast/background/solo split starve callable firms.
-      const phoneHeadcountCandidates=[...new Set([...fast,...background,...solo])];
-      if(phoneHeadcountCandidates.length){
-        await redis.sAdd("recover:law-firm:chicago-priority:v1",phoneHeadcountCandidates);
+      // Name shape only controls scheduling priority. It never qualifies a firm.
+      // Multi/firm-shaped records are verified first because they are more likely
+      // to satisfy the user's 2-10 attorney gate; every other callable no-site
+      // law record remains in the standard headcount queue.
+      const priorityPhoneCandidates=[...new Set(fast)];
+      const standardPhoneCandidates=[...new Set([...background,...solo])];
+      if(priorityPhoneCandidates.length){
+        await redis.sAdd("recover:law-firm:phone-headcount-priority:v1",priorityPhoneCandidates);
+      }
+      if(standardPhoneCandidates.length){
+        await redis.sAdd("recover:law-firm:chicago-priority:v1",standardPhoneCandidates);
       }
       console.log(JSON.stringify({
         event:"law_phone_headcount_lane_split",
-        phoneHeadcountCandidates:phoneHeadcountCandidates.length,
+        priorityPhoneCandidates:priorityPhoneCandidates.length,
+        standardPhoneCandidates:standardPhoneCandidates.length,
         fast:fast.length,background:background.length,solo:solo.length,
         location:String(job.location||"")
       }));
