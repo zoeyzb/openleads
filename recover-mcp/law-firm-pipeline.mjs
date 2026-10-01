@@ -1578,7 +1578,7 @@ async function directDirectorySizeEvidence(lead={},key=""){
       `"${phonePretty}" "firm size"`,
       `site:lawyers.com "${phonePretty}" "Law Office with"`
     ]:[]),
-    `site:lawyers.com "${name}" "Law Office with" lawyers`.trim(),
+    `site:lawyers.com "${name}" "${city}" "${state}" "Law Office with" lawyers`.trim(),
     `site:lawyer.com/firm "${name}" "Firm Size"`.trim(),
     `site:martindale.com "${name}" "Firm Size"`.trim(),
     `site:findlaw.com "${name}" "${city}" "${state}" attorneys`.trim()
@@ -1618,9 +1618,14 @@ async function directDirectorySizeEvidence(lead={},key=""){
   }
   if(INDEXED_HEADCOUNT_DIAGNOSTICS<8&&indexedRecords.length){
     INDEXED_HEADCOUNT_DIAGNOSTICS++;
+    const legalRecords=indexedRecords.filter(r=>{
+      const h=hostOf(r.url);
+      return hosts.some(x=>h===x||h.endsWith("."+x));
+    });
     console.log(JSON.stringify({
       event:"law_indexed_directory_diagnostic",key,name,phone:phonePretty,city,state,
-      records:indexedRecords.slice(0,5).map(r=>({url:r.url,text:String(r.text||"").slice(0,700)}))
+      totalRecords:indexedRecords.length,legalRecords:legalRecords.length,
+      records:legalRecords.slice(0,5).map(r=>({url:r.url,text:String(r.text||"").slice(0,900)}))
     }));
   }
 
