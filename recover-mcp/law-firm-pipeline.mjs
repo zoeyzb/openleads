@@ -2884,7 +2884,20 @@ async function enrichLead(key,lead){
     await redis.hIncrBy(STATS,"rejected_not_law_firm",1);
     return true;
   }
-  if(await redis.sIsMember(ENRICHED_SET,key))return false;
+  const alreadyEnriched=await redis.sIsMember(ENRICHED_SET,key);
+  const needsPhoneHeadcountResearch=
+    !String(lead.website||lead.website_url||"").trim() &&
+    isUsableLawPhone(lead.phone) &&
+    lead.attorney_count_evidence_verified!==true &&
+    lawFirmNameShape(lead)!=="solo";
+  // A record being "enriched" under the old email-first campaign must not block
+  // the new phone-first headcount pass. Re-open callable no-site firms until
+  // firm size is actually proved.
+  if(alreadyEnriched&&!needsPhoneHeadcountResearch)return false;
+  if(alreadyEnriched&&needsPhoneHeadcountResearch){
+    await redis.sRem(ENRICHED_SET,key);
+    await redis.hIncrBy(STATS,"phone_first_reopened_enriched",1);
+  }
 
   let durableHeadcountEvidence=null;
   try{
