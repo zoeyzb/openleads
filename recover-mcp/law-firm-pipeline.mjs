@@ -1513,6 +1513,65 @@ async function directDirectorySizeEvidence(lead={},key=""){
   await redis.hIncrBy(STATS,"direct_directory_size_ambiguous",1);
   return {count:0,source:"",website:verifiedWebsite};
 }
+async function directFloridaFirmRosterHeadcountEvidence(lead={},key=""){
+  if(normalizedStateCode(lead)!=="FL")return {count:0,source:""};
+  const rawFirm=String(lead.name||lead.title||"").replace(/["']/g," ").replace(/\s+/g," ").trim();
+  if(rawFirm.length<4)return {count:0,source:""};
+  const city=normalizedLeadCity(lead);
+  const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+  const variants=[...new Set([
+    rawFirm,
+    rawFirm.replace(/\b(?:attorneys?\s+at\s+law|law\s+offices?|law\s+firm|llc|pllc|p\.?a\.?|p\.?c\.?|llp|apc)\b/gi," ")
+      .replace(/[,.;]+/g," ").replace(/\s+/g," ").trim()
+  ].filter(x=>x.length>=4))].slice(0,2);
+
+  for(const firm of variants){
+    try{
+      await redis.hIncrBy(STATS,"florida_firm_roster_attempt",1);
+      const searchUrl="https://www.floridabar.org/directories/find-mbr/?lName=&lNameSdx=N&fName=&fNameSdx=N&eligible=N&deceased=N&firm="+
+        encodeURIComponent(firm)+"&locValue="+encodeURIComponent(city)+"&locType=C&pracAreas=&lawSchool=&services=&langs=&certValue=&pageNumber=1&pageSize=20";
+      const search=await fetchText(searchUrl,6000);
+      const html=String(search?.html||"");
+      const links=[];
+      for(const m of html.matchAll(/href=["']([^"']*\/directories\/find-mbr\/profile\/\?[^"']*num=\d+[^"']*)["']/gi)){
+        try{
+          const href=new URL(String(m[1]||""),searchUrl).href.split("#")[0];
+          if(!links.includes(href))links.push(href);
+        }catch{}
+      }
+      if(!links.length)continue;
+
+      const pages=await Promise.allSettled(links.slice(0,11).map(async url=>{
+        const page=await fetchText(url,5000);
+        const text=stripHtml(String(page?.html||"")).slice(0,60000);
+        if(!text)return null;
+        const norm=normalize(text);
+        const digits=text.replace(/\D/g,"");
+        const fullFirm=normalize(rawFirm);
+        const firmTokens=leadNameTokens(lead).filter(t=>t.length>=4);
+        const tokenHits=firmTokens.filter(t=>norm.includes(t)).length;
+        const firmMatch=(fullFirm.length>=8&&norm.includes(fullFirm)) ||
+          (firmTokens.length>=2&&tokenHits>=Math.min(2,firmTokens.length));
+        const phoneMatch=Boolean(phone&&digits.includes(phone));
+        return (phoneMatch||firmMatch)?url:null;
+      }));
+      const matched=[...new Set(pages.filter(x=>x.status==="fulfilled"&&x.value).map(x=>x.value))];
+      if(matched.length){
+        const count=matched.length>10?11:matched.length;
+        await redis.hIncrBy(STATS,"florida_firm_roster_hit",1);
+        console.log(JSON.stringify({
+          event:"law_florida_firm_roster_headcount_hit",key,name:rawFirm,
+          count,firm,city,source:matched[0]
+        }));
+        return {count,source:matched[0]};
+      }
+    }catch(error){
+      await redis.hIncrBy(STATS,"florida_firm_roster_error",1);
+    }
+  }
+  return {count:0,source:""};
+}
+
 async function phoneRosterHeadcountEvidence(lead={},key=""){
   const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
   if(phone.length!==10)return {count:0,source:""};
@@ -3159,12 +3218,22 @@ async function enrichLead(key,lead){
     // to 14 directory searches per lead before trying exact-phone roster lookup,
     // which made a 10k calling target impossible.
     try{
-      const roster=await phoneRosterHeadcountEvidence(lead,key);
-      if(Number(roster?.count||0)>0&&isPublishedHeadcountSource(String(roster?.source||""),lead)){
-        earlyCount=Number(roster.count);earlySource=String(roster.source);
-        await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster",1);
+      const floridaRoster=await directFloridaFirmRosterHeadcountEvidence(lead,key);
+      if(Number(floridaRoster?.count||0)>0&&isPublishedHeadcountSource(String(floridaRoster?.source||""),lead)){
+        earlyCount=Number(floridaRoster.count);earlySource=String(floridaRoster.source);
+        await redis.hIncrBy(STATS,"phone_first_headcount_florida_firm_roster",1);
       }
-    }catch{await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster_fail",1);}
+    }catch{await redis.hIncrBy(STATS,"phone_first_headcount_florida_firm_roster_fail",1);}
+
+    if(!earlyCount){
+      try{
+        const roster=await phoneRosterHeadcountEvidence(lead,key);
+        if(Number(roster?.count||0)>0&&isPublishedHeadcountSource(String(roster?.source||""),lead)){
+          earlyCount=Number(roster.count);earlySource=String(roster.source);
+          await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster",1);
+        }
+      }catch{await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster_fail",1);}
+    }
 
     if(!earlyCount){
       try{
