@@ -3102,7 +3102,8 @@ function isPublishedHeadcountSource(source="",lead={}){
     const u=new URL(String(source||""));
     const host=u.hostname.toLowerCase().replace(/^www\./,"");
     if(!/^https?:$/.test(u.protocol))return false;
-    if(/(^|\.)(lawyers|martindale|lawyer|findlaw|justia)\.com$/i.test(host))return true;\n    if(/^(?:lawyers\.)?law\.cornell\.edu$/i.test(host)||/^lawyers\.oyez\.org$/i.test(host)||/^lawyers\.lawyerlegion\.com$/i.test(host))return true;
+    if(/(^|\.)(lawyers|martindale|lawyer|findlaw|justia)\.com$/i.test(host))return true;
+    if(/^(?:lawyers\.)?law\.cornell\.edu$/i.test(host)||/^lawyers\.oyez\.org$/i.test(host)||/^lawyers\.lawyerlegion\.com$/i.test(host))return true;
     const expected=expectedBarHost(lead);
     if(expected&&(host===expected||host.endsWith("."+expected)))return true;
     if(normalizedStateCode(lead)==="GA"&&host==="gabar.reliaguide.com")return true;
