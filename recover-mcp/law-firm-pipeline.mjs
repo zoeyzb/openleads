@@ -22,7 +22,7 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
-const EMAIL_METHOD_VERSION="email-v66-yahoo-official-bar-fallback";
+const EMAIL_METHOD_VERSION="email-v67-recovery-diversity-free-mail";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
@@ -787,7 +787,7 @@ async function zeroCostEmailFallback(lead={}){
     });
     const published=(result?.evidence?.found_public_emails||[])
       .map(x=>String(x||"").trim().toLowerCase())
-      .filter(x=>isUsableLawEmail(x)&&!FREE_MAIL_DOMAINS.has(String(x).split("@")[1]||"")&&emailLooksOwnedByLead(x,lead));
+      .filter(x=>emailIdentityStrong(x,lead));
     const best=String(result?.best_email||"").trim().toLowerCase();
     const accepted=best&&published.includes(best)&&Number(result?.confidence||0)>=0.9?[best]:[];
     return {emails:accepted,source:String(result?.evidence?.sources_checked?.[0]||""),name_variant:personName};
@@ -1593,19 +1593,19 @@ async function bingFallback(lead,query,pageBudget=6,key="",wantedEmails=[],deepP
       const hasExpectedBarLink=resultLinks.some(u=>lawSourceRank(u,lead)===0);
       if(targetsExpectedBar&&!hasExpectedBarLink&&normalizedStateCode(lead)!=="CA"){
         try{
-          const yahooUrl="https://search.yahoo.com/search?p="+encodeURIComponent(q);
-          const yahoo=await fetchText(yahooUrl,7000);
-          const yahooLinks=yahooResultLinks(yahoo?.html||"");
-          const expectedYahoo=yahooLinks.filter(u=>lawSourceRank(u,lead)===0);
-          if(expectedYahoo.length){
-            resultLinks=[...new Set([...expectedYahoo,...resultLinks])];
-            await redis.hIncrBy(STATS,"yahoo_expected_bar_query_hit",1);
-            await redis.hIncrBy(STATS,"yahoo_expected_bar_result_links",expectedYahoo.length);
+          const duckUrl="https://html.duckduckgo.com/html/?q="+encodeURIComponent(q);
+          const duck=await fetchText(duckUrl,5000);
+          const duckLinks=[...new Set([...duckResultLinks(duck?.html||""),...markdownResultLinks(duck?.html||"")])];
+          const expectedDuck=duckLinks.filter(u=>lawSourceRank(u,lead)===0);
+          if(expectedDuck.length){
+            resultLinks=[...new Set([...expectedDuck,...resultLinks])];
+            await redis.hIncrBy(STATS,"duck_expected_bar_query_hit",1);
+            await redis.hIncrBy(STATS,"duck_expected_bar_result_links",expectedDuck.length);
           }else{
-            await redis.hIncrBy(STATS,"yahoo_expected_bar_query_miss",1);
+            await redis.hIncrBy(STATS,"duck_expected_bar_query_miss",1);
           }
         }catch{
-          await redis.hIncrBy(STATS,"yahoo_expected_bar_fetch_error",1);
+          await redis.hIncrBy(STATS,"duck_expected_bar_fetch_error",1);
         }
       }
       if(!resultLinks.length&&searchIndex<3){
@@ -2930,7 +2930,7 @@ async function enrichLead(key,lead){
     const highValue=highValueLawResearchLead(lead);
     const soloShape=lawFirmNameShape(lead)==="solo";
     const hasDirectOfficial=directOfficialLinks.length>0;
-    const dualSearch=!soloShape&&!hasDirectOfficial&&(highValue||emailRecoveryPriority(lead)>=5);
+    const dualSearch=!hasDirectOfficial&&((!soloShape&&(highValue||emailRecoveryPriority(lead)>=5))||Number(lead.email_recovery_attempts||0)>=1);
     const effectiveQueries=hasDirectOfficial?bingQueries.slice(0,4):(soloShape?bingQueries.slice(0,5):bingQueries);
     // When an official directory profile is already known, do not burn dozens
     // of generic search requests first. Fetch the authoritative profile plus a
@@ -3003,7 +3003,7 @@ async function enrichLead(key,lead){
   // Independent last-resort discovery lane. Run only after search engines miss,
   // and only when we have a plausible attorney identity. Any result still has
   // to survive exact-source binding below, so this cannot export guessed mail.
-  if(!emails.length&&!researchOwnedWebsite&&attorneyNameVariants(lead).length&&emailRecoveryPriority(lead)>=5){
+  if(!emails.length&&!researchOwnedWebsite&&attorneyNameVariants(lead).length&&(emailRecoveryPriority(lead)>=5||Number(lead.email_recovery_attempts||0)>=1)){
     try{
       const zeroCost=await zeroCostEmailFallback(lead);
       if(zeroCost.emails.length){
