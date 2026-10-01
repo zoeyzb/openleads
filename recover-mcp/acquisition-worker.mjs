@@ -539,26 +539,27 @@ async function persistPermanentQualified(redis, job, leads) {
   if(identities.length){
     await redis.sAdd(campaignLeadSetKey(job),identities);
     if(String(job.search_profile||"")==="law-firm"){
-      // Fast-lane firms whose public name suggests a multi-attorney practice.
-      // Unknown/solo-looking names still remain discoverable, but do not consume
-      // the highest-cost email enrichment slots ahead of better 2-10 candidates.
-      const fast=[],background=[],solo=[];
-      for(const key of identities){
-        const raw=await redis.hGet("recover:leadstore:qualified",key);
-        let lead={};try{lead=raw?JSON.parse(raw):{};}catch{}
-        const shape=lawFirmNameShape(lead);
-        if(shape==="multi"||shape==="firm")fast.push(key);
-        else if(shape==="solo"){
-          // Campaign target is 2-10 attorneys. Keep obvious solos in storage,
-          // but do not spend paid-email enrichment capacity on them.
-          solo.push(key);
-        }else{
-          background.push(key);
-        }
-        if(lead&&typeof lead==="object"&&lead.law_name_shape!==shape){
-          await redis.hSet("recover:leadstore:qualified",key,JSON.stringify({...lead,law_name_shape:shape}));
+      // Batch-read all persisted law leads. The old per-key HGET/HSET loop
+      // serialized hundreds of Redis round trips and could stall a dense city
+      // acquisition for minutes after Maps had already finished.
+      const fast=[],background=[],solo=[],shapeUpdates=[];
+      for(let offset=0;offset<identities.length;offset+=500){
+        const chunk=identities.slice(offset,offset+500);
+        const values=await redis.hmGet("recover:leadstore:qualified",chunk);
+        for(let i=0;i<chunk.length;i++){
+          const key=chunk[i];
+          let lead={};try{lead=values?.[i]?JSON.parse(values[i]):{};}catch{}
+          const shape=lawFirmNameShape(lead);
+          if(shape==="multi"||shape==="firm")fast.push(key);
+          else if(shape==="solo")solo.push(key);
+          else background.push(key);
+          if(lead&&typeof lead==="object"&&lead.law_name_shape!==shape){
+            shapeUpdates.push(key,JSON.stringify({...lead,law_name_shape:shape}));
+          }
         }
       }
+      if(shapeUpdates.length)await redis.hSet("recover:leadstore:qualified",shapeUpdates);
+
       const chicago=/\bchicago\b/i.test(String(job.location||""));
       if(chicago){
         const chicagoCandidates=[...new Set([...fast,...background])];
