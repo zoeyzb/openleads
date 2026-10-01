@@ -1538,6 +1538,10 @@ async function directDirectorySizeEvidence(lead={},key=""){
   const soloHosts=new Set(solo.map(x=>x.host));
   if(explicitSolo||soloHosts.size>=2){
     const chosen=explicitSolo||solo[0];
+    if(lawFirmNameShape(lead)==="multi"){
+      await redis.hIncrBy(STATS,"direct_directory_solo_multi_conflict",1);
+      return {count:0,source:"",website:verifiedWebsite};
+    }
     await redis.hIncrBy(STATS,"direct_directory_size_solo_confirmed",1);
     return {count:1,source:chosen.source,website:verifiedWebsite};
   }
@@ -1740,6 +1744,15 @@ async function directLawyerComSizeEvidence(lead={},key=""){
     // Generic profile-link counts can include recommendations/nearby lawyers.
     const count=officialFirmSizeEstimate(text);
     if(count>0){
+      // A third-party "Firm Size: 1" conflicts with an explicit multi-attorney
+      // business name often enough that it must not terminate strict research.
+      // Keep looking for another directory/official roster; positive 2-10 or
+      // oversized evidence remains usable immediately.
+      if(count===1&&lawFirmNameShape(lead)==="multi"){
+        await redis.hIncrBy(STATS,"direct_lawyercom_solo_multi_conflict",1);
+        console.log(JSON.stringify({event:"law_direct_lawyercom_solo_multi_conflict",key,name:String(lead.name||lead.title||""),source}));
+        continue;
+      }
       await redis.hIncrBy(STATS,"direct_lawyercom_size_hit",1);
       console.log(JSON.stringify({event:"law_direct_lawyercom_size_hit",key,name:String(lead.name||lead.title||""),count,source}));
       return {count,source};
