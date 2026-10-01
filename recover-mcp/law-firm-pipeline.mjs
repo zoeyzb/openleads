@@ -254,6 +254,8 @@ const PRIORITY_PENDING_SET="recover:law-firm:enrich-priority:v3";
 const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
+const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v5-priority-official-roster";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -3207,6 +3209,8 @@ async function enrichLead(key,lead){
         attorney_count_source:earlySource,
         attorney_count_verified_at:new Date().toISOString(),
         headcount_identity_version:HEADCOUNT_IDENTITY_VERSION,
+        phone_headcount_status:"verified",
+        phone_headcount_method_version:PHONE_HEADCOUNT_METHOD_VERSION,
         preferred_firm_size:earlyCount>=2&&earlyCount<=10,
         firm_size_tier:firmSizeTier(earlyCount)
       };
@@ -3314,6 +3318,7 @@ async function enrichLead(key,lead){
         phone_headcount_attempts:attempts,
         phone_headcount_last_at:new Date().toISOString(),
         phone_headcount_status:"unverified",
+        phone_headcount_method_version:PHONE_HEADCOUNT_METHOD_VERSION,
         qualified_lead:false,
         call_ready_lead:false
       };
@@ -4753,9 +4758,12 @@ async function enrichBatch(){
   // Phone-first campaign is nationwide. This compatibility set now contains
   // callable no-site law firms from every market, so headcount gets most of the
   // batch. Email enrichment remains secondary and continues in the leftover slice.
-  const chicagoTarget=Math.min(ENRICH_BATCH,Math.max(24,Math.floor(ENRICH_BATCH*0.8)));
-  const chicagoKeys=await popSetBatch(CHICAGO_PENDING_SET,chicagoTarget);
-  const afterChicago=Math.max(0,ENRICH_BATCH-chicagoKeys.length);
+  const phonePriorityTarget=Math.min(ENRICH_BATCH,Math.max(64,Math.floor(ENRICH_BATCH*0.75)));
+  const phonePriorityKeys=await popSetBatch(PHONE_HEADCOUNT_PRIORITY_SET,phonePriorityTarget);
+  const afterPhonePriority=Math.max(0,ENRICH_BATCH-phonePriorityKeys.length);
+  const chicagoTarget=Math.min(afterPhonePriority,Math.max(16,Math.floor(ENRICH_BATCH*0.2)));
+  const chicagoKeys=afterPhonePriority?await popSetBatch(CHICAGO_PENDING_SET,chicagoTarget):[];
+  const afterChicago=Math.max(0,afterPhonePriority-chicagoKeys.length);
   // PENDING_SET is where source-backed / historically verified email leads are
   // requeued for conversion. Give it half the batch before broad discovery.
   const regularTarget=Math.max(24,Math.floor(ENRICH_BATCH*0.5));
@@ -4770,7 +4778,7 @@ async function enrichBatch(){
   const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(priorityTarget,afterFresh)):[];
   const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
   const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
-  const keys=[...new Set([...chicagoKeys,...regularKeys,...sizeReadyKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
+  const keys=[...new Set([...phonePriorityKeys,...chicagoKeys,...regularKeys,...sizeReadyKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
   await redis.hIncrBy(STATS,"enrich_non_destructive_batch_selected",keys.length);
   let index=0,done=0;
@@ -4786,6 +4794,7 @@ async function enrichBatch(){
         // Redis after the lead had been requeued. Await it directly instead.
         const result=await enrichLead(key,lead);
         await Promise.all([
+          redis.sRem(PHONE_HEADCOUNT_PRIORITY_SET,key),
           redis.sRem(CHICAGO_PENDING_SET,key),
           redis.sRem(SOURCE_PENDING_SET,key),
           redis.sRem(SIZE_READY_PENDING_SET,key),
@@ -4898,10 +4907,15 @@ async function seed(cities){
 
 async function bootstrapPhoneFirstInventory(){
   let scanned=0,callableNoSite=0,queuedHeadcount=0,seededCallReady=0,wrongSizeKnown=0;
-  const pendingChunk=[],readyChunk=[];
+  const pendingChunk=[],priorityChunk=[],readyChunk=[];
   await redis.del(CALL_READY_SET);
 
   const flush=async()=>{
+    if(priorityChunk.length){
+      await redis.sAdd(PHONE_HEADCOUNT_PRIORITY_SET,[...priorityChunk]);
+      queuedHeadcount+=priorityChunk.length;
+      priorityChunk.length=0;
+    }
     if(pendingChunk.length){
       await redis.sAdd(CHICAGO_PENDING_SET,[...pendingChunk]);
       queuedHeadcount+=pendingChunk.length;
@@ -4943,16 +4957,24 @@ async function bootstrapPhoneFirstInventory(){
         if(n>=2&&n<=10)readyChunk.push(entry.field);
         else wrongSizeKnown++;
       }else{
-        pendingChunk.push(entry.field);
+        const exhaustedCurrentMethod=
+          String(lead.phone_headcount_status||"")==="unverified" &&
+          String(lead.phone_headcount_method_version||"")===PHONE_HEADCOUNT_METHOD_VERSION;
+        if(!exhaustedCurrentMethod){
+          const shape=lawFirmNameShape(lead);
+          if(shape==="multi"||shape==="firm")priorityChunk.push(entry.field);
+          else pendingChunk.push(entry.field);
+        }
       }
 
-      if(pendingChunk.length+readyChunk.length>=750)await flush();
+      if(pendingChunk.length+priorityChunk.length+readyChunk.length>=750)await flush();
     }
   }
   await flush();
   console.log(JSON.stringify({
     event:"law_phone_first_fast_bootstrap",
     scanned,callableNoSite,queuedHeadcount,seededCallReady,wrongSizeKnown,
+    headcountPriorityQueue:await redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),
     headcountQueue:await redis.sCard(CHICAGO_PENDING_SET),
     callReady:await redis.sCard(CALL_READY_SET)
   }));
@@ -5036,14 +5058,14 @@ async function enrichmentLoop(){
 async function statusLoop(){
   while(true){
     try{
-      const [qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,phoneHeadcountPending]=await Promise.all([
+      const [qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,phoneHeadcountPriority,phoneHeadcountPending]=await Promise.all([
         redis.sCard(READY_SET),redis.sCard(UNIQUE_ELIGIBLE_SET),redis.sCard(CALL_READY_SET),
         redis.sCard(UNIQUE_VERIFIED_EMAIL_SET),redis.sCard(UNIQUE_VERIFIED_HEADCOUNT_SET),
         redis.sCard(EMAIL_CANDIDATE_SET),redis.sCard(PENDING_SET),
         redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),
-        redis.sCard(SIZE_READY_PENDING_SET),redis.sCard(CHICAGO_PENDING_SET)
+        redis.sCard(SIZE_READY_PENDING_SET),redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),redis.sCard(CHICAGO_PENDING_SET)
       ]);
-      console.log(JSON.stringify({event:"law_firm_pipeline_heartbeat",qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady}));
+      console.log(JSON.stringify({event:"law_firm_pipeline_heartbeat",qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,phoneHeadcountPriority,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady}));
     }catch(error){
       console.error("law_firm_status_loop_error",error?.stack||error?.message||error);
     }
