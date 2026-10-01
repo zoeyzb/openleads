@@ -2940,6 +2940,31 @@ async function enrichLead(key,lead){
   let emailMethod=emails.length?"existing_source_backed":"none";
   if(emailMethod!=="none")await redis.hIncrBy(STATS,"email_existing_hit",1);
 
+  // Fastest conversion path: if the verified email already came from an
+  // official bar profile, reuse that exact page for explicit "Firm Size"
+  // evidence before launching expensive directory/search headcount work.
+  if(!attorneyCountVerified&&existingSourceBacked&&trustedLawSource(existingSource,lead)){
+    try{
+      const profile=await fetchResearchPage(existingSource,lead,key,true);
+      if(profile?.html){
+        const profileUrl=String(profile.final_url||existingSource);
+        const profileText=stripHtml(profile.html).slice(0,60000);
+        if(sourcePageMatchesFirmIdentity(profileText,lead,profileUrl)){
+          const officialCount=officialFirmSizeEstimate(profileText);
+          if(officialCount>0){
+            attorneyCount=officialCount;
+            attorneyCountVerified=true;
+            attorneyCountSource=profileUrl;
+            await redis.hIncrBy(STATS,"official_profile_firm_size_hit",1);
+            console.log(JSON.stringify({event:"law_official_profile_firm_size_hit",key,name:String(lead.name||lead.title||""),count:officialCount,source:profileUrl}));
+          }
+        }
+      }
+    }catch{
+      await redis.hIncrBy(STATS,"official_profile_firm_size_fetch_fail",1);
+    }
+  }
+
   // Recover previously-known emails safely before rediscovering from scratch.
   // The exact address must appear on a matched public page; SERP text never counts.
   if(emailMethod==="none"&&!existingSourceBacked&&existingCandidates.length){
