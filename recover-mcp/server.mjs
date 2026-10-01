@@ -973,8 +973,8 @@ function buildServer() {
       };
       await redis.set(`recover:acq:${id}`, JSON.stringify(job), { EX: 604800 });
       await redis.sAdd("recover:acq:index", id);
-      // Interactive law acquisitions should jump ahead of background seed jobs.
-      if (isLawAcquisition) await redis.lPush("recover:acquisition:queue:law-firm", id);
+      // Law worker uses BRPOP while background seeding LPUSHes, so RPUSH places an interactive job at the next-consumed edge.
+      if (isLawAcquisition) await redis.rPush("recover:acquisition:queue:law-firm", id);
       else await redis.lPush("recover:acquisition:queue", id);
       return jsonText({
         status:"queued",
@@ -1018,7 +1018,7 @@ function buildServer() {
         job.error=null;
         job.updated_at=new Date().toISOString();
         await redis.set(`recover:acq:${acquisition_id}`,JSON.stringify(job),{EX:604800});
-        if(String(job.search_profile||"")==="law-firm") await redis.lPush(queue,acquisition_id);
+        if(String(job.search_profile||"")==="law-firm") await redis.rPush(queue,acquisition_id);
         else await redis.lPush(queue,acquisition_id);
       }
 
@@ -1034,7 +1034,7 @@ function buildServer() {
           "recover:acquisition:queue:ny-priority",
           "recover:acquisition:queue:law-firm"
         ]) await redis.lRem(q,0,acquisition_id);
-        await redis.lPush("recover:acquisition:queue:law-firm",acquisition_id);
+        await redis.rPush("recover:acquisition:queue:law-firm",acquisition_id);
         job.phase="law_queue_prioritized";
         job.updated_at=new Date().toISOString();
         await redis.set(`recover:acq:${acquisition_id}`,JSON.stringify(job),{EX:604800});
@@ -1057,7 +1057,7 @@ function buildServer() {
         job.error=null;
         job.updated_at=new Date().toISOString();
         await redis.set(`recover:acq:${acquisition_id}`,JSON.stringify(job),{EX:604800});
-        await redis.lPush("recover:acquisition:queue:law-firm",acquisition_id);
+        await redis.rPush("recover:acquisition:queue:law-firm",acquisition_id);
       }
 
       return jsonText({
