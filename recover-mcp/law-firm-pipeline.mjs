@@ -29,7 +29,7 @@ const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
 const CHICAGO_HEADCOUNT_RECOVERY_KEY="recover:law-firm:chicago-headcount-recovery-version";
 const ASSOCIATION_DOCKET_RECOVERY_VERSION="association-docket-v6-firm-owner-guard";
 const ASSOCIATION_DOCKET_RECOVERY_KEY="recover:law-firm:association-docket-recovery-version";
-const SIZE_READY_WEBSITE_AUDIT_VERSION="size-ready-website-audit-v4-fast-domain-probe";
+const SIZE_READY_WEBSITE_AUDIT_VERSION="size-ready-website-audit-v5-consistency";
 const SIZE_READY_WEBSITE_AUDIT_KEY="recover:law-firm:size-ready-website-audit-version";
 const MX_CACHE=new Map();
 async function hasMailExchange(email=""){
@@ -2831,7 +2831,7 @@ async function enrichLead(key,lead){
   if(!isLawFirmLead(lead)){
     await redis.sAdd(ENRICHED_SET,key);
     await redis.sAdd(REJECTED_SET,key);
-    await Promise.all([redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key)]);
+    await Promise.all([redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)]);
     await redis.hIncrBy(STATS,"rejected_not_law_firm",1);
     return true;
   }
@@ -2907,7 +2907,7 @@ async function enrichLead(key,lead){
   if(/^https?:\/\//i.test(website)){
     await redis.sAdd(ENRICHED_SET,key);
     await redis.sAdd(REJECTED_SET,key);
-    await Promise.all([redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(CHICAGO_PENDING_SET,key)]);
+    await Promise.all([redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key),redis.sRem(CHICAGO_PENDING_SET,key)]);
     await redis.hIncrBy(STATS,"rejected_has_website",1);
     return true;
   }
@@ -2948,6 +2948,7 @@ async function enrichLead(key,lead){
       await Promise.all([
         redis.sRem(READY_SET,key),
         redis.sRem(EMAIL_CANDIDATE_SET,key),
+        redis.sRem(UNIQUE_ELIGIBLE_SET,key),
         redis.sRem(CHICAGO_PENDING_SET,key)
       ]);
       await redis.sAdd(REJECTED_SET,key);
@@ -3245,7 +3246,7 @@ async function enrichLead(key,lead){
   if(researchOwnedWebsite){
     const updated={...lead,website:researchOwnedWebsite,website_opportunity:"website_refresh",owned_website_evidence_source:"research_identity_match",law_email_enrich_version:EMAIL_METHOD_VERSION};
     await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
-    await Promise.all([redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key)]);
+    await Promise.all([redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)]);
     await redis.sAdd(REJECTED_SET,key);
     await redis.sAdd(ENRICHED_SET,key);
     await redis.hIncrBy(STATS,"owned_website_research_hit",1);
@@ -3358,7 +3359,7 @@ async function enrichLead(key,lead){
     if(earlyDomainWebsite){
       const updated={...lead,website:earlyDomainWebsite,website_opportunity:"website_refresh",owned_website_evidence_source:"verified_email_domain",law_email_enrich_version:EMAIL_METHOD_VERSION};
       await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
-      await Promise.all([redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key)]);
+      await Promise.all([redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)]);
       await redis.sAdd(REJECTED_SET,key);
       await redis.sAdd(ENRICHED_SET,key);
       await redis.hIncrBy(STATS,"owned_website_verified_email_hit",1);
@@ -3378,6 +3379,7 @@ async function enrichLead(key,lead){
       await Promise.all([
         redis.sRem(READY_SET,key),
         redis.sRem(EMAIL_CANDIDATE_SET,key),
+        redis.sRem(UNIQUE_ELIGIBLE_SET,key),
         redis.sRem(CHICAGO_PENDING_SET,key)
       ]);
       await redis.sAdd(REJECTED_SET,key);
@@ -3574,6 +3576,7 @@ async function enrichLead(key,lead){
     await redis.hSet(LEAD_HASH,key,JSON.stringify(recoverable));
     await Promise.all([
       redis.sRem(READY_SET,key),
+      redis.sRem(UNIQUE_ELIGIBLE_SET,key),
       redis.sRem(REJECTED_SET,key),
       redis.sRem(ENRICHED_SET,key),
       redis.sAdd(RECOVERABLE_PENDING_SET,key)
@@ -3599,7 +3602,8 @@ async function enrichLead(key,lead){
       redis.hIncrBy("recover:law-firm:qualified-by-day:v3",day,1)
     ]);
   }else{
-    await redis.sRem(READY_SET,key);await redis.sAdd(REJECTED_SET,key);
+    await Promise.all([redis.sRem(READY_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)]);
+    await redis.sAdd(REJECTED_SET,key);
     if(!emails.length||!emailSourceVerified) await redis.hIncrBy(STATS,"rejected_no_verified_email",1);
     else if(!attorneyCountVerified) await redis.hIncrBy(STATS,"rejected_unverified_attorney_count",1);
     else if(!preferredSize) await redis.hIncrBy(STATS,"rejected_wrong_size",1);
@@ -4393,11 +4397,10 @@ async function enrichBatch(){
         const raw=await redis.hGet(LEAD_HASH,key);
         if(!raw)continue;
         let lead;try{lead=JSON.parse(raw)||{};}catch{continue;}
-        const jobTimeoutMs=Math.max(30000,Math.min(120000,Number(process.env.LAW_FIRM_ENRICH_JOB_TIMEOUT_MS||75000)));
-        const result=await Promise.race([
-          enrichLead(key,lead),
-          new Promise((_,reject)=>setTimeout(()=>reject(new Error("enrich_job_timeout_"+jobTimeoutMs)),jobTimeoutMs))
-        ]);
+        // Every fetch inside enrichLead is independently bounded. An outer
+        // Promise.race did not cancel enrichLead, so timed-out work kept mutating
+        // Redis after the lead had been requeued. Await it directly instead.
+        const result=await enrichLead(key,lead);
         await Promise.all([
           redis.sRem(CHICAGO_PENDING_SET,key),
           redis.sRem(SOURCE_PENDING_SET,key),
