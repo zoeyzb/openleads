@@ -5327,6 +5327,19 @@ async function seedLawyersComDirectory(cities=[]){
       rawCandidates.push(...extractLawyersComDirectoryCandidates(page.html,page.url,area));
     }
     directPages+=pageVia.direct||0;jinaPages+=pageVia.jina||0;scraplingPages+=pageVia.scrapling||0;
+    if(!rawCandidates.length){
+      const diagnosticPage=pages.find(page=>page?.html&&/Law\s+(?:Firm|Office)\s+with\s+\d{1,2}\s+lawyers?/i.test(String(page.html)));
+      if(diagnosticPage){
+        const raw=String(diagnosticPage.html);
+        const m=/Law\s+(?:Firm|Office)\s+with\s+\d{1,2}\s+lawyers?/i.exec(raw);
+        const idx=m?.index||0;
+        console.log(JSON.stringify({
+          event:"law_directory_parse_diagnostic",
+          url:diagnosticPage.url,via:diagnosticPage.via||"",
+          excerpt:raw.slice(Math.max(0,idx-1800),Math.min(raw.length,idx+900)).replace(/\s+/g," ").slice(0,2700)
+        }));
+      }
+    }
     const byPhone=new Map();
     for(const item of rawCandidates){
       const phone=normalizeLawPhone(item.phone);
