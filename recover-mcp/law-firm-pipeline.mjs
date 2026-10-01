@@ -1255,7 +1255,7 @@ function linksFrom(base,html=""){
 }
 function directoryRosterCount(html="",source="",lead={}){
   const host=hostOf(source);
-  if(!/(^|\.)(?:lawyers|martindale|lawyer|findlaw)\.com$/i.test(host))return 0;
+  if(!(/(^|\.)(?:lawyers|martindale|lawyer|findlaw)\.com$/i.test(host)||/^(?:lawyers\.)?law\.cornell\.edu$/i.test(host)||/^lawyers\.oyez\.org$/i.test(host)||/^lawyers\.lawyerlegion\.com$/i.test(host)))return 0;
   const names=[];
   const seen=new Set();
   for(const m of String(html||"").matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{1,180}?)<\/a>/gi)){
@@ -1277,6 +1277,30 @@ function directoryRosterCount(html="",source="",lead={}){
   // is positive solo evidence, not "unknown". Returning 1 lets the strict 2-10
   // gate reject it instead of keeping it forever as an unresolved candidate.
   return names.length>=1?names.length:0;
+}
+
+function strictFirmPageRosterCount(html="",source="",lead={}){
+  const raw=String(html||"");
+  if(!raw)return 0;
+  const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+  if(!phone||!raw.replace(/\D/g,"").includes(phone))return 0;
+  if(!strictDirectoryFirmIdentity(raw,source,lead))return 0;
+
+  // Count only links inside an explicit attorney/team section. This avoids
+  // nearby/recommended-lawyer modules that made the old whole-page roster count unsafe.
+  const heading=/<h([2-4])\b[^>]*>\s*(?:<[^>]+>\s*)*(?:attorneys?|lawyers?|our\s+team|professionals?|people)(?:\s*<[^>]+>)*\s*<\/h\1>/ig;
+  let best=0,m;
+  while((m=heading.exec(raw))){
+    const level=m[1];
+    const start=m.index+m[0].length;
+    const tail=raw.slice(start,start+120000);
+    const next=new RegExp("<h"+level+"\\b","i").exec(tail);
+    const section=next?tail.slice(0,next.index):tail.slice(0,50000);
+    const count=directoryRosterCount(section,source,lead);
+    if(count>best)best=count;
+    if(best>10)return 11;
+  }
+  return best;
 }
 
 function officialFirmSizeEstimate(text=""){
@@ -1469,7 +1493,7 @@ async function directDirectorySizeEvidence(lead={},key=""){
   const phonePretty=phone.length===10?phone.slice(0,3)+"-"+phone.slice(3,6)+"-"+phone.slice(6):"";
   const city=normalizedLeadCity(lead);
   const state=normalizedStateCode(lead)||String(lead.region||lead.state||"").trim();
-  const hosts=["lawyers.com","martindale.com","findlaw.com","lawyer.com","justia.com"];
+  const hosts=["lawyers.com","martindale.com","findlaw.com","lawyer.com","justia.com","lawyers.law.cornell.edu","lawyers.oyez.org","lawyers.lawyerlegion.com"];
 
   // Two broad exact-identity searches replace the old 14-query sequential loop.
   // They surface the same public directories while keeping one lead bounded to
@@ -1521,16 +1545,17 @@ async function directDirectorySizeEvidence(lead={},key=""){
       const profileIdentity=(phoneMatch&&cityMatch)?directoryAttorneyIdentity(page.html,lead):"";
       if(!firmIdentityMatch&&!profileIdentity)return null;
 
-      // Prefer an explicit "Firm Size" field. Broader text regexes can see
-      // unrelated recommended-lawyer counts elsewhere on directory pages.
+      // Prefer explicit Firm Size, otherwise count unique attorney profile
+      // links only inside the dedicated firm's Attorneys/Team section.
       const explicitCount=firmIdentityMatch?officialFirmSizeEstimate(text):0;
-      const count=explicitCount;
+      const firmRosterCount=firmIdentityMatch?strictFirmPageRosterCount(page.html,source,lead):0;
+      const count=explicitCount>0?explicitCount:firmRosterCount;
       let website="";
       if(firmIdentityMatch){
         const websiteCandidate=outboundFirmWebsiteFromDirectory(page.html,lead);
         if(websiteCandidate)website=await verifyOwnedWebsiteCandidate(websiteCandidate,lead);
       }
-      return {count,source,host,explicit:explicitCount>0,website,profileIdentity,phoneMatch,cityMatch};
+      return {count,source,host,explicit:explicitCount>0,firmRoster:firmRosterCount>0,website,profileIdentity,phoneMatch,cityMatch};
     }catch{return null;}
   }));
 
@@ -3077,7 +3102,7 @@ function isPublishedHeadcountSource(source="",lead={}){
     const u=new URL(String(source||""));
     const host=u.hostname.toLowerCase().replace(/^www\./,"");
     if(!/^https?:$/.test(u.protocol))return false;
-    if(/(^|\.)(lawyers|martindale|lawyer|findlaw|justia)\.com$/i.test(host))return true;
+    if(/(^|\.)(lawyers|martindale|lawyer|findlaw|justia)\.com$/i.test(host))return true;\n    if(/^(?:lawyers\.)?law\.cornell\.edu$/i.test(host)||/^lawyers\.oyez\.org$/i.test(host)||/^lawyers\.lawyerlegion\.com$/i.test(host))return true;
     const expected=expectedBarHost(lead);
     if(expected&&(host===expected||host.endsWith("."+expected)))return true;
     if(normalizedStateCode(lead)==="GA"&&host==="gabar.reliaguide.com")return true;
