@@ -1574,11 +1574,14 @@ async function directDirectorySizeEvidence(lead={},key=""){
   // They surface the same public directories while keeping one lead bounded to
   // a handful of network calls, which is required for a 10k calling pipeline.
   const queries=[...new Set([
-    ...(phonePretty?[`"${phonePretty}" attorney lawyer`,`"${phonePretty}" "firm size"`]:[]),
-    `site:lawyers.com "${name}" "${city}" "${state}"`.trim(),
-    `site:martindale.com "${name}" "${city}" "${state}"`.trim(),
-    `"${name}" "${state}" attorneys lawyers`.trim(),
-    `"${name}" "${city}" "${state}" "firm size"`.trim()
+    ...(phonePretty?[
+      `"${phonePretty}" "firm size"`,
+      `site:lawyers.com "${phonePretty}" "Law Office with"`
+    ]:[]),
+    `site:lawyers.com "${name}" "Law Office with" lawyers`.trim(),
+    `site:lawyer.com/firm "${name}" "Firm Size"`.trim(),
+    `site:martindale.com "${name}" "Firm Size"`.trim(),
+    `site:findlaw.com "${name}" "${city}" "${state}" attorneys`.trim()
   ].filter(Boolean))].slice(0,6);
 
   const searchResults=await Promise.allSettled(queries.map(async query=>{
