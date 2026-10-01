@@ -1,7 +1,7 @@
 import { createSign } from "node:crypto";
-import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, qualifiesNoWebsiteLawLead, isUsableLawEmail, isLawFirmLead } from "./law-firm-targeting.mjs";
+import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, qualifiesCallReadyNoWebsiteLawLead, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
 
-// Law sheet sync deploy rev: email-first-v2
+// Law sheet sync deploy rev: phone-first-call-ready-v1
 const TOKEN_URL="https://oauth2.googleapis.com/token";
 const SHEETS_API="https://sheets.googleapis.com/v4/spreadsheets";
 const SCOPE="https://www.googleapis.com/auth/spreadsheets";
@@ -71,7 +71,9 @@ function typeLabel(keys=[],evidence=""){
 }
 async function collectRows(redis){
   const out=[];
-  const readyKeys=await redis.sMembers("recover:law-firm:qualified:v3");
+  // Phone-first call list: use the durable verified-headcount cohort, then require
+  // a usable public phone and no owned website. Email is optional here.
+  const readyKeys=await redis.sMembers("recover:law-firm:unique-verified-headcount:v1");
   for(let offset=0;offset<readyKeys.length;offset+=250){
     const keys=readyKeys.slice(offset,offset+250);
     const values=await redis.hmGet("recover:leadstore:qualified",keys);
@@ -80,16 +82,17 @@ async function collectRows(redis){
       let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
       const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
       if(!isLaw||!isLawFirmLead(lead))continue;
-      const website=clean(lead.website||lead.website_url);
-      if(/^https?:\/\//i.test(website))continue;
+      if(!qualifiesCallReadyNoWebsiteLawLead(lead))continue;
+
+      const phone=clean(lead.phone);
+      if(!isUsableLawPhone(phone))continue;
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
         .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
+      const emailSource=clean(lead.law_email_source||lead.email_source||lead.email_evidence_url);
       const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
+      const emailReady=Boolean(emails.length&&sourceVerified&&!sourceIsOwnedEmailDomain(emailSource,emails[0]));
       const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
-      const sizeEvidenceVerified=lead.attorney_count_evidence_verified===true;
-      if(!emails.length||!sourceVerified||!sizeEvidenceVerified||attorneyCount<2||attorneyCount>10)continue;
-
       const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const practiceKeys=[...new Set([
         ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
@@ -99,34 +102,38 @@ async function collectRows(redis){
       const type=typeLabel(practiceKeys,evidence);
       const name=clean(lead.name||lead.title);
       const {city,state}=parseLocation(lead);
-      const rating=Number(lead.review_rating||lead.rating||0);
-      const reviews=Number(lead.review_count||lead.reviews||0);
-      const quality=clean(lead.personalization_quality).toLowerCase();
-      let personal="",source=clean(lead.law_email_source);
-      if(clean(lead.personalization_fact)&&quality==="specific"){
-        personal=clean(lead.personalization_fact);
-        if(!source)source=clean(lead.personalization_source);
-      }else if(reviews>=5&&rating>0){
-        personal=`${name} has ${reviews} Google reviews at about ${rating.toFixed(1)} stars${city?` in ${city}`:""}`;
-        if(!source)source=clean(lead.google_maps_url||lead.maps_url);
-      }
-      if(!source)source=clean(lead.personalization_source||lead.google_maps_url||lead.maps_url);
-      const contextType=type==="Needs Classification"?"law":(type||"law");
-      const context=city?`${contextType} firms in ${city}`:`${contextType} firms`;
-      const opener=personal
-        ? `I found ${name} while looking at ${context}. ${personal.replace(/^I noticed\s+/i,"")}. I couldn't find a firm website, so I wanted to reach out.`
-        : `I found ${name} while looking at ${context}, but I couldn't find a firm website, so I wanted to reach out.`;
+      const priority=Number(lead.lead_priority_score||0)||0;
+      const personal=clean(lead.personalization_fact);
+      const maps=clean(lead.google_maps_url||lead.maps_url);
+      const source=emailReady?emailSource:clean(lead.attorney_count_source||lead.personalization_source||maps);
       out.push({
-        priority:Number(lead.lead_priority_score||0)||0,
-        email:emails[0]||"",
-        row:[type,name,emails[0]||"",clean(lead.phone),city,state,personal,source,opener,
-          attorneyCount,clean(lead.firm_size_tier)||String(attorneyCount),
-          rating||"",reviews||"",clean(lead.google_maps_url||lead.maps_url),
-          Number(lead.lead_priority_score||0)||"","Ready"]
+        priority,
+        emailReady,
+        identity:normalizeLawPhone(phone),
+        row:[
+          type,
+          name,
+          phone,
+          "Usable",
+          emailReady?emails[0]:"",
+          emailReady?"Source-verified":"Optional / not verified",
+          city,
+          state,
+          attorneyCount,
+          clean(lead.attorney_count_source),
+          clean(lead.address),
+          maps,
+          priority||"",
+          personal,
+          source,
+          "Yes",
+          emailReady?"Yes":"No",
+          "New"
+        ]
       });
     }
   }
-  out.sort((a,b)=>b.priority-a.priority||String(a.row[1]).localeCompare(String(b.row[1])));
+  out.sort((a,b)=>b.priority-a.priority||Number(b.emailReady)-Number(a.emailReady)||String(a.row[1]).localeCompare(String(b.row[1])));
   return out;
 }
 
@@ -250,7 +257,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
   if(!enabled||!spreadsheetId)return;
   const sa=serviceAccount(serviceAccountJson);
   if(!sa){console.error("law_sheet_sync_not_configured");return;}
-  let token="",tokenAt=0,running=false,sheetId=null,tabName="Qualified Leads";
+  let token="",tokenAt=0,running=false,sheetId=null,tabName="Call Ready Leads";
 
   async function auth(){
     if(token&&Date.now()-tokenAt<50*60*1000)return token;
@@ -275,7 +282,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       return;
     }
     if(!target){
-      const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title:tabName,rowCount:100,columnCount:16}}}]}});
+      const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title:tabName,rowCount:100,columnCount:18}}}]}});
       sheetId=made.replies?.[0]?.addSheet?.properties?.sheetId;
       return;
     }
@@ -331,18 +338,19 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       const json=await request(`/values/${range}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`);
       const rows=json.values||[];
       const headers=(rows[0]||[]).map(clean);
-      const emailIndex=headers.indexOf("Email");
+      const phoneIndex=headers.indexOf("Phone");
       const statusIndex=headers.indexOf("Status");
       const map=new Map();
-      if(emailIndex<0||statusIndex<0)return map;
+      if(phoneIndex<0||statusIndex<0)return map;
       for(const row of rows.slice(1)){
-        const email=clean(row[emailIndex]).toLowerCase();
+        const identity=normalizeLawPhone(row[phoneIndex]);
         const status=clean(row[statusIndex]);
-        if(email&&status)map.set(email,status);
+        if(identity&&status)map.set(identity,status);
       }
       return map;
     }catch{return new Map();}
   }
+
   async function sync(){
     if(running)return;running=true;
     try{
@@ -350,7 +358,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       const statuses=await previousStatuses();
       const redis=await getRedis();
       const leads=await collectRows(redis);
-      for(const item of leads){if(statuses.has(item.email))item.row[15]=statuses.get(item.email);}
+      for(const item of leads){if(statuses.has(item.identity))item.row[17]=statuses.get(item.identity);}
 
       // Keep source-verified no-website email inventory visible even while
       // attorney-count evidence is still pending. This tab is research inventory,
@@ -363,23 +371,23 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
         if(candidateStatuses.has(item.email)&&item.row[15]!=="Ready")item.row[15]=candidateStatuses.get(item.email);
       }
       await writeRowsToTab(candidateTitle,candidateSheetId,emailCandidates);
-      const headers=["Type","Firm","Email","Phone","City","State","Personal Angle","Source","Opener","Attorneys","Firm Size","Rating","Reviews","Maps","Priority","Status"];
+      const headers=["Type","Firm","Phone","Phone Status","Email","Email Status","City","State","Attorneys","Headcount Source","Address","Maps","Priority","Personal Angle","Source","Call Ready","Email Eligible","Status"];
       const values=[headers,...leads.map(x=>x.row)];
       const endRow=Math.max(2,values.length),rowCount=Math.max(10,endRow+1);
       await request(`/values/${encodeURIComponent(`'${tabName}'!A1:R${Math.max(5000,endRow)}`)}:clear`,{method:"POST",body:{}});
-      await request(`/values/${encodeURIComponent(`'${tabName}'!A1:P${endRow}`)}?valueInputOption=RAW`,{method:"PUT",body:{range:`'${tabName}'!A1:P${endRow}`,majorDimension:"ROWS",values}});
-      const widths=[125,175,185,112,100,55,190,145,235,65,90,58,58,145,58,85];
+      await request(`/values/${encodeURIComponent(`'${tabName}'!A1:R${endRow}`)}?valueInputOption=RAW`,{method:"PUT",body:{range:`'${tabName}'!A1:R${endRow}`,majorDimension:"ROWS",values}});
+      const widths=[125,190,120,95,190,120,100,60,72,190,235,150,60,210,180,80,90,90];
       const requests=[
-        {updateSheetProperties:{properties:{sheetId,gridProperties:{rowCount,columnCount:16,frozenRowCount:1}},fields:"gridProperties(rowCount,columnCount,frozenRowCount)"}},
-        {updateCells:{range:{sheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:16},rows:[{values:Array.from({length:16},()=>({userEnteredFormat:{backgroundColor:{red:0.10,green:0.13,blue:0.18},textFormat:{foregroundColor:{red:1,green:1,blue:1},bold:true,fontSize:10},verticalAlignment:"MIDDLE",wrapStrategy:"WRAP"}}))}],fields:"userEnteredFormat"}},
+        {updateSheetProperties:{properties:{sheetId,gridProperties:{rowCount,columnCount:18,frozenRowCount:1}},fields:"gridProperties(rowCount,columnCount,frozenRowCount)"}},
+        {updateCells:{range:{sheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:18},rows:[{values:Array.from({length:18},()=>({userEnteredFormat:{backgroundColor:{red:0.10,green:0.13,blue:0.18},textFormat:{foregroundColor:{red:1,green:1,blue:1},bold:true,fontSize:10},verticalAlignment:"MIDDLE",wrapStrategy:"WRAP"}}))}],fields:"userEnteredFormat"}},
         {updateDimensionProperties:{range:{sheetId,dimension:"ROWS",startIndex:0,endIndex:1},properties:{pixelSize:30},fields:"pixelSize"}},
-        {setDataValidation:{range:{sheetId,startRowIndex:1,endRowIndex:rowCount,startColumnIndex:15,endColumnIndex:16},rule:{condition:{type:"ONE_OF_LIST",values:["New","Review","Ready","Contacted","Skip"].map(userEnteredValue=>({userEnteredValue}))},strict:false,showCustomUi:true}}},
-        {setBasicFilter:{filter:{range:{sheetId,startRowIndex:0,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:16}}}}
+        {setDataValidation:{range:{sheetId,startRowIndex:1,endRowIndex:rowCount,startColumnIndex:17,endColumnIndex:18},rule:{condition:{type:"ONE_OF_LIST",values:["New","Review","Contacted","Interested","Follow Up","Skip"].map(userEnteredValue=>({userEnteredValue}))},strict:false,showCustomUi:true}}},
+        {setBasicFilter:{filter:{range:{sheetId,startRowIndex:0,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:18}}}}
       ];
       widths.forEach((pixelSize,i)=>requests.push({updateDimensionProperties:{range:{sheetId,dimension:"COLUMNS",startIndex:i,endIndex:i+1},properties:{pixelSize},fields:"pixelSize"}}));
       requests.push(
         {updateDimensionProperties:{range:{sheetId,dimension:"ROWS",startIndex:1,endIndex:rowCount},properties:{pixelSize:28},fields:"pixelSize"}},
-        {repeatCell:{range:{sheetId,startRowIndex:1,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:16},cell:{userEnteredFormat:{verticalAlignment:"MIDDLE",wrapStrategy:"CLIP",textFormat:{fontSize:9}}},fields:"userEnteredFormat(verticalAlignment,wrapStrategy,textFormat.fontSize)"}}
+        {repeatCell:{range:{sheetId,startRowIndex:1,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:18},cell:{userEnteredFormat:{verticalAlignment:"MIDDLE",wrapStrategy:"CLIP",textFormat:{fontSize:9}}},fields:"userEnteredFormat(verticalAlignment,wrapStrategy,textFormat.fontSize)"}}
       );
       await request(":batchUpdate",{method:"POST",body:{requests}});
       console.log(JSON.stringify({event:"law_sheet_sync",rows:leads.length,emailCandidateRows:emailCandidates.length,spreadsheetId,tabName,candidateTitle}));
