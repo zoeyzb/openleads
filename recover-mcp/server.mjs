@@ -1027,7 +1027,7 @@ function buildServer() {
       const lawJob=String(job.search_profile||"")==="law-firm";
       const queuedAge=Date.now()-Date.parse(job.updated_at||job.created_at||0);
       if(lawJob && job.status==="queued" && queuedAge>30000 &&
-         ["requeued_after_restart","stale_requeued","queued"].includes(String(job.phase||""))){
+         ["requeued_after_restart","stale_requeued","queued","law_queue_repaired"].includes(String(job.phase||""))){
         for(const q of [
           "recover:acquisition:queue",
           "recover:acquisition:queue:us-city-priority",
@@ -1035,7 +1035,7 @@ function buildServer() {
           "recover:acquisition:queue:law-firm"
         ]) await redis.lRem(q,0,acquisition_id);
         await redis.lPush("recover:acquisition:queue:law-firm",acquisition_id);
-        job.phase="law_queue_repaired";
+        job.phase="law_queue_prioritized";
         job.updated_at=new Date().toISOString();
         await redis.set(`recover:acq:${acquisition_id}`,JSON.stringify(job),{EX:604800});
       }
