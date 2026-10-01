@@ -4758,7 +4758,11 @@ async function seed(cities){
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"bootstrap_existing"}));
 await bootstrapExistingQualified();
 await normalizeEmailQueues();
-await cleanupEmailCandidateSet();
+// Email is bonus for the calling campaign. Do not block the entire production
+// pipeline on expensive candidate cleanup before headcount workers can start.
+setTimeout(()=>{
+  void cleanupEmailCandidateSet().catch(error=>console.error("law_email_candidate_cleanup_error",error?.message||error));
+},5*60*1000).unref?.();
 startLawLeadSheetSync({
   getRedis:async()=>redis,
   serviceAccountJson:GOOGLE_SERVICE_ACCOUNT_JSON,
