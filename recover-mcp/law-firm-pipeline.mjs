@@ -20,8 +20,8 @@ const TARGET_TOTAL=Math.max(100,Number(process.env.LAW_FIRM_TARGET_TOTAL||25000)
 const MAX_CITIES=Math.max(50,Number(process.env.LAW_FIRM_MAX_CITIES||1200));
 const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_HIGH_WATER||24)));
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
-const ENRICH_BATCH=Math.max(1,Math.min(128,Number(process.env.LAW_FIRM_ENRICH_BATCH||64)));
-const ENRICH_CONCURRENCY=Math.max(1,Math.min(40,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||20)));
+const ENRICH_BATCH=Math.max(1,Math.min(256,Number(process.env.LAW_FIRM_ENRICH_BATCH||96)));
+const ENRICH_CONCURRENCY=Math.max(1,Math.min(80,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||32)));
 const EMAIL_METHOD_VERSION="email-v67-recovery-diversity-free-mail";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
@@ -433,7 +433,13 @@ async function loadCities(){
       if(!byState.has(row.state))byState.set(row.state,[]);
       byState.get(row.state).push(row);
     }
-    const states=[...byState.keys()].sort();
+    const sourceRich=["FL","TX","CA","GA","IL","NC","WA"];
+    const sourceRank=new Map(sourceRich.map((state,index)=>[state,index]));
+    const states=[...byState.keys()].sort((a,b)=>{
+      const ar=sourceRank.has(a)?sourceRank.get(a):999;
+      const br=sourceRank.has(b)?sourceRank.get(b):999;
+      return ar-br||a.localeCompare(b);
+    });
     const out=[];
     let remaining=true;
     while(remaining){
@@ -1167,6 +1173,32 @@ function contextualEmails(text="",lead={},sourceUrl=""){
   const fullPageMatch=pageMatchesLead(raw,lead,sourceUrl);
   const fullPhoneMatch=contextHasExactPhone(raw,lead);
   const trustedSource=trustedLawSource(sourceUrl,lead);
+
+  // On an identity-matched official bar/court profile, the exact office phone
+  // plus a published non-directory email is strong source binding even when the
+  // mailbox is free-mail or the firm's domain is an acronym. This recovers
+  // legitimate profile emails that the generic local-part heuristic rejected.
+  if(trustedSource&&fullPageMatch&&fullPhoneMatch&&uniqueAll.length<=3){
+    const sourceHost=hostOf(sourceUrl);
+    const expectedHost=expectedBarHost(lead);
+    const trustedProfileEmails=uniqueAll.filter(email=>{
+      const domain=String(email).split("@")[1]?.toLowerCase()||"";
+      if(!domain)return false;
+      if(sourceHost&&(domain===sourceHost||sourceHost.endsWith("."+domain)||domain.endsWith("."+sourceHost)))return false;
+      if(expectedHost&&(domain===expectedHost||domain.endsWith("."+expectedHost)))return false;
+      return true;
+    });
+    if(trustedProfileEmails.length){
+      void redis.hIncrBy(STATS,"official_profile_phone_email_accept",1).catch(()=>{});
+      console.log(JSON.stringify({
+        event:"law_official_profile_phone_email_accept",
+        name:String(lead.name||lead.title||""),
+        source:String(sourceUrl||""),
+        emails:trustedProfileEmails.slice(0,4)
+      }));
+      return trustedProfileEmails.slice(0,8);
+    }
+  }
 
   // CalBar is authoritative and intentionally injects email-shaped decoys.
   // If the exact active profile identity matched and an address survived the
