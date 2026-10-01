@@ -948,7 +948,7 @@ function ownedWebsiteFromMatchedPage(url="",text="",lead={}){
 }
 function knownThirdPartyDirectoryHost(url=""){
   const host=hostOf(url);
-  return /(?:^|\.)(?:reachattorneys\.com|lawyer\.com|lawyers\.com|martindale\.com|avvo\.com|justia\.com|findlaw\.com|superlawyers\.com|attorneydir\.com|lawyer-map\.com|lawyerdb\.org|411\.info|allbiz\.com|chamberofcommerce\.com|manta\.com|bbb\.org|yellowpages\.com|yelp\.com|birdeye\.com|mapquest\.com)$/i.test(host);
+  return /(?:^|\.)(?:reachattorneys\.com|lawyer\.com|lawyers\.com|martindale\.com|avvo\.com|justia\.com|findlaw\.com|superlawyers\.com|attorneydir\.com|lawyer-map\.com|lawyerdb\.org|attorneyslisted\.com|lawinfo\.com|hg\.org|411\.info|allbiz\.com|chamberofcommerce\.com|manta\.com|bbb\.org|yellowpages\.com|yelp\.com|birdeye\.com|mapquest\.com)$/i.test(host);
 }
 function ownedDomainAffinity(url="",lead={}){
   const host=hostOf(url).replace(/[^a-z0-9]/g,"");
