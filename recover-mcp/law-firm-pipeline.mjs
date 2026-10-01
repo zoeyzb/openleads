@@ -1418,6 +1418,27 @@ async function probeLikelyOwnedDomains(lead={},key=""){
   return "";
 }
 
+function directoryAttorneyIdentity(html="",lead={}){
+  const raw=String(html||"");
+  const h1=stripHtml(String(raw.match(/<h1\b[^>]*>([\s\S]{1,320}?)<\/h1>/i)?.[1]||""));
+  const title=stripHtml(String(raw.match(/<title\b[^>]*>([\s\S]{1,320}?)<\/title>/i)?.[1]||""));
+  const candidates=[h1,title].map(value=>String(value||"")
+    .replace(/\b(?:attorney|lawyer|profile|find a lawyer|law firm|law office|law offices|esq(?:uire)?|partner|associate|counsel)\b/ig," ")
+    .replace(/[|–—-].*$/," ")
+    .replace(/\s+/g," ").trim());
+  const firmTokens=leadNameTokens(lead).map(x=>normalize(x)).filter(x=>x.length>=3);
+  for(const candidate of candidates){
+    const parts=candidate.split(/\s+/).filter(Boolean);
+    if(parts.length<2||parts.length>5)continue;
+    if(parts.some(x=>/\d|@|https?|www\./i.test(x)))continue;
+    if(!parts.every(x=>/^[A-Za-z.'’\-]+$/.test(x)))continue;
+    const norm=normalize(candidate);
+    if(!firmTokens.some(t=>norm.includes(t)))continue;
+    return norm;
+  }
+  return "";
+}
+
 function strictDirectoryFirmIdentity(html="",source="",lead={}){
   const raw=String(html||"");
   const h1=stripHtml(String(raw.match(/<h1\b[^>]*>([\s\S]{1,320}?)<\/h1>/i)?.[1]||""));
@@ -1491,24 +1512,48 @@ async function directDirectorySizeEvidence(lead={},key=""){
       const page=await fetchResearchPage(url,{...lead,conversion_headcount_priority:true},key,true);
       if(!page?.html)return null;
       const source=String(page.final_url||url);
-      if(!strictDirectoryFirmIdentity(page.html,source,lead))return null;
       const text=stripHtml(page.html).slice(0,70000);
+      const host=hostOf(source);
+      const firmIdentityMatch=strictDirectoryFirmIdentity(page.html,source,lead);
+      const phoneMatch=Boolean(phone&&String(text).replace(/\D/g,"").includes(phone));
+      const normText=normalize(text);
+      const cityMatch=Boolean(city&&normText.includes(normalize(city)));
+      const profileIdentity=(phoneMatch&&cityMatch)?directoryAttorneyIdentity(page.html,lead):"";
+      if(!firmIdentityMatch&&!profileIdentity)return null;
+
       // Prefer an explicit "Firm Size" field. Broader text regexes can see
       // unrelated recommended-lawyer counts elsewhere on directory pages.
-      const explicitCount=officialFirmSizeEstimate(text);
-      const host=hostOf(source);
-      // Directory roster links are not firm-size evidence. Require an explicit
-      // published Firm Size field; exact-phone roster counting happens above.
+      const explicitCount=firmIdentityMatch?officialFirmSizeEstimate(text):0;
       const count=explicitCount;
       let website="";
-      const websiteCandidate=outboundFirmWebsiteFromDirectory(page.html,lead);
-      if(websiteCandidate)website=await verifyOwnedWebsiteCandidate(websiteCandidate,lead);
-      return {count,source,host,explicit:explicitCount>0,website};
+      if(firmIdentityMatch){
+        const websiteCandidate=outboundFirmWebsiteFromDirectory(page.html,lead);
+        if(websiteCandidate)website=await verifyOwnedWebsiteCandidate(websiteCandidate,lead);
+      }
+      return {count,source,host,explicit:explicitCount>0,website,profileIdentity,phoneMatch,cityMatch};
     }catch{return null;}
   }));
 
-  const evidence=pages.filter(x=>x.status==="fulfilled"&&x.value&&x.value.count>0).map(x=>x.value);
-  const verifiedWebsite=pages.find(x=>x.status==="fulfilled"&&x.value?.website)?.value?.website||"";
+  const pageValues=pages.filter(x=>x.status==="fulfilled"&&x.value).map(x=>x.value);
+  const rosterByIdentity=new Map();
+  for(const item of pageValues){
+    if(item.profileIdentity&&!rosterByIdentity.has(item.profileIdentity))rosterByIdentity.set(item.profileIdentity,item);
+  }
+  const roster=[...rosterByIdentity.values()];
+  const verifiedWebsite=pageValues.find(x=>x.website)?.website||"";
+  if(roster.length>=2){
+    const count=roster.length>10?11:roster.length;
+    const source=roster[0].source;
+    await redis.hIncrBy(STATS,"direct_directory_phone_roster_hit",1);
+    console.log(JSON.stringify({
+      event:"law_direct_directory_phone_roster_hit",key,name,count,source,
+      identities:roster.slice(0,10).map(x=>x.profileIdentity),
+      sources:roster.slice(0,10).map(x=>x.source)
+    }));
+    return {count,source,website:verifiedWebsite};
+  }
+
+  const evidence=pageValues.filter(x=>x.count>0);
   if(!evidence.length){
     await redis.hIncrBy(STATS,"direct_directory_size_miss",1);
     return {count:0,source:"",website:verifiedWebsite};
