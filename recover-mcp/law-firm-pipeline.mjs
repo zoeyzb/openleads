@@ -4175,6 +4175,10 @@ async function bootstrapExistingQualified(){
           redis.sRem(PENDING_SET,entry.field)
         ]);
         await redis.sAdd(CHICAGO_PENDING_SET,entry.field);
+        queuedForEnrichment++;
+        // Headcount is the missing gate. Skip startup email/MX verification for
+        // this record so the phone-first enrichment loop can start sooner.
+        continue;
       }
 
       // One-time recovery for legacy Chicago records created before the
