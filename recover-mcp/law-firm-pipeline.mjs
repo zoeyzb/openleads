@@ -4,7 +4,7 @@ import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { resolveMx } from "node:dns/promises";
 import { orchestrate as enrichProfessionalEmail } from "email-enrich";
-import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isLawFirmLead } from "./law-firm-targeting.mjs";
+import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -301,6 +301,52 @@ console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"redis_connect"
 await connectRedis();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"redis_connected"}));
 function normalize(v=""){return String(v||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
+async function emitCallReadySnapshot(){
+  const keys=await redis.sMembers(UNIQUE_VERIFIED_HEADCOUNT_SET);
+  let matches=0,withEmail=0;
+  for(let offset=0;offset<keys.length;offset+=250){
+    const chunk=keys.slice(offset,offset+250);
+    const values=await redis.hmGet(LEAD_HASH,chunk);
+    for(let i=0;i<chunk.length;i++){
+      if(!values[i])continue;
+      let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
+      const isLaw=String(lead.search_profile||"")==="law-firm"||String(lead.industry||"").toUpperCase()==="LAW_FIRM";
+      const website=String(lead.website||lead.website_url||"").trim();
+      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+      const sizeReady=lead.attorney_count_evidence_verified===true&&attorneyCount>=2&&attorneyCount<=10;
+      const phone=String(lead.phone||"").trim();
+      if(!isLaw||/^https?:\/\//i.test(website)||!sizeReady||!isUsableLawPhone(phone))continue;
+      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+        .map(x=>String(x||"").trim().toLowerCase())
+        .filter(x=>isUsableLawEmail(x));
+      const emailEligible=emails.length>0&&(lead.law_email_source_verified===true||lead.email_source_verified===true);
+      if(emailEligible)withEmail++;
+      matches++;
+      console.log(JSON.stringify({
+        event:"law_call_ready_export",
+        key:chunk[i],
+        firm:String(lead.name||lead.title||"").trim(),
+        phone,
+        normalizedPhone:normalizeLawPhone(phone),
+        email:emailEligible?(emails[0]||""):"",
+        emailEligible,
+        city:String(lead.city||"").trim(),
+        state:String(lead.region||lead.state||"").trim().toUpperCase(),
+        attorneys:attorneyCount,
+        headcountSource:String(lead.attorney_count_source||"").trim(),
+        address:String(lead.address||"").trim(),
+        maps:String(lead.google_maps_url||lead.maps_url||"").trim(),
+        priority:Number(lead.lead_priority_score||0)||0,
+        practiceKeys:Array.isArray(lead.practice_keys)?lead.practice_keys:[],
+        practiceAreas:Array.isArray(lead.practice_areas)?lead.practice_areas:[],
+        personalAngle:String(lead.personalization_fact||"").trim(),
+        source:emailEligible?String(lead.law_email_source||lead.email_source||"").trim():String(lead.attorney_count_source||lead.personalization_source||lead.google_maps_url||lead.maps_url||"").trim()
+      }));
+    }
+  }
+  console.log(JSON.stringify({event:"law_call_ready_export_summary",verifiedHeadcountSet:keys.length,matches,withEmail}));
+}
+await emitCallReadySnapshot().catch(error=>console.error("law_call_ready_export_error",error?.message||error));
 function lawFirmNameShape(lead={}){
   const name=String(lead.name||lead.title||"").replace(/\s+/g," ").trim();
   if(!name)return "unknown";
