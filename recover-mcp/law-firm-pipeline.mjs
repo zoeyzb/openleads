@@ -1328,6 +1328,11 @@ function officialFirmSizeEstimate(text=""){
     const n=Number(officeLocation[1]);
     if(n>0&&n<=500)return n;
   }
+  const officeWith=plain.match(/\b(?:law\s+office|law\s+firm|office|firm)\s+with\s+(\d{1,3})\s+(?:lawyers?|attorneys?)\b/i);
+  if(officeWith){
+    const n=Number(officeWith[1]);
+    if(n>0&&n<=500)return n;
+  }
   const meetTeam=plain.match(/\bmeet\s+(?:all\s+)?(\d{1,3})\s+(?:lawyers?|attorneys?)\b/i);
   if(meetTeam){
     const n=Number(meetTeam[1]);
@@ -1503,6 +1508,58 @@ function strictDirectoryFirmIdentity(html="",source="",lead={}){
   return false;
 }
 
+
+function bingResultRecords(html=""){
+  const out=[];
+  const raw=String(html||"");
+  for(const m of raw.matchAll(/<li\b[^>]*class=["'][^"']*\bb_algo\b[^"']*["'][^>]*>([\s\S]*?)<\/li>/gi)){
+    const block=String(m[1]||"");
+    let url="";
+    const href=block.match(/<a\b[^>]*href=["']([^"']+)["']/i)?.[1]||"";
+    if(href)url=decodeBingRedirect(href)||String(href).replace(/&amp;/g,"&");
+    if(!/^https?:\/\//i.test(url))continue;
+    out.push({url,text:stripHtml(block).slice(0,5000)});
+  }
+  return out.slice(0,12);
+}
+
+function bingRssResultRecords(xml=""){
+  const out=[];
+  for(const m of String(xml||"").matchAll(/<item>([\s\S]*?)<\/item>/gi)){
+    const block=String(m[1]||"");
+    const url=String(block.match(/<link>(https?:\/\/[^<]+)<\/link>/i)?.[1]||"").replace(/&amp;/g,"&");
+    if(!url)continue;
+    const title=String(block.match(/<title>([\s\S]*?)<\/title>/i)?.[1]||"");
+    const desc=String(block.match(/<description>([\s\S]*?)<\/description>/i)?.[1]||"");
+    out.push({url,text:stripHtml(title+" "+desc).slice(0,5000)});
+  }
+  return out.slice(0,12);
+}
+
+function indexedDirectoryHeadcountEvidence(records=[],lead={}){
+  const phone=normalizeLawPhone(lead.phone);
+  const fullName=normalize(lead.name||lead.title||"");
+  const city=normalize(normalizedLeadCity(lead));
+  const state=normalize(normalizedStateCode(lead)||lead.region||lead.state||"");
+  const allowed=["lawyers.com","martindale.com","findlaw.com","lawyer.com","justia.com","lawyers.law.cornell.edu","lawyers.oyez.org","lawyers.lawyerlegion.com"];
+  for(const record of records||[]){
+    const source=String(record?.url||"");
+    const host=hostOf(source);
+    if(!allowed.some(h=>host===h||host.endsWith("."+h)))continue;
+    const text=String(record?.text||"").slice(0,6000);
+    if(!text)continue;
+    const norm=normalize(text);
+    const phoneMatch=Boolean(phone&&text.replace(/\D/g,"").includes(phone));
+    const nameMatch=Boolean(fullName.length>=8&&norm.includes(fullName));
+    const geoMatch=Boolean((city&&norm.includes(city))||(state&&(" "+norm+" ").includes(" "+state+" ")));
+    if(!phoneMatch&&!(nameMatch&&geoMatch))continue;
+    const count=officialFirmSizeEstimate(text);
+    if(!(count>0))continue;
+    return {count,source,indexed:true,text:text.slice(0,900)};
+  }
+  return null;
+}
+
 async function directDirectorySizeEvidence(lead={},key=""){
   const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
   if(!name)return {count:0,source:"",website:""};
@@ -1532,16 +1589,34 @@ async function directDirectorySizeEvidence(lead={},key=""){
     const html=htmlResult.status==="fulfilled"?String(htmlResult.value?.html||""):"";
     const rss=rssResult.status==="fulfilled"?String(rssResult.value?.html||""):"";
     const duck=duckResult.status==="fulfilled"?String(duckResult.value?.html||""):"";
-    return [...new Set([
-      ...bingResultLinks(html),...bingRssResultLinks(rss),
-      ...duckResultLinks(duck),...markdownResultLinks(duck)
-    ])];
+    return {
+      links:[...new Set([
+        ...bingResultLinks(html),...bingRssResultLinks(rss),
+        ...duckResultLinks(duck),...markdownResultLinks(duck)
+      ])],
+      records:[...bingResultRecords(html),...bingRssResultRecords(rss)]
+    };
   }));
+
+  const indexedRecords=[];
+  for(const result of searchResults){
+    if(result.status!=="fulfilled")continue;
+    indexedRecords.push(...(result.value?.records||[]));
+  }
+  const indexedEvidence=indexedDirectoryHeadcountEvidence(indexedRecords,lead);
+  if(indexedEvidence){
+    await redis.hIncrBy(STATS,"indexed_directory_size_hit",1);
+    console.log(JSON.stringify({
+      event:"law_indexed_directory_size_hit",key,name,count:indexedEvidence.count,
+      source:indexedEvidence.source
+    }));
+    return {count:indexedEvidence.count,source:indexedEvidence.source,website:""};
+  }
 
   const resultPages=[];
   for(const result of searchResults){
     if(result.status!=="fulfilled")continue;
-    for(const url of result.value||[]){
+    for(const url of result.value?.links||[]){
       const host=hostOf(url);
       if(!hosts.some(h=>host===h||host.endsWith("."+h)))continue;
       if(!resultPages.includes(url))resultPages.push(url);
