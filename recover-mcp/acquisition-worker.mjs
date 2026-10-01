@@ -560,20 +560,19 @@ async function persistPermanentQualified(redis, job, leads) {
       }
       if(shapeUpdates.length)await redis.hSet("recover:leadstore:qualified",shapeUpdates);
 
-      const chicago=/\bchicago\b/i.test(String(job.location||""));
-      if(chicago){
-        // Phone-first campaign cannot infer firm size from the business name.
-        // Queue every callable no-site Chicago law lead; verified headcount,
-        // not a "solo-looking" name, decides whether it is 2-10.
-        const chicagoCandidates=[...new Set([...fast,...background,...solo])];
-        if(chicagoCandidates.length)await redis.sAdd("recover:law-firm:chicago-priority:v1",chicagoCandidates);
-      }else{
-        if(fast.length)await redis.sAdd("recover:law-firm:enrich-pending:v2",fast);
-        if(background.length)await redis.sAdd("recover:law-firm:enrich-recoverable:v1",background);
+      // Phone-first calling campaign is nationwide. Every persisted law record
+      // from this acquisition already passed require_phone + no-website gates,
+      // so route ALL name shapes into the dedicated headcount lane. Do not let
+      // the old email-first fast/background/solo split starve callable firms.
+      const phoneHeadcountCandidates=[...new Set([...fast,...background,...solo])];
+      if(phoneHeadcountCandidates.length){
+        await redis.sAdd("recover:law-firm:chicago-priority:v1",phoneHeadcountCandidates);
       }
-      if(fast.length||background.length)console.log(JSON.stringify({
-        event:"law_email_lane_split",fast:fast.length,background:background.length,solo:solo.length,
-        fastShare:Number((fast.length/Math.max(1,fast.length+background.length)).toFixed(3))
+      console.log(JSON.stringify({
+        event:"law_phone_headcount_lane_split",
+        phoneHeadcountCandidates:phoneHeadcountCandidates.length,
+        fast:fast.length,background:background.length,solo:solo.length,
+        location:String(job.location||"")
       }));
     }
     if(/\\bny\\b|new york/i.test(String(job.location||"")) && isHomeComfortTarget(job.industry||"")){
