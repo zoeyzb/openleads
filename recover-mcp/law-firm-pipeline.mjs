@@ -1593,7 +1593,10 @@ async function findOwnedWebsitePreflight(lead,key="",force=false){
       // is a brand alias unrelated to the firm's Maps name (for example an
       // initials/advocates domain). Fetch unknown first-party candidates and
       // let ownedWebsiteFromMatchedPage enforce exact identity/phone evidence.
-      if(lawSourceRank(url,lead)!==6)continue;
+      const rank=lawSourceRank(url,lead);
+      // Owned sites can be discovered either directly or through a public
+      // directory page that explicitly links out to the firm's real website.
+      if(rank!==6&&!knownThirdPartyDirectoryHost(url))continue;
       if(!links.includes(url))links.push(url);
       if(links.length>=16)break;
     }
@@ -1604,8 +1607,14 @@ async function findOwnedWebsitePreflight(lead,key="",force=false){
   for(const item of pages){
     if(item.status!=="fulfilled"||!item.value?.page?.html)continue;
     const {url,page}=item.value;
+    const finalUrl=page.final_url||url;
     const pageText=stripHtml(page.html).slice(0,26000);
-    const owned=ownedWebsiteFromMatchedPage(page.final_url||url,pageText,lead);
+    let owned=ownedWebsiteFromMatchedPage(finalUrl,pageText,lead);
+    if(!owned&&knownThirdPartyDirectoryHost(finalUrl)){
+      const outbound=outboundFirmWebsiteFromDirectory(page.html,lead);
+      if(outbound)owned=await verifyOwnedWebsiteCandidate(outbound,lead);
+      if(owned)await redis.hIncrBy(STATS,"website_preflight_directory_outbound_hit",1);
+    }
     if(owned){
       await redis.hIncrBy(STATS,"website_preflight_hit",1);
       return owned;
@@ -3533,7 +3542,7 @@ function outboundFirmWebsiteFromDirectory(html="",lead={}){
     try{
       const u=new URL(value);
       const host=u.hostname.toLowerCase().replace(/^www\./,"");
-      if(blocked.test(host)||lawSourceRank(u.href,lead)<=4)continue;
+      if(blocked.test(host)||knownThirdPartyDirectoryHost(u.href)||lawSourceRank(u.href,lead)<=4)continue;
       if(!candidates.includes(u.origin))candidates.push(u.origin);
     }catch{}
   }
