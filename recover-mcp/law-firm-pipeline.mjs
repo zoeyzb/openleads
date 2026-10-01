@@ -20,8 +20,8 @@ const TARGET_TOTAL=Math.max(100,Number(process.env.LAW_FIRM_TARGET_TOTAL||25000)
 const MAX_CITIES=Math.max(50,Number(process.env.LAW_FIRM_MAX_CITIES||1200));
 const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_HIGH_WATER||24)));
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
-const ENRICH_BATCH=Math.max(1,Math.min(64,Number(process.env.LAW_FIRM_ENRICH_BATCH||32)));
-const ENRICH_CONCURRENCY=Math.max(1,Math.min(28,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||12)));
+const ENRICH_BATCH=Math.max(1,Math.min(128,Number(process.env.LAW_FIRM_ENRICH_BATCH||64)));
+const ENRICH_CONCURRENCY=Math.max(1,Math.min(40,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||20)));
 const EMAIL_METHOD_VERSION="email-v67-recovery-diversity-free-mail";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
@@ -3159,6 +3159,33 @@ async function enrichLead(key,lead){
           source:earlySource
         }));
       }
+
+      if(!existingSourceBacked){
+        const earlyEvidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
+        const earlyPracticeKeys=[...new Set([
+          ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
+          ...lawFirmPracticeKeys(earlyEvidence),
+          ...(String(lead.practice_focus||"").trim()?[String(lead.practice_focus).trim()]:[])
+        ])].filter(k=>LAW_PRACTICES.some(p=>p.key===k)).slice(0,3);
+        const earlyPractices=earlyPracticeKeys.map(k=>LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
+        lead={...lead,
+          call_ready_lead:true,
+          qualified_lead:false,
+          practice_keys:earlyPracticeKeys,
+          practice_areas:earlyPractices,
+          lead_type:earlyPractices.join(" + "),
+          preferred_firm_size:true,
+          firm_size_tier:firmSizeTier(earlyCount),
+          primary_pain_point:"No website",
+          website_opportunity:"website_build",
+          law_firm_enriched_at:new Date().toISOString()
+        };
+        await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
+        await redis.sAdd(ENRICHED_SET,key);
+        await redis.sRem(REJECTED_SET,key);
+        await redis.hIncrBy(STATS,"phone_first_call_ready_short_circuit",1);
+        return true;
+      }
     }
   }
 
@@ -4158,11 +4185,10 @@ async function bootstrapExistingQualified(){
         }
       }
 
-      // Phone-first Chicago campaign: any callable no-site law record with
+      // Nationwide phone-first campaign: every callable no-site law record with
       // unknown headcount must be researched. Business-name shape is only a
-      // ranking signal; it is not evidence of firm size.
+      // ranking signal; verified headcount decides whether it is 2-10.
       if(!website &&
-         /\bchicago\b/i.test(String(lead.acquisition_location||lead.target_area||"")) &&
          isUsableLawPhone(lead.phone) &&
          lead.attorney_count_evidence_verified!==true){
         await Promise.all([
@@ -4176,8 +4202,9 @@ async function bootstrapExistingQualified(){
         ]);
         await redis.sAdd(CHICAGO_PENDING_SET,entry.field);
         queuedForEnrichment++;
-        // Headcount is the missing gate. Skip startup email/MX verification for
-        // this record so the phone-first enrichment loop can start sooner.
+        await redis.hIncrBy(STATS,"phone_headcount_nationwide_queued",1);
+        // Headcount is the missing gate. Skip startup email/MX work so the
+        // phone-first lane can convert the existing inventory immediately.
         continue;
       }
 
@@ -4583,10 +4610,10 @@ async function enrichBatch(){
   // Reserve capacity for every high-value lane so a large historical backlog
   // cannot starve newly discovered firms. Fresh discovery gets a guaranteed
   // slice while email-backed and size-ready conversion work stays prioritized.
-  // Phone-first campaign: Chicago discovery feeds this set with no-site firms
-  // that already have callable numbers. Headcount is now the primary conversion
-  // gate, so reserve a large batch slice instead of the old 2-lead trickle.
-  const chicagoTarget=Math.min(ENRICH_BATCH,Math.max(12,Math.floor(ENRICH_BATCH*0.4)));
+  // Phone-first campaign is nationwide. This compatibility set now contains
+  // callable no-site law firms from every market, so headcount gets most of the
+  // batch. Email enrichment remains secondary and continues in the leftover slice.
+  const chicagoTarget=Math.min(ENRICH_BATCH,Math.max(24,Math.floor(ENRICH_BATCH*0.8)));
   const chicagoKeys=await popSetBatch(CHICAGO_PENDING_SET,chicagoTarget);
   const afterChicago=Math.max(0,ENRICH_BATCH-chicagoKeys.length);
   // PENDING_SET is where source-backed / historically verified email leads are
@@ -4791,14 +4818,14 @@ async function enrichmentLoop(){
 async function statusLoop(){
   while(true){
     try{
-      const [qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady]=await Promise.all([
+      const [qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,phoneHeadcountPending]=await Promise.all([
         redis.sCard(READY_SET),redis.sCard(UNIQUE_ELIGIBLE_SET),redis.sCard(CALL_READY_SET),
         redis.sCard(UNIQUE_VERIFIED_EMAIL_SET),redis.sCard(UNIQUE_VERIFIED_HEADCOUNT_SET),
         redis.sCard(EMAIL_CANDIDATE_SET),redis.sCard(PENDING_SET),
         redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),
-        redis.sCard(SIZE_READY_PENDING_SET)
+        redis.sCard(SIZE_READY_PENDING_SET),redis.sCard(CHICAGO_PENDING_SET)
       ]);
-      console.log(JSON.stringify({event:"law_firm_pipeline_heartbeat",qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady}));
+      console.log(JSON.stringify({event:"law_firm_pipeline_heartbeat",qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady}));
     }catch(error){
       console.error("law_firm_status_loop_error",error?.stack||error?.message||error);
     }
