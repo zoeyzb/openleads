@@ -272,6 +272,11 @@ const WEBSITE_REFRESH_DOMAIN_INDEX="recover:law-firm:website-refresh-domain-inde
 const WEBSITE_AUDIT_BATCH=Math.max(1,Math.min(32,Number(process.env.LAW_WEBSITE_AUDIT_BATCH||20)));
 const WEBSITE_AUDIT_CONCURRENCY=Math.max(1,Math.min(12,Number(process.env.LAW_WEBSITE_AUDIT_CONCURRENCY||8)));
 const DISCOVERY_BACKLOG_LIMIT=Math.max(1000,Number(process.env.LAW_FIRM_DISCOVERY_BACKLOG_LIMIT||15000));
+const DIRECTORY_DISCOVERY_ENABLED=String(process.env.LAW_DIRECTORY_DISCOVERY_ENABLED||"true").toLowerCase()!=="false";
+const DIRECTORY_DISCOVERY_BATCH=Math.max(1,Math.min(8,Number(process.env.LAW_DIRECTORY_DISCOVERY_BATCH||3)));
+const DIRECTORY_DISCOVERY_PAGES=Math.max(1,Math.min(4,Number(process.env.LAW_DIRECTORY_DISCOVERY_PAGES||2)));
+const DIRECTORY_CURSOR_KEY="recover:law-firm:lawyerscom-directory-cursor:v1";
+const DIRECTORY_SEEDED_SET="recover:law-firm:lawyerscom-directory-seeded:v1";
 const STATS="recover:law-firm:stats:v3";
 const PROFILE={industry:"LAW_FIRM",require_phone:true,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,min_score:45};
 const PRACTICE_FOCI=TARGET_LAW_PRACTICES.map(x=>({key:x.key,label:x.label}));
@@ -5044,6 +5049,282 @@ async function enrichBatch(){
   await Promise.all(Array.from({length:Math.min(ENRICH_CONCURRENCY,keys.length)},()=>run()));
   return done;
 }
+
+const LAWYERS_STATE_SLUGS={
+  AL:"alabama",AK:"alaska",AZ:"arizona",AR:"arkansas",CA:"california",CO:"colorado",CT:"connecticut",DE:"delaware",FL:"florida",GA:"georgia",
+  HI:"hawaii",ID:"idaho",IL:"illinois",IN:"indiana",IA:"iowa",KS:"kansas",KY:"kentucky",LA:"louisiana",ME:"maine",MD:"maryland",MA:"massachusetts",
+  MI:"michigan",MN:"minnesota",MS:"mississippi",MO:"missouri",MT:"montana",NE:"nebraska",NV:"nevada",NH:"new-hampshire",NJ:"new-jersey",NM:"new-mexico",
+  NY:"new-york",NC:"north-carolina",ND:"north-dakota",OH:"ohio",OK:"oklahoma",OR:"oregon",PA:"pennsylvania",RI:"rhode-island",SC:"south-carolina",
+  SD:"south-dakota",TN:"tennessee",TX:"texas",UT:"utah",VT:"vermont",VA:"virginia",WA:"washington",WV:"west-virginia",WI:"wisconsin",WY:"wyoming"
+};
+
+function lawyersComCityUrl(area={},page=1){
+  const city=normalize(String(area.city||"")).replace(/\s+/g,"-");
+  const state=LAWYERS_STATE_SLUGS[String(area.state||"").toUpperCase()]||"";
+  if(!city||!state)return "";
+  const base=`https://www.lawyers.com/all-legal-issues/${city}/${state}/law-firms/`;
+  return page>1?`${base}?page=${page}`:base;
+}
+
+function absoluteLawyersUrl(href=""){
+  try{
+    const u=new URL(String(href||""),"https://www.lawyers.com");
+    if(!/(^|\.)lawyers\.com$/i.test(u.hostname))return "";
+    return u.href;
+  }catch{return "";}
+}
+
+function extractDirectoryPhone(text=""){
+  const raw=String(text||"");
+  const matches=[...raw.matchAll(/(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]\d{3}[\s.-]\d{4}/g)]
+    .map(m=>String(m[0]||"").trim());
+  return matches.find(isUsableLawPhone)||"";
+}
+
+function directoryCardFirmAnchor(beforeHtml=""){
+  const anchors=[...String(beforeHtml||"").matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{1,500}?)<\/a>/gi)];
+  for(let i=anchors.length-1;i>=0;i--){
+    const href=absoluteLawyersUrl(anchors[i][1]);
+    if(!href||!/-f\/?(?:[?#].*)?$/i.test(href))continue;
+    const name=stripHtml(String(anchors[i][2]||"")).replace(/\s+/g," ").trim();
+    if(!name||name.length<3||name.length>180)continue;
+    return {href,name,index:anchors[i].index||0};
+  }
+  return null;
+}
+
+function extractLawyersComDirectoryCandidates(html="",sourceUrl="",area={}){
+  const raw=String(html||"");
+  const sizeMatches=[...raw.matchAll(/\bLaw\s+(?:Firm|Office)\s+with\s+(\d{1,2})\s+lawyers?\b/gi)];
+  const out=[];
+  const seen=new Set();
+  for(let j=0;j<sizeMatches.length;j++){
+    const n=Number(sizeMatches[j][1]||0);
+    if(n<2||n>10)continue;
+    const sizeIndex=sizeMatches[j].index||0;
+    const nextIndex=j+1<sizeMatches.length?(sizeMatches[j+1].index||raw.length):Math.min(raw.length,sizeIndex+12000);
+    const beforeStart=Math.max(0,sizeIndex-9000);
+    const before=raw.slice(beforeStart,sizeIndex);
+    const anchor=directoryCardFirmAnchor(before);
+    if(!anchor)continue;
+
+    const profileUrl=anchor.href;
+    const name=anchor.name;
+    const blockStart=Math.max(beforeStart,beforeStart+anchor.index);
+    const block=raw.slice(blockStart,Math.min(raw.length,nextIndex));
+    const plain=stripHtml(block).replace(/\s+/g," ").trim();
+
+    // If Lawyers.com exposes an explicit external Website action in this exact
+    // firm card, it is not a no-website prospect. The final owned-site preflight
+    // still runs later for cards without that action.
+    if(/\bWebsite\b/i.test(plain)&&/<a\b[^>]*href=["']https?:\/\/[^"']+["'][^>]*>[^<]{0,80}Website/i.test(block))continue;
+
+    const phone=extractDirectoryPhone(plain);
+    if(!phone)continue;
+    const phoneKey=normalizeLawPhone(phone);
+    if(!phoneKey)continue;
+
+    const addrMatch=plain.match(/\b\d{1,6}\s+[A-Za-z0-9.'’#\- ]{3,120},\s*[A-Za-z.'’\- ]{2,60},\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/);
+    const address=String(addrMatch?.[0]||"").trim();
+    const key=phoneKey+"|"+normalize(name);
+    if(seen.has(key))continue;
+    seen.add(key);
+    out.push({
+      name,phone,address,
+      city:String(area.city||""),state:String(area.state||"").toUpperCase(),
+      attorneyCount:n,profileUrl,listingUrl:sourceUrl
+    });
+  }
+  return out;
+}
+
+async function verifyDirectoryCandidate(candidate={}){
+  try{
+    const seedLead={
+      name:candidate.name,phone:candidate.phone,address:candidate.address,
+      city:candidate.city,region:candidate.state,state:candidate.state,
+      industry:"LAW_FIRM",search_profile:"law-firm",website:""
+    };
+    const page=await fetchText(candidate.profileUrl,6500);
+    if(!page?.html)return null;
+    const source=String(page.final_url||candidate.profileUrl);
+    if(!/(^|\.)lawyers\.com$/i.test(hostOf(source)))return null;
+    const text=stripHtml(page.html).slice(0,80000);
+    if(!strictDirectoryFirmIdentity(page.html,source,seedLead))return null;
+
+    const phoneDigits=normalizeLawPhone(candidate.phone);
+    const profilePhoneMatch=Boolean(phoneDigits&&String(text).replace(/\D/g,"").includes(phoneDigits));
+    const profileCount=officialFirmSizeEstimate(text);
+    const rosterCount=strictFirmPageRosterCount(page.html,source,seedLead);
+    const count=profileCount>0?profileCount:rosterCount;
+    if(count<2||count>10)return null;
+
+    // Require the dedicated profile to corroborate either the exact office phone
+    // or the same 2-10 count published on the city listing.
+    if(!profilePhoneMatch&&count!==Number(candidate.attorneyCount||0))return null;
+
+    const profileWebsite=outboundFirmWebsiteFromDirectory(page.html,seedLead);
+    if(profileWebsite){
+      const verifiedWebsite=await verifyOwnedWebsiteCandidate(profileWebsite,seedLead);
+      if(verifiedWebsite)return {...candidate,rejectWebsite:verifiedWebsite,count,source};
+    }
+    return {...candidate,count,source,profilePhoneMatch};
+  }catch{return null;}
+}
+
+async function persistDirectorySeed(candidate={}){
+  const phone=normalizeLawPhone(candidate.phone);
+  if(!phone||!candidate.source||candidate.count<2||candidate.count>10)return {added:false,reason:"invalid"};
+  const existingKey=String(await redis.hGet("recover:leadstore:phone-index",phone)||"").trim();
+  const key=existingKey||("phone:"+phone);
+  let existing={};
+  try{
+    const raw=await redis.hGet(LEAD_HASH,key);
+    if(raw)existing=JSON.parse(raw)||{};
+  }catch{}
+
+  if(candidate.rejectWebsite){
+    const rejected={...existing,
+      name:existing.name||candidate.name,
+      phone:existing.phone||candidate.phone,
+      address:existing.address||candidate.address,
+      city:existing.city||candidate.city,
+      region:existing.region||candidate.state,
+      state:existing.state||candidate.state,
+      industry:"LAW_FIRM",search_profile:"law-firm",
+      website:candidate.rejectWebsite,
+      attorney_count_estimate:candidate.count,
+      attorney_count_evidence_verified:true,
+      attorney_count_source:candidate.source,
+      attorney_count_verified_at:new Date().toISOString(),
+      headcount_identity_version:HEADCOUNT_IDENTITY_VERSION,
+      preferred_firm_size:true,
+      law_directory_seed_source:candidate.listingUrl
+    };
+    await redis.hSet(LEAD_HASH,key,JSON.stringify(rejected));
+    await redis.hSet("recover:leadstore:phone-index",phone,key);
+    await redis.sAdd(REJECTED_SET,key);
+    await Promise.all([redis.sRem(SIZE_READY_PENDING_SET,key),redis.sRem(CALL_READY_SET,key),redis.sRem(READY_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)]);
+    return {added:false,reason:"owned_website"};
+  }
+
+  const now=new Date().toISOString();
+  const lead={...existing,
+    name:existing.name||candidate.name,
+    phone:existing.phone||candidate.phone,
+    address:existing.address||candidate.address,
+    city:existing.city||candidate.city,
+    region:existing.region||candidate.state,
+    state:existing.state||candidate.state,
+    industry:"LAW_FIRM",search_profile:"law-firm",
+    acquisition_location:existing.acquisition_location||[candidate.city,candidate.state].filter(Boolean).join(", "),
+    website:"",
+    attorney_count_estimate:candidate.count,
+    attorney_count_evidence_verified:true,
+    attorney_count_source:candidate.source,
+    attorney_count_verified_at:now,
+    headcount_identity_version:HEADCOUNT_IDENTITY_VERSION,
+    phone_headcount_status:"verified",
+    phone_headcount_method_version:PHONE_HEADCOUNT_METHOD_VERSION,
+    preferred_firm_size:true,
+    firm_size_tier:"preferred_2_10",
+    law_directory_seed_source:candidate.listingUrl,
+    law_directory_seeded_at:now
+  };
+
+  await Promise.all([
+    redis.hSet(LEAD_HASH,key,JSON.stringify(lead)),
+    redis.hSet("recover:leadstore:phone-index",phone,key),
+    redis.hSet(VERIFIED_HEADCOUNT_EVIDENCE_HASH,key,JSON.stringify({
+      count:candidate.count,source:candidate.source,verified_at:now,
+      verification:"lawyerscom_profile_size+"+HEADCOUNT_IDENTITY_VERSION
+    })),
+    redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key),
+    redis.sAdd(SIZE_READY_PENDING_SET,key),
+    redis.sAdd(SCOPE_SET,key),
+    redis.sRem(REJECTED_SET,key),
+    redis.sRem(ENRICHED_SET,key),
+    redis.sRem(PHONE_HEADCOUNT_PRIORITY_SET,key),
+    redis.sRem(CHICAGO_PENDING_SET,key)
+  ]);
+  return {added:true,key};
+}
+
+async function seedLawyersComDirectory(cities=[]){
+  if(!DIRECTORY_DISCOVERY_ENABLED||!cities.length)return {cities:0,candidates:0,verified:0,added:0,ownedWebsite:0};
+  let cursor=Math.max(0,Number(await redis.get(DIRECTORY_CURSOR_KEY)||0));
+  let citiesDone=0,candidatesFound=0,verified=0,added=0,ownedWebsite=0,fetchErrors=0;
+
+  for(let slot=0;slot<DIRECTORY_DISCOVERY_BATCH;slot++){
+    let area=null,guard=0;
+    while(guard<cities.length){
+      if(cursor>=cities.length)cursor=0;
+      const candidateArea=cities[cursor++];
+      guard++;
+      const seedKey=String(candidateArea.state||"")+"|"+normalize(candidateArea.city||"");
+      if(await redis.sIsMember(DIRECTORY_SEEDED_SET,seedKey))continue;
+      area=candidateArea;
+      await redis.sAdd(DIRECTORY_SEEDED_SET,seedKey);
+      break;
+    }
+    if(!area)break;
+    citiesDone++;
+
+    const pageTasks=[];
+    for(let page=1;page<=DIRECTORY_DISCOVERY_PAGES;page++){
+      const url=lawyersComCityUrl(area,page);
+      if(url)pageTasks.push((async()=>{
+        try{
+          const result=await fetchText(url,7500);
+          return {url,html:String(result?.html||"")};
+        }catch{return {url,html:"",error:true};}
+      })());
+    }
+    const pages=await Promise.all(pageTasks);
+
+    const rawCandidates=[];
+    for(const page of pages){
+      if(page.error||!page.html){fetchErrors++;continue;}
+      rawCandidates.push(...extractLawyersComDirectoryCandidates(page.html,page.url,area));
+    }
+    const byPhone=new Map();
+    for(const item of rawCandidates){
+      const phone=normalizeLawPhone(item.phone);
+      if(phone&&!byPhone.has(phone))byPhone.set(phone,item);
+    }
+    const unique=[...byPhone.values()];
+    candidatesFound+=unique.length;
+
+    const checks=await Promise.allSettled(unique.slice(0,40).map(verifyDirectoryCandidate));
+    for(const check of checks){
+      if(check.status!=="fulfilled"||!check.value)continue;
+      verified++;
+      if(check.value.rejectWebsite)ownedWebsite++;
+      const result=await persistDirectorySeed(check.value);
+      if(result.added)added++;
+    }
+  }
+
+  await redis.set(DIRECTORY_CURSOR_KEY,String(cursor));
+  if(citiesDone||added||fetchErrors){
+    console.log(JSON.stringify({
+      event:"law_directory_seed_cycle",cities:citiesDone,candidates:candidatesFound,
+      verified,added,ownedWebsite,fetchErrors,cursor
+    }));
+  }
+  if(added)await redis.hIncrBy(STATS,"directory_source_first_added",added);
+  if(verified)await redis.hIncrBy(STATS,"directory_source_first_verified",verified);
+  return {cities:citiesDone,candidates:candidatesFound,verified,added,ownedWebsite,fetchErrors};
+}
+
+async function directorySeedLoop(){
+  while(true){
+    try{await seedLawyersComDirectory(cities);}
+    catch(error){console.error("law_directory_seed_error",error?.stack||error?.message||error);}
+    await sleep(Math.max(1800,LOOP_MS));
+  }
+}
+
 async function lawAreaSaturated(area={}){
   const field=[normalize(area.state||""),normalize(area.city||""),"",""].join("|");
   const [attemptsRaw,newRaw,dupRaw]=await Promise.all([
@@ -5328,4 +5609,4 @@ async function websiteAuditLoop(){
   }
 }
 
-await Promise.all([seedLoop(),enrichmentLoop(),statusLoop()]);
+await Promise.all([seedLoop(),directorySeedLoop(),enrichmentLoop(),statusLoop()]);
