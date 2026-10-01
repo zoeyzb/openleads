@@ -1156,7 +1156,7 @@ async function processAcquisition(id) {
     }
     const isLawFirmJob=String(job.search_profile||"")==="law-firm";
     const deepChicago=isLawFirmJob&&/\bchicago\b/i.test(String(job.location||""));
-    const lawBundleSize=isLawFirmJob?(deepChicago?12:4):1;
+    const lawBundleSize=isLawFirmJob?(deepChicago?12:6):1;
     const availableRounds=Math.ceil(variants.length/lawBundleSize);
     const maxRounds=Math.min(isFastHomeService ? Math.min(2,configuredMaxRounds) : configuredMaxRounds,availableRounds);
 
