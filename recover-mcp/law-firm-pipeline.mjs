@@ -1286,6 +1286,45 @@ async function verifyOwnedWebsiteCandidate(url="",lead={}){
   }catch{return "";}
 }
 
+function likelyOwnedDomainCandidates(lead={}){
+  const raw=normalize(String(lead.name||lead.title||""));
+  const stop=new Set(["the","law","legal","firm","firms","office","offices","attorney","attorneys","lawyer","lawyers","group","pllc","llc","pc","pa","p","c","professional","corporation","associates","association","at"]);
+  const tokens=raw.split(" ").filter(t=>t.length>=3&&!stop.has(t)).slice(0,4);
+  if(!tokens.length)return [];
+  const joined=tokens.join("");
+  const first=tokens[0]||"";
+  const firstTwo=tokens.slice(0,2).join("");
+  const values=[
+    joined,
+    firstTwo,
+    first,
+    joined+"law",
+    firstTwo+"law",
+    first+"law",
+    joined+"legal",
+    firstTwo+"legal"
+  ].filter(x=>x.length>=4);
+  return [...new Set(values.map(x=>"https://"+x+".com"))].slice(0,8);
+}
+
+async function probeLikelyOwnedDomains(lead={},key=""){
+  const candidates=likelyOwnedDomainCandidates(lead);
+  if(!candidates.length)return "";
+  const checks=await Promise.allSettled(candidates.map(async url=>{
+    const verified=await verifyOwnedWebsiteCandidate(url,lead);
+    return verified||"";
+  }));
+  for(const item of checks){
+    if(item.status==="fulfilled"&&item.value){
+      await redis.hIncrBy(STATS,"likely_owned_domain_probe_hit",1);
+      console.log(JSON.stringify({event:"law_likely_owned_domain_hit",key,name:String(lead.name||lead.title||""),website:item.value}));
+      return item.value;
+    }
+  }
+  await redis.hIncrBy(STATS,"likely_owned_domain_probe_miss",1);
+  return "";
+}
+
 async function directDirectorySizeEvidence(lead={},key=""){
   const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
   if(!name)return {count:0,source:"",website:""};
@@ -3303,6 +3342,7 @@ async function enrichLead(key,lead){
     const earlyEvidenceWebsite=await detectOwnedWebsiteFromEvidenceSource(source,emails,lead,key);
     const earlyDomainWebsite=earlyEvidenceWebsite||
       await detectOwnedWebsiteFromEmailDomains(emails,lead)||
+      await probeLikelyOwnedDomains(lead,key)||
       await findOwnedWebsitePreflight(lead,key,true);
     if(earlyDomainWebsite){
       const updated={...lead,website:earlyDomainWebsite,website_opportunity:"website_refresh",owned_website_evidence_source:"verified_email_domain",law_email_enrich_version:EMAIL_METHOD_VERSION};
