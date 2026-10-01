@@ -1563,7 +1563,7 @@ if(String(process.env.ACQUISITION_WORKER_STANDBY||"").toLowerCase()==="true"){
 
 await recoverInterrupted();
 
-const workerConcurrency=Math.max(1,Math.min(4,Number(process.env.ACQUISITION_WORKER_CONCURRENCY||2)));
+const workerConcurrency=Math.max(1,Math.min(8,Number(process.env.ACQUISITION_WORKER_CONCURRENCY||4)));
 console.log("Acquisition worker concurrency",workerConcurrency);
 async function acquisitionWorkerLoop(slot){
   let queuePollCursor=slot;
