@@ -278,6 +278,7 @@ const DIRECTORY_DISCOVERY_PAGES=Math.max(1,Math.min(4,Number(process.env.LAW_DIR
 const DIRECTORY_CURSOR_KEY="recover:law-firm:lawyerscom-directory-cursor:v1";
 const DIRECTORY_SEEDED_SET="recover:law-firm:lawyerscom-directory-seeded:v1";
 const STATS="recover:law-firm:stats:v3";
+let INDEXED_HEADCOUNT_DIAGNOSTICS=0;
 const PROFILE={industry:"LAW_FIRM",require_phone:true,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,min_score:45};
 const PRACTICE_FOCI=TARGET_LAW_PRACTICES.map(x=>({key:x.key,label:x.label}));
 const SCOPE_SET=campaignLeadSetKey(PROFILE);
@@ -1611,6 +1612,13 @@ async function directDirectorySizeEvidence(lead={},key=""){
       source:indexedEvidence.source
     }));
     return {count:indexedEvidence.count,source:indexedEvidence.source,website:""};
+  }
+  if(INDEXED_HEADCOUNT_DIAGNOSTICS<8&&indexedRecords.length){
+    INDEXED_HEADCOUNT_DIAGNOSTICS++;
+    console.log(JSON.stringify({
+      event:"law_indexed_directory_diagnostic",key,name,phone:phonePretty,city,state,
+      records:indexedRecords.slice(0,5).map(r=>({url:r.url,text:String(r.text||"").slice(0,700)}))
+    }));
   }
 
   const resultPages=[];
