@@ -3040,6 +3040,116 @@ async function enrichLead(key,lead){
   let emailMethod=emails.length?"existing_source_backed":"none";
   if(emailMethod!=="none")await redis.hIncrBy(STATS,"email_existing_hit",1);
 
+  // Phone is now the primary outreach channel. Prove 2-10 attorneys before
+  // spending the expensive broad email-discovery pass. Email enrichment can
+  // continue afterward as a bonus, but a valid phone + verified 2-10 + no site
+  // becomes Call Ready immediately.
+  const phoneHeadcountPriority=!website&&isUsableLawPhone(lead.phone)&&lawFirmNameShape(lead)!=="solo";
+  if(!attorneyCountVerified&&phoneHeadcountPriority){
+    let earlyCount=0,earlySource="",earlyWebsite="";
+    try{
+      const direct=await directDirectorySizeEvidence(lead,key);
+      earlyCount=Number(direct?.count||0);
+      earlySource=String(direct?.source||"");
+      earlyWebsite=String(direct?.website||"");
+      if(earlyCount>0)await redis.hIncrBy(STATS,"phone_first_headcount_direct_directory",1);
+    }catch{await redis.hIncrBy(STATS,"phone_first_headcount_direct_directory_fail",1);}
+
+    if(earlyWebsite){
+      const updated={...lead,website:earlyWebsite,website_opportunity:"website_refresh",owned_website_evidence_source:earlySource||"phone_first_directory"};
+      await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
+      await Promise.all([
+        redis.sRem(CALL_READY_SET,key),redis.sRem(CHICAGO_PENDING_SET,key),
+        redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)
+      ]);
+      await redis.sAdd(REJECTED_SET,key);
+      await redis.sAdd(ENRICHED_SET,key);
+      await redis.hIncrBy(STATS,"phone_first_owned_website_hit",1);
+      return true;
+    }
+
+    if(!(earlyCount>0&&isPublishedHeadcountSource(earlySource,lead))){
+      earlyCount=0;earlySource="";
+      try{
+        const roster=await phoneRosterHeadcountEvidence(lead,key);
+        if(Number(roster?.count||0)>0&&isPublishedHeadcountSource(String(roster?.source||""),lead)){
+          earlyCount=Number(roster.count);earlySource=String(roster.source);
+          await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster",1);
+        }
+      }catch{await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster_fail",1);}
+    }
+    if(!earlyCount){
+      try{
+        const lawyer=await directLawyerComSizeEvidence(lead,key);
+        if(Number(lawyer?.count||0)>0&&isPublishedHeadcountSource(String(lawyer?.source||""),lead)){
+          earlyCount=Number(lawyer.count);earlySource=String(lawyer.source);
+          await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom",1);
+        }
+      }catch{await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom_fail",1);}
+    }
+
+    if(earlyCount>0&&earlySource){
+      attorneyCount=earlyCount;
+      attorneyCountVerified=true;
+      attorneyCountSource=earlySource;
+      lead={...lead,
+        attorney_count_estimate:earlyCount,
+        attorney_count_evidence_verified:true,
+        attorney_count_source:earlySource,
+        attorney_count_verified_at:new Date().toISOString(),
+        preferred_firm_size:earlyCount>=2&&earlyCount<=10,
+        firm_size_tier:firmSizeTier(earlyCount)
+      };
+      await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
+      await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
+      await redis.hSet(VERIFIED_HEADCOUNT_EVIDENCE_HASH,key,JSON.stringify({
+        count:earlyCount,source:earlySource,verified_at:new Date().toISOString(),
+        verification:"published_identity_matched_headcount"
+      }));
+
+      if(earlyCount<2||earlyCount>10){
+        await redis.sAdd(ENRICHED_SET,key);
+        await redis.sAdd(REJECTED_SET,key);
+        await Promise.all([
+          redis.sRem(CALL_READY_SET,key),redis.sRem(CHICAGO_PENDING_SET,key),
+          redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)
+        ]);
+        await redis.hIncrBy(STATS,"phone_first_wrong_size_short_circuit",1);
+        return true;
+      }
+
+      const wasCallReady=await redis.sIsMember(CALL_READY_SET,key);
+      await redis.sAdd(CALL_READY_SET,key);
+      if(!wasCallReady){
+        const earlyEvidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
+        const earlyPracticeKeys=[...new Set([
+          ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
+          ...lawFirmPracticeKeys(earlyEvidence),
+          ...(String(lead.practice_focus||"").trim()?[String(lead.practice_focus).trim()]:[])
+        ])];
+        console.log(JSON.stringify({
+          event:"law_call_ready_new",
+          key,
+          firm:String(lead.name||lead.title||"").trim(),
+          phone:String(lead.phone||"").trim(),
+          email:emailSourceVerified?(emails[0]||""):"",
+          emailEligible:Boolean(emailSourceVerified&&emails.length),
+          attorneys:earlyCount,
+          headcountSource:earlySource,
+          address:String(lead.address||""),
+          city:String(lead.city||""),
+          state:String(lead.region||lead.state||""),
+          maps:String(lead.google_maps_url||lead.maps_url||""),
+          priority:Number(lead.lead_priority_score||0)||0,
+          practiceKeys:earlyPracticeKeys,
+          practiceAreas:lawFirmPracticeAreas(earlyEvidence),
+          personalAngle:String(lead.personalization_fact||""),
+          source:earlySource
+        }));
+      }
+    }
+  }
+
   // Fastest conversion path: if the verified email already came from an
   // official bar profile, reuse that exact page for explicit "Firm Size"
   // evidence before launching expensive directory/search headcount work.
@@ -4460,9 +4570,11 @@ async function enrichBatch(){
   // Reserve capacity for every high-value lane so a large historical backlog
   // cannot starve newly discovered firms. Fresh discovery gets a guaranteed
   // slice while email-backed and size-ready conversion work stays prioritized.
-  // Paid-cohort-first allocation. Legacy Chicago work gets only spare attention;
-  // source-backed and 2-10-shaped leads must not be starved by the broad solo backlog.
-  const chicagoKeys=await popSetBatch(CHICAGO_PENDING_SET,Math.min(2,ENRICH_BATCH));
+  // Phone-first campaign: Chicago discovery feeds this set with no-site firms
+  // that already have callable numbers. Headcount is now the primary conversion
+  // gate, so reserve a large batch slice instead of the old 2-lead trickle.
+  const chicagoTarget=Math.min(ENRICH_BATCH,Math.max(12,Math.floor(ENRICH_BATCH*0.4)));
+  const chicagoKeys=await popSetBatch(CHICAGO_PENDING_SET,chicagoTarget);
   const afterChicago=Math.max(0,ENRICH_BATCH-chicagoKeys.length);
   // PENDING_SET is where source-backed / historically verified email leads are
   // requeued for conversion. Give it half the batch before broad discovery.
