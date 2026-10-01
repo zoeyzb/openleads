@@ -5076,7 +5076,10 @@ async function enrichBatch(){
   const phonePriorityKeys=afterRegular?await popSetBatch(PHONE_HEADCOUNT_PRIORITY_SET,phonePriorityTarget):[];
   const afterPhonePriority=Math.max(0,afterRegular-phonePriorityKeys.length);
 
-  const chicagoTarget=Math.min(afterPhonePriority,Math.max(16,Math.floor(ENRICH_BATCH*0.18)));
+  // Once the explicit multi-name priority queue drains, use the freed
+  // capacity on the large callable/no-site headcount backlog rather than
+  // leaving most of the batch to low-value generic retries.
+  const chicagoTarget=Math.min(afterPhonePriority,Math.max(48,Math.floor(ENRICH_BATCH*0.55)));
   const chicagoKeys=afterPhonePriority?await popSetBatch(CHICAGO_PENDING_SET,chicagoTarget):[];
   const afterChicago=Math.max(0,afterPhonePriority-chicagoKeys.length);
 
