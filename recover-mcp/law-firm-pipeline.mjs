@@ -255,7 +255,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v5-priority-official-roster";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v6-official-bar-roster-strict-directory";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -4806,10 +4806,16 @@ async function enrichBatch(){
       }catch(error){
         const rawRetry=await redis.hGet(LEAD_HASH,key);
         let retryLead={};try{retryLead=rawRetry?JSON.parse(rawRetry):{};}catch{}
-        const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(isUsableLawEmail);
-        const retryKeys=Array.isArray(retryLead.practice_keys)?retryLead.practice_keys:[];
-        const retrySet=retryEmails.length?PENDING_SET:(emailRecoveryPriority(retryLead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET);
-        await moveToEmailQueue(key,retrySet);
+        const retryWebsite=String(retryLead.website||retryLead.website_url||"").trim();
+        const needsPhoneHeadcount=!/^https?:\/\//i.test(retryWebsite)&&isUsableLawPhone(retryLead.phone)&&retryLead.attorney_count_evidence_verified!==true;
+        if(needsPhoneHeadcount){
+          const shape=lawFirmNameShape(retryLead);
+          await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
+        }else{
+          const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(isUsableLawEmail);
+          const retrySet=retryEmails.length?PENDING_SET:(emailRecoveryPriority(retryLead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET);
+          await moveToEmailQueue(key,retrySet);
+        }
         console.warn(JSON.stringify({event:"law_firm_enrich_retry",key,error:String(error?.message||error)}));
       }
     }
