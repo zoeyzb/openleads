@@ -578,7 +578,9 @@ async function persistPermanentQualified(redis, job, leads) {
             String(lead.phone_headcount_status||"")==="unverified" &&
             String(lead.phone_headcount_method_version||"")===phoneHeadcountMethodVersion;
           if(!exhaustedCurrentMethod){
-            if(shape==="multi"||shape==="firm")fast.push(key);
+            // Explicit plural/multi-name signals get first headcount capacity.
+            // Generic "Law Firm"/PC/PLLC branding is frequently still a solo.
+            if(shape==="multi")fast.push(key);
             else if(shape==="solo")solo.push(key);
             else background.push(key);
           }
@@ -738,16 +740,16 @@ const queryVariants=(industry,location,practiceFocus="",coveragePass="")=>{
       .replace(/\s+/g," ").trim();
     const firmBase=[...new Set(base.map(firmize).filter(q=>q&&normalizeText(q)!=="law firm"))];
     const preferredByWave=[
-      "small law firm",
-      "law group",
       "attorneys at law",
       "law partners",
       "law associates",
-      "law firm PLLC",
-      "law firm PC",
-      "law firm LLP",
+      "law group",
       "law offices partners",
-      "law offices associates"
+      "law offices associates",
+      "law firm LLP",
+      "small law firm",
+      "law firm PLLC",
+      "law firm PC"
     ];
     const g0=preferredByWave[(wave-1)%preferredByWave.length];
     const g1=preferredByWave[wave%preferredByWave.length];
