@@ -1216,7 +1216,7 @@ function contextualEmails(text="",lead={},sourceUrl=""){
   }
 
   for(const m of all){
-    const start=Math.max(0,m.index-900),end=Math.min(raw.length,m.index+m.email.length+900);
+    const start=Math.max(0,m.index-1800),end=Math.min(raw.length,m.index+m.email.length+1800);
     const context=raw.slice(start,end);
     const nearbyIdentity=pageMatchesLead(context,lead);
     const nearbyPhone=contextHasExactPhone(context,lead);
