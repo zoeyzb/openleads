@@ -2888,8 +2888,7 @@ async function enrichLead(key,lead){
   const needsPhoneHeadcountResearch=
     !String(lead.website||lead.website_url||"").trim() &&
     isUsableLawPhone(lead.phone) &&
-    lead.attorney_count_evidence_verified!==true &&
-    lawFirmNameShape(lead)!=="solo";
+    lead.attorney_count_evidence_verified!==true;
   // A record being "enriched" under the old email-first campaign must not block
   // the new phone-first headcount pass. Re-open callable no-site firms until
   // firm size is actually proved.
@@ -2965,7 +2964,7 @@ async function enrichLead(key,lead){
   }
   const chicagoHeadcountCampaign=!website &&
     chicagoLead &&
-    lawFirmNameShape(lead)!=="solo";
+    isUsableLawPhone(lead.phone);
   if(/^https?:\/\//i.test(website)){
     await redis.sAdd(ENRICHED_SET,key);
     await redis.sAdd(REJECTED_SET,key);
@@ -3057,7 +3056,7 @@ async function enrichLead(key,lead){
   // spending the expensive broad email-discovery pass. Email enrichment can
   // continue afterward as a bonus, but a valid phone + verified 2-10 + no site
   // becomes Call Ready immediately.
-  const phoneHeadcountPriority=!website&&isUsableLawPhone(lead.phone)&&lawFirmNameShape(lead)!=="solo";
+  const phoneHeadcountPriority=!website&&isUsableLawPhone(lead.phone);
   if(!attorneyCountVerified&&phoneHeadcountPriority){
     let earlyCount=0,earlySource="",earlyWebsite="";
     try{
