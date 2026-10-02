@@ -337,6 +337,18 @@ async function getLawExportRedis() {
   }
 }
 
+function parseLawLeadLocation(lead={}){
+  let city=String(lead.city||"").trim();
+  let state=String(lead.region||lead.state||"").trim().toUpperCase();
+  const raw=String(lead.address||lead.acquisition_location||lead.target_area||"").trim();
+  const match=raw.match(/(?:^|,\s*)([^,]+),\s*([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*$/i);
+  if(match){
+    if(!city)city=String(match[1]||"").trim();
+    if(!state)state=String(match[2]||"").trim().toUpperCase();
+  }
+  return {city,state};
+}
+
 async function collectCallReadyLawRows(){
   const redis=await getLawExportRedis();
   const strictEligibleKeys=new Set(await redis.sMembers("recover:law-firm:unique-eligible:v1"));
@@ -368,6 +380,7 @@ async function collectCallReadyLawRows(){
       const practiceKeys=[...new Set([...storedKeys,...lawFirmPracticeKeys(evidence),...(focus?[focus]:[])])];
       const labels=practiceKeys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
       const type=(labels.length?labels:lawFirmPracticeAreas(evidence)).join(" + ")||"Law";
+      const {city,state}=parseLawLeadLocation(lead);
 
       rows.push({
         key:entry.field,
@@ -377,9 +390,9 @@ async function collectCallReadyLawRows(){
         phoneType:String(lead.phone_type||lead.line_type||lead.phone_line_type||"").trim()||"Unknown",
         phoneStatus:"Usable",
         email:emailEligible?(emails[0]||""):"",
-        emailStatus:emailEligible?"Source-verified":"Missing strict email",
-        city:String(lead.city||"").trim(),
-        state:String(lead.region||lead.state||"").trim().toUpperCase(),
+        emailStatus:emailEligible?"Verified":"Missing",
+        city,
+        state,
         attorneys:Number(lead.attorney_count_estimate||lead.attorney_count||0),
         headcountSource:String(lead.attorney_count_source||"").trim(),
         address:String(lead.address||"").trim(),
@@ -3542,14 +3555,14 @@ const httpServer = createHttpServer((req, res) => {
       }
       const rows=await collectCallReadyLawRows();
       const headers=[
-        "Phone","Firm","Practice","Email","Email Status","Attorneys",
-        "Phone Type","Phone Status","City","State","Strict Eligible","Priority",
-        "Address","Google Maps","Personal Angle","Headcount Source","Contact Source","Status"
+        "Phone","Firm","Attorneys","Email","Email Status","Practice",
+        "City","State","Phone Type","Status","Personal Angle","Address",
+        "Google Maps","Priority","Headcount Source","Contact Source","Strict Eligible","Phone Status"
       ];
       const data=rows.map(row=>[
-        row.phone,row.firm,row.type,row.email,row.emailStatus,row.attorneys||"",
-        row.phoneType,row.phoneStatus,row.city,row.state,row.strictEligible?"Yes":"No",row.priority||"",
-        row.address,row.maps,row.personalAngle,row.headcountSource,row.source,row.status
+        row.phone,row.firm,row.attorneys||"",row.email,row.emailStatus,row.type,
+        row.city,row.state,row.phoneType,row.status,row.personalAngle,row.address,
+        row.maps,row.priority||"",row.headcountSource,row.source,row.strictEligible?"Yes":"No",row.phoneStatus
       ]);
       const esc=value=>{
         const s=String(value??"");
@@ -3566,6 +3579,39 @@ const httpServer = createHttpServer((req, res) => {
     })().catch(error=>{
       res.writeHead(500,{"content-type":"application/json","cache-control":"no-store"});
       res.end(JSON.stringify({error:error?.message||"call_ready_csv_export_failed"}));
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/exports/law-strict-eligible.csv" && req.method === "GET") {
+    void (async () => {
+      const token=String(requestUrl.searchParams.get("token")||"");
+      if(!lawCallReadyExportAuthorized(token)){
+        res.writeHead(401,{"content-type":"application/json","cache-control":"no-store"});
+        res.end(JSON.stringify({error:"unauthorized"}));
+        return;
+      }
+      const rows=(await collectCallReadyLawRows()).filter(row=>row.strictEligible);
+      const headers=["Phone","Firm","Email","Attorneys","Practice","City","State","Email Source","Headcount Source","Google Maps","Status"];
+      const data=rows.map(row=>[
+        row.phone,row.firm,row.email,row.attorneys||"",row.type,row.city,row.state,
+        row.source,row.headcountSource,row.maps,row.status
+      ]);
+      const esc=value=>{
+        const s=String(value??"");
+        return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
+      };
+      const csv=[headers,...data].map(row=>row.map(esc).join(",")).join("\r\n");
+      res.writeHead(200,{
+        "content-type":"text/csv; charset=utf-8",
+        "content-disposition":'inline; filename="law-strict-eligible.csv"',
+        "cache-control":"no-store, max-age=0",
+        "access-control-allow-origin":"*"
+      });
+      res.end(csv);
+    })().catch(error=>{
+      res.writeHead(500,{"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({error:error?.message||"strict_eligible_csv_export_failed"}));
     });
     return;
   }
