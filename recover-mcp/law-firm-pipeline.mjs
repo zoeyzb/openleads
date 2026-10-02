@@ -313,7 +313,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v10-lawyercom-target-scope";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v11-lawyercom-all-paths-target-scope";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -1859,8 +1859,16 @@ async function directDirectorySizeEvidence(lead={},key=""){
 
       // Prefer explicit Firm Size, otherwise count unique attorney profile
       // links only inside the dedicated firm's Attorneys/Team section.
-      const explicitCount=firmIdentityMatch?officialFirmSizeEstimate(text):0;
-      const firmRosterCount=firmIdentityMatch?strictFirmPageRosterCount(page.html,source,lead):0;
+      // Lawyer.com appends nearby/similar cards that contain unrelated sizes
+      // and profiles, so every Lawyer.com path must use the same target scope.
+      const isLawyerCom=/(^|\.)lawyer\.com$/i.test(host);
+      const scopedHtml=isLawyerCom?targetScopedLawyerComHtml(page.html):page.html;
+      const explicitCount=firmIdentityMatch
+        ?(isLawyerCom?targetScopedLawyerComFirmSize(scopedHtml):officialFirmSizeEstimate(text))
+        :0;
+      const firmRosterCount=firmIdentityMatch
+        ?(isLawyerCom?strictLawyerComRosterCount(scopedHtml,source,lead):strictFirmPageRosterCount(page.html,source,lead))
+        :0;
       const count=explicitCount>0?explicitCount:firmRosterCount;
       let website="";
       if(firmIdentityMatch){
@@ -3500,7 +3508,7 @@ function isPublishedHeadcountSource(source="",lead={}){
   }catch{return false;}
 }
 
-const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v5-lawyercom-target-scope";
+const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v6-lawyercom-all-paths-target-scope";
 
 function headcountSourceNeedsV2Identity(source=""){
   const host=hostOf(source);
@@ -4749,7 +4757,10 @@ async function lawyerComCandidateEvidence(lead={}){
       const identity=pageMatchesLead(text,lead,page.final_url||url)||
         Boolean(phone&&String(text).replace(/\D/g,"").includes(phone));
       if(!identity)continue;
-      const count=attorneyEstimate(page.html,text);
+      const targetHtml=targetScopedLawyerComHtml(page.html);
+      const explicitCount=targetScopedLawyerComFirmSize(targetHtml);
+      const rosterCount=explicitCount>0?0:strictLawyerComRosterCount(targetHtml,page.final_url||url,lead);
+      const count=explicitCount>0?explicitCount:rosterCount;
       const website=outboundFirmWebsiteFromDirectory(page.html,lead);
       return {count,source:page.final_url||url,website};
     }catch{}
