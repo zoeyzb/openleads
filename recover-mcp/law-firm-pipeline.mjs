@@ -922,7 +922,12 @@ async function zeroCostEmailFallback(lead={}){
       .filter(x=>x.email&&published.includes(x.email)&&x.confidence>=0.9)
       .sort((a,b)=>b.confidence-a.confidence)[0];
     const best=String(result?.best_email||"").trim().toLowerCase();
-    const accepted=candidate?[candidate.email]:(best&&published.includes(best)&&Number(result?.confidence||0)>=0.9?[best]:[]);
+    // email-enrich keeps its generic name-affinity contract. For this pipeline,
+    // evidence.found_public_emails can still be used when our stronger
+    // firm/person identity guard accepted the address; exact-source binding and
+    // MX verification still run before strict eligibility.
+    const accepted=candidate?[candidate.email]:
+      (best&&published.includes(best)&&Number(result?.confidence||0)>=0.9?[best]:(published[0]?[published[0]]:[]));
     return {emails:accepted,source:String(result?.evidence?.sources_checked?.[0]||primaryPublicSource||""),name_variant:personName};
   }));
   for(const attempt of attempts){
