@@ -3520,6 +3520,7 @@ async function enrichLead(key,lead){
   }
   const knownVerifiedCount=storedHeadcountValid?Number(lead.attorney_count_estimate||0):0;
   const knownSizeReady=knownVerifiedCount>=2&&knownVerifiedCount<=10;
+  const emailRecoveryAttempt=Math.max(0,Number(lead.email_recovery_attempts||0));
   if(knownVerifiedCount>0&&(knownVerifiedCount<2||knownVerifiedCount>10)){
     await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
     await redis.sAdd(ENRICHED_SET,key);
@@ -4022,7 +4023,7 @@ async function enrichLead(key,lead){
     const soloShape=lawFirmNameShape(lead)==="solo";
     const hasDirectOfficial=directOfficialLinks.length>0;
     const sizeReadyEmailPriority=attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10;
-    const sizeReadyAttempt=Math.max(0,Number(lead.email_recovery_attempts||0));
+    const sizeReadyAttempt=emailRecoveryAttempt;
 
     // Retry diversity matters more than repeating the same searches five times.
     // Proven 2-10/no-site passes rotate through bounded source waves:
@@ -4131,7 +4132,8 @@ async function enrichLead(key,lead){
   // Independent last-resort discovery lane. Run only after search engines miss,
   // and only when we have a plausible attorney identity. Any result still has
   // to survive exact-source binding below, so this cannot export guessed mail.
-  if(!emails.length&&!researchOwnedWebsite&&attorneyNameVariants(lead).length&&((attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10)||emailRecoveryPriority(lead)>=5||Number(lead.email_recovery_attempts||0)>=1)){
+  const runZeroCostThisAttempt=!(attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10)||emailRecoveryAttempt===0||emailRecoveryAttempt===3;
+  if(runZeroCostThisAttempt&&!emails.length&&!researchOwnedWebsite&&attorneyNameVariants(lead).length&&((attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10)||emailRecoveryPriority(lead)>=5||emailRecoveryAttempt>=1)){
     try{
       const zeroCost=await zeroCostEmailFallback(lead);
       if(zeroCost.emails.length){
@@ -4485,7 +4487,7 @@ async function enrichLead(key,lead){
     ? `Saw ${lead.name||"your firm"} while looking at ${targetLabel} firms${city?` in ${city}`:""}.${p.fact?` ${p.fact}.`:""} Couldn't find a firm website, so I reached out.`
     : "";
 
-  const recoveryAttempts=Math.max(0,Number(lead.email_recovery_attempts||0));
+  const recoveryAttempts=emailRecoveryAttempt;
   const enriched={...lead,email_recovery_attempts:recoveryAttempts,website:effectiveWebsite,emails,attorney_count_estimate:attorneyCount||null,attorney_count_evidence_verified:attorneyCountVerified,attorney_count_source:attorneyCountSource||"",headcount_identity_version:attorneyCountVerified?HEADCOUNT_IDENTITY_VERSION:"",preferred_firm_size:preferredSize,
     firm_size_tier:sizeTier,practice_areas:practices,practice_keys:practiceKeys,
     lead_type:practices.join(" + "),personalization_fact:p.fact,personalization_source:p.source,
@@ -4504,7 +4506,7 @@ async function enrichLead(key,lead){
   // Email is a hard eligibility gate. Spend materially more research on the
   // tiny cohort that already proved 2-10 attorneys + no owned website.
   const sizeReadyForEmail=attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10&&!effectiveWebsite;
-  const maxEmailRecoveryAttempts=sizeReadyForEmail?5:2;
+  const maxEmailRecoveryAttempts=sizeReadyForEmail?4:2;
   if((!emails.length||!emailSourceVerified)&&recoveryAttempts<maxEmailRecoveryAttempts){
     const recoverable={...enriched,email_recovery_attempts:recoveryAttempts+1,email_recovery_last_at:new Date().toISOString(),law_email_validation:"recovery_pending"};
     await redis.hSet(LEAD_HASH,key,JSON.stringify(recoverable));
