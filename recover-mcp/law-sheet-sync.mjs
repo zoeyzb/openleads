@@ -266,9 +266,9 @@ async function collectMetricsSnapshot(redis){
     redis.sCard("recover:law-firm:email-candidates:v1"),
     redis.sCard("recover:law-firm:size-ready-pending:v1"),
     redis.sCard("recover:law-firm:phone-headcount-priority:v1"),
-    redis.sCard("recover:law-firm:chicago-headcount-pending:v1"),
-    redis.sCard("recover:law-firm:priority-pending:v1"),
-    redis.sCard("recover:law-firm:recoverable-pending:v1")
+    redis.sCard("recover:law-firm:chicago-priority:v1"),
+    redis.sCard("recover:law-firm:enrich-priority:v3"),
+    redis.sCard("recover:law-firm:enrich-recoverable:v1")
   ]);
   return {
     timestamp:new Date().toISOString(),
