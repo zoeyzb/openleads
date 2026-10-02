@@ -1738,14 +1738,18 @@ async function directDirectorySizeEvidence(lead={},key=""){
     if(result.status!=="fulfilled")continue;
     indexedRecords.push(...(result.value?.records||[]));
   }
+  // Search-result snippets are discovery hints only. They can mix the query,
+  // neighbouring results, or stale snippets with a different firm's URL. The
+  // old path accepted those snippets as final headcount evidence and falsely
+  // classified many multi-attorney firms as solos. Keep the hint for
+  // diagnostics, but only a fetched identity-matched source page may verify size.
   const indexedEvidence=indexedDirectoryHeadcountEvidence(indexedRecords,lead);
   if(indexedEvidence){
-    await redis.hIncrBy(STATS,"indexed_directory_size_hit",1);
+    await redis.hIncrBy(STATS,"indexed_directory_hint_ignored",1);
     console.log(JSON.stringify({
-      event:"law_indexed_directory_size_hit",key,name,count:indexedEvidence.count,
+      event:"law_indexed_directory_hint_ignored",key,name,count:indexedEvidence.count,
       source:indexedEvidence.source
     }));
-    return {count:indexedEvidence.count,source:indexedEvidence.source,website:""};
   }
   if(INDEXED_HEADCOUNT_DIAGNOSTICS<8&&indexedRecords.length){
     INDEXED_HEADCOUNT_DIAGNOSTICS++;
@@ -3419,7 +3423,7 @@ function isPublishedHeadcountSource(source="",lead={}){
   }catch{return false;}
 }
 
-const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v3-official-phone-roster";
+const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v4-fetched-source-only";
 
 function headcountSourceNeedsV2Identity(source=""){
   const host=hostOf(source);
@@ -5418,7 +5422,11 @@ async function enrichBatch(){
   const phonePriorityKeys=afterRegular?await popSetBatch(PHONE_HEADCOUNT_PRIORITY_SET,phonePriorityTarget):[];
   const afterPhonePriority=Math.max(0,afterRegular-phonePriorityKeys.length);
 
-  const chicagoTarget=Math.min(afterPhonePriority,Math.max(48,Math.floor(ENRICH_BATCH*0.65)));
+  // While the phone/headcount backlog exists, use every remaining general slot
+  // to prove firm size. Email recovery for proven 2-10 firms already has its
+  // own SIZE_READY worker; spending ~35% of this worker on generic email
+  // recovery was starving the only lane capable of creating more 2-10 firms.
+  const chicagoTarget=afterPhonePriority;
   const chicagoKeys=afterPhonePriority?await popSetBatch(CHICAGO_PENDING_SET,chicagoTarget):[];
   const afterChicago=Math.max(0,afterPhonePriority-chicagoKeys.length);
 
@@ -6035,15 +6043,37 @@ async function bootstrapPhoneFirstInventory(){
 
       const n=Number(lead.attorney_count_estimate||lead.attorney_count||0);
       const source=String(lead.attorney_count_source||"");
-      const sourceHost=hostOf(source);
-      const legacyLooseDirectoryEvidence=(sourceHost==="lawyer.com"||sourceHost.endsWith(".lawyer.com")) &&
+      const staleDirectoryEvidence=
+        lead.attorney_count_evidence_verified===true &&
+        n>0 &&
+        headcountSourceNeedsV2Identity(source) &&
         String(lead.headcount_identity_version||"")!==HEADCOUNT_IDENTITY_VERSION;
-      const verified=lead.attorney_count_evidence_verified===true&&n>0&&isPublishedHeadcountSource(source,lead)&&!legacyLooseDirectoryEvidence;
-      if(legacyLooseDirectoryEvidence){
-        lead={...lead,attorney_count_evidence_verified:false,preferred_firm_size:false,firm_size_tier:"unknown"};
+      const verified=hasValidStoredHeadcount(lead);
+      if(staleDirectoryEvidence){
+        // Re-open directory-derived counts produced before fetched-page-only
+        // verification. Preserve contact/email evidence, but force firm size
+        // through the corrected source-page identity gate.
+        lead={...lead,
+          attorney_count_evidence_verified:false,
+          attorney_count_estimate:0,
+          attorney_count_source:"",
+          headcount_identity_version:"",
+          preferred_firm_size:false,
+          firm_size_tier:"unknown",
+          qualified_lead:false,
+          call_ready_lead:false,
+          phone_headcount_status:"needs_revalidation"
+        };
         await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(lead));
-        await redis.sRem(UNIQUE_VERIFIED_HEADCOUNT_SET,entry.field);
+        await Promise.all([
+          redis.sRem(UNIQUE_VERIFIED_HEADCOUNT_SET,entry.field),
+          redis.sRem(UNIQUE_ELIGIBLE_SET,entry.field),
+          redis.sRem(READY_SET,entry.field),
+          redis.sRem(ENRICHED_SET,entry.field),
+          redis.sRem(REJECTED_SET,entry.field)
+        ]);
         await redis.hDel(VERIFIED_HEADCOUNT_EVIDENCE_HASH,entry.field);
+        await redis.hIncrBy(STATS,"legacy_directory_headcount_reopened",1);
       }
       if(verified){
         if(n>=2&&n<=10){
