@@ -25,7 +25,7 @@ const ENRICH_CONCURRENCY=Math.max(1,Math.min(80,Number(process.env.LAW_FIRM_ENRI
 const SIZE_READY_EMAIL_BATCH=Math.max(4,Math.min(96,Number(process.env.LAW_SIZE_READY_EMAIL_BATCH||48)));
 const SIZE_READY_EMAIL_CONCURRENCY=Math.max(2,Math.min(48,Number(process.env.LAW_SIZE_READY_EMAIL_CONCURRENCY||24)));
 const EMAIL_METHOD_VERSION="email-v67-recovery-diversity-free-mail";
-const SIZE_READY_EMAIL_METHOD_VERSION="size-ready-email-v2-exact-phone-public-sources";
+const SIZE_READY_EMAIL_METHOD_VERSION="size-ready-email-v3-bar-profile-recovery";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
@@ -285,7 +285,7 @@ const READY_SET="recover:law-firm:qualified:v3";
 const EMAIL_CANDIDATE_SET="recover:law-firm:email-candidates:v1";
 const REQUALIFY_VERSION_KEY="recover:law-firm:full-requalify-version";
 const HISTORICAL_RECOVERY_VERSION_KEY="recover:law-firm:historical-recovery-version";
-const CALBAR_ADAPTER_VERSION="calbar-v10-strong-email-accept";
+const CALBAR_ADAPTER_VERSION="calbar-v11-phone-identity-before-status";
 const CALBAR_ADAPTER_VERSION_KEY="recover:law-firm:calbar-adapter-version";
 const FLORIDA_DIRECT_RECOVERY_VERSION="florida-direct-firm-v4-top-priority";
 const FLORIDA_DIRECT_RECOVERY_KEY="recover:law-firm:florida-direct-recovery-version";
@@ -528,7 +528,16 @@ async function loadCities(){
     }
     if(!progressed)break;
   }
-  return result;
+  // Strict-qualified yield is currently email-bound. Front-load cities in
+  // states where public bar profiles expose stronger contact evidence, while
+  // preserving the existing population-band ordering inside each bucket.
+  // This changes research order only; the same national city frontier remains.
+  const strictSourceStateOrder=["FL","CA","TX","GA","IL","NC","WA"];
+  const strictRank=new Map(strictSourceStateOrder.map((state,index)=>[state,index]));
+  const sourceRich=result.filter(x=>strictRank.has(x.state))
+    .sort((a,b)=>strictRank.get(a.state)-strictRank.get(b.state));
+  const rest=result.filter(x=>!strictRank.has(x.state));
+  return [...sourceRich,...rest].slice(0,MAX_CITIES);
 }
 async function fetchText(url,timeout=FETCH_TIMEOUT_MS){
   const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),timeout);
@@ -960,12 +969,23 @@ function calBarPublishedWebsite(text=""){
 }
 function calBarProfileMatchesLead(text="",lead={},sourceUrl=""){
   if(!isDirectCalBarProfile(sourceUrl))return null;
-  if(!calBarProfileStatusActive(text)&&!isActiveCalBarProfile(sourceUrl))return false;
   const raw=String(text||"");
   const digits=raw.replace(/\D/g,"");
   const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
-  if(phone&&digits.includes(phone))return true;
 
+  // CalBar sometimes strips or moves the visible "License Status" label in
+  // anti-scrape/Jina renderings even though the same profile still contains the
+  // exact published office phone. Exact 10-digit phone equality on a canonical
+  // CalBar licensee URL is stronger identity evidence than a fragile layout
+  // label, so accept that match before requiring the status parser. This does
+  // NOT loosen email eligibility: the address still has to be published on this
+  // exact profile, survive the CalBar decoy filter, MX, and no-owned-site gate.
+  if(phone&&digits.includes(phone)){
+    void redis.hIncrBy(STATS,"calbar_exact_phone_identity_accept",1).catch(()=>{});
+    return true;
+  }
+
+  if(!calBarProfileStatusActive(raw)&&!isActiveCalBarProfile(sourceUrl))return false;
   const plain=normalize(raw);
   const city=normalize(normalizedLeadCity(lead));
   const variants=attorneyNameVariants(lead)
