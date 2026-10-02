@@ -3518,16 +3518,10 @@ async function enrichLead(key,lead){
       }
     }catch{await redis.hIncrBy(STATS,"phone_first_headcount_florida_firm_roster_fail",1);}
 
-    if(!earlyCount){
-      try{
-        const roster=await phoneRosterHeadcountEvidence(lead,key);
-        if(Number(roster?.count||0)>0&&isPublishedHeadcountSource(String(roster?.source||""),lead)){
-          earlyCount=Number(roster.count);earlySource=String(roster.source);
-          await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster",1);
-        }
-      }catch{await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster_fail",1);}
-    }
-
+    // Exact Lawyer.com firm URLs are cheap (three bounded direct fetches) and,
+    // with the v8 dedicated-roster parser, now produce verified 2-10 counts.
+    // Run this before broad phone/search roster work so a hit avoids dozens of
+    // search-engine and directory requests.
     if(!earlyCount){
       try{
         const lawyer=await directLawyerComSizeEvidence(lead,key);
@@ -3536,6 +3530,16 @@ async function enrichLead(key,lead){
           await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom",1);
         }
       }catch{await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom_fail",1);}
+    }
+
+    if(!earlyCount){
+      try{
+        const roster=await phoneRosterHeadcountEvidence(lead,key);
+        if(Number(roster?.count||0)>0&&isPublishedHeadcountSource(String(roster?.source||""),lead)){
+          earlyCount=Number(roster.count);earlySource=String(roster.source);
+          await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster",1);
+        }
+      }catch{await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster_fail",1);}
     }
 
     if(!earlyCount){
