@@ -895,15 +895,21 @@ function attorneyNameVariants(lead={}){
 async function zeroCostEmailFallback(lead={}){
   const names=attorneyNameVariants(lead).slice(0,3);
   if(!names.length)return {emails:[],source:"",name_variant:""};
+  const primaryPublicSource=[
+    lead.attorney_count_source,
+    lead.law_directory_seed_source,
+    lead.google_maps_url,
+    lead.maps_url
+  ].map(x=>String(x||"").trim()).find(x=>/^https?:\/\//i.test(x))||"";
   const attempts=await Promise.allSettled(names.map(async personName=>{
     const result=await withDeadline(
-      enrichProfessionalEmail("recover-law-email-v5",{
+      enrichProfessionalEmail("recover-law-email-v6-public-source",{
         person_name:personName,
         company_name:String(lead.name||lead.title||personName),
         mode:"fast",
         real_only:true,
         use_case:"cold_outreach",
-        hints:{source_urls:[String(lead.google_maps_url||"")].filter(Boolean)}
+        hints:{source_urls:primaryPublicSource?[primaryPublicSource]:[]}
       }),
       20000,
       "email-enrich:"+personName
@@ -911,9 +917,13 @@ async function zeroCostEmailFallback(lead={}){
     const published=(result?.evidence?.found_public_emails||[])
       .map(x=>String(x||"").trim().toLowerCase())
       .filter(x=>emailIdentityStrong(x,lead));
+    const candidate=(result?.candidates||[])
+      .map(x=>({email:String(x?.email||"").trim().toLowerCase(),confidence:Number(x?.confidence||0)}))
+      .filter(x=>x.email&&published.includes(x.email)&&x.confidence>=0.9)
+      .sort((a,b)=>b.confidence-a.confidence)[0];
     const best=String(result?.best_email||"").trim().toLowerCase();
-    const accepted=best&&published.includes(best)&&Number(result?.confidence||0)>=0.9?[best]:[];
-    return {emails:accepted,source:String(result?.evidence?.sources_checked?.[0]||""),name_variant:personName};
+    const accepted=candidate?[candidate.email]:(best&&published.includes(best)&&Number(result?.confidence||0)>=0.9?[best]:[]);
+    return {emails:accepted,source:String(result?.evidence?.sources_checked?.[0]||primaryPublicSource||""),name_variant:personName};
   }));
   for(const attempt of attempts){
     if(attempt.status==="fulfilled"&&attempt.value.emails.length)return attempt.value;
