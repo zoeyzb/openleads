@@ -6,6 +6,7 @@ import { resolveMx } from "node:dns/promises";
 import { orchestrate as enrichProfessionalEmail } from "email-enrich";
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
 import { buildLawEmailSearchQueries } from "./law-email-search-plan.mjs";
+import { decodePublishedRot13Emails } from "./published-email-obfuscation.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -1249,13 +1250,14 @@ function normalizePublishedEmailText(value=""){
     return decoded?`${m} ${decoded}`:m;
   });
   try{text=decodeURIComponent(text.replace(/\+/g,"%20"));}catch{}
-  return text
+  const normalized=text
     .replace(/&#64;|&commat;/gi,"@")
     .replace(/&#46;|&period;/gi,".")
     .replace(/\s*(?:\[at\]|\(at\)|\{at\})\s*/gi,"@")
     .replace(/\s+(?:at)\s+/gi,"@")
     .replace(/\s*(?:\[dot\]|\(dot\)|\{dot\})\s*/gi,".")
     .replace(/\s+(?:dot)\s+/gi,".");
+  return decodePublishedRot13Emails(normalized);
 }
 function calBarEmailCandidateStrong(email="",lead={}){
   const value=String(email||"").toLowerCase().trim();
