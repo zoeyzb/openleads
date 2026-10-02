@@ -5,7 +5,8 @@ import { randomUUID } from "node:crypto";
 import { resolveMx } from "node:dns/promises";
 import { orchestrate as enrichProfessionalEmail } from "email-enrich";
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
-import { buildLawEmailSearchQueries } from "./law-email-search-plan.mjs";\nimport { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
+import { buildLawEmailSearchQueries } from "./law-email-search-plan.mjs";
+import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||"";
