@@ -46,6 +46,7 @@ const DATAFORGE_API_TOKEN = process.env.DATAFORGE_API_TOKEN || "";
 const ACQUISITION_REDIS_URL = process.env.ACQUISITION_REDIS_URL || "";
 const LAW_EXPORT_REDIS_URL = process.env.LAW_EXPORT_REDIS_URL || "";
 const LAW_EXPORT_TOKEN = String(process.env.LAW_EXPORT_TOKEN || "");
+const LAW_SHEET_EXPORT_TOKEN = String(process.env.LAW_SHEET_EXPORT_TOKEN || "");
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || "";
 const TELNYX_FROM_NUMBER = process.env.TELNYX_FROM_NUMBER || "";
 const TELNYX_WEBHOOK_URL = (process.env.TELNYX_WEBHOOK_URL || "").trim();
@@ -137,6 +138,12 @@ function secureEqual(left, right) {
   const a = Buffer.from(String(left));
   const b = Buffer.from(String(right));
   return a.length === b.length && timingSafeEqual(a, b);
+}
+function lawCallReadyExportAuthorized(token=""){
+  return Boolean(
+    (LAW_EXPORT_TOKEN && secureEqual(token,LAW_EXPORT_TOKEN)) ||
+    (LAW_SHEET_EXPORT_TOKEN && secureEqual(token,LAW_SHEET_EXPORT_TOKEN))
+  );
 }
 
 function signOauthToken(payload) {
@@ -328,6 +335,66 @@ async function getLawExportRedis() {
     lawExportRedisPromise=null;
     throw error;
   }
+}
+
+async function collectCallReadyLawRows(){
+  const redis=await getLawExportRedis();
+  const rows=[];
+  const seen=new Set();
+  for await (const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
+    for(const entry of (Array.isArray(page)?page:[page])){
+      if(!entry?.value)continue;
+      let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
+      const isLaw=String(lead.search_profile||"")==="law-firm"||String(lead.industry||"").toUpperCase()==="LAW_FIRM";
+      if(!isLaw||!qualifiesCallReadyNoWebsiteLawLead(lead))continue;
+      const phone=String(lead.phone||"").trim();
+      if(!isUsableLawPhone(phone))continue;
+      const name=String(lead.name||lead.title||"").trim();
+      const dedupeKey=(normalizeLawPhone(phone)||phone)+"|"+name.toLowerCase();
+      if(seen.has(dedupeKey))continue;
+      seen.add(dedupeKey);
+
+      const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+        .map(x=>String(x||"").trim().toLowerCase())
+        .filter(isUsableLawEmail);
+      const emailSource=String(lead.law_email_source||lead.email_source||lead.email_evidence_url||"").trim();
+      const emailSourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
+      const emailEligible=Boolean(emails.length&&emailSourceVerified);
+
+      const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
+      const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
+      const focus=String(lead.practice_focus||"").trim();
+      const practiceKeys=[...new Set([...storedKeys,...lawFirmPracticeKeys(evidence),...(focus?[focus]:[])])];
+      const labels=practiceKeys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
+      const type=(labels.length?labels:lawFirmPracticeAreas(evidence)).join(" + ")||"Law";
+
+      rows.push({
+        key:entry.field,
+        type,
+        firm:name,
+        phone,
+        phoneType:String(lead.phone_type||lead.line_type||lead.phone_line_type||"").trim(),
+        phoneStatus:"Usable",
+        email:emailEligible?(emails[0]||""):"",
+        emailStatus:emailEligible?"Source-verified":"Missing strict email",
+        city:String(lead.city||"").trim(),
+        state:String(lead.region||lead.state||"").trim().toUpperCase(),
+        attorneys:Number(lead.attorney_count_estimate||lead.attorney_count||0),
+        headcountSource:String(lead.attorney_count_source||"").trim(),
+        address:String(lead.address||"").trim(),
+        maps:String(lead.google_maps_url||lead.maps_url||"").trim(),
+        priority:Number(lead.lead_priority_score||0)||0,
+        personalAngle:String(lead.personalization_fact||"").trim(),
+        source:emailEligible?emailSource:String(lead.attorney_count_source||lead.personalization_source||lead.google_maps_url||lead.maps_url||"").trim(),
+        callReady:true,
+        emailEligible,
+        strictEligible:emailEligible,
+        status:"New"
+      });
+    }
+  }
+  rows.sort((a,b)=>b.priority-a.priority||Number(b.emailEligible)-Number(a.emailEligible)||a.firm.localeCompare(b.firm));
+  return rows;
 }
 
 async function getQualifiedSheetLeads(redis) {
@@ -3449,70 +3516,55 @@ const httpServer = createHttpServer((req, res) => {
   if (requestUrl.pathname === "/exports/law-call-ready.json" && req.method === "GET") {
     void (async () => {
       const token=String(requestUrl.searchParams.get("token")||"");
-      if(!LAW_EXPORT_TOKEN || !secureEqual(token,LAW_EXPORT_TOKEN)){
+      if(!lawCallReadyExportAuthorized(token)){
         res.writeHead(401,{"content-type":"application/json","cache-control":"no-store"});
         res.end(JSON.stringify({error:"unauthorized"}));
         return;
       }
-      const redis=await getLawExportRedis();
-      const rows=[];
-      const seen=new Set();
-      for await (const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
-        for(const entry of (Array.isArray(page)?page:[page])){
-          if(!entry?.value)continue;
-          let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
-          const isLaw=String(lead.search_profile||"")==="law-firm"||String(lead.industry||"").toUpperCase()==="LAW_FIRM";
-          if(!isLaw)continue;
-          if(!qualifiesCallReadyNoWebsiteLawLead(lead))continue;
-          const phone=String(lead.phone||"").trim();
-          if(!isUsableLawPhone(phone))continue;
-          const name=String(lead.name||lead.title||"").trim();
-          const dedupeKey=(normalizeLawPhone(phone)||phone)+"|"+name.toLowerCase();
-          if(seen.has(dedupeKey))continue;
-          seen.add(dedupeKey);
-
-          const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
-            .map(x=>String(x||"").trim().toLowerCase())
-            .filter(isUsableLawEmail);
-          const emailSource=String(lead.law_email_source||lead.email_source||lead.email_evidence_url||"").trim();
-          const emailSourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
-          const emailEligible=Boolean(emails.length&&emailSourceVerified);
-
-          const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
-          const storedKeys=Array.isArray(lead.practice_keys)?lead.practice_keys:[];
-          const focus=String(lead.practice_focus||"").trim();
-          const practiceKeys=[...new Set([...storedKeys,...lawFirmPracticeKeys(evidence),...(focus?[focus]:[])])];
-          const labels=practiceKeys.map(k=>TARGET_LAW_PRACTICES.find(p=>p.key===k)?.label).filter(Boolean);
-          const type=(labels.length?labels:lawFirmPracticeAreas(evidence)).join(" + ")||"Law";
-
-          rows.push({
-            key:entry.field,
-            type,
-            firm:name,
-            phone,
-            phoneStatus:"Usable",
-            email:emailEligible?(emails[0]||""):"",
-            emailStatus:emailEligible?"Source-verified":"Optional / not verified",
-            city:String(lead.city||"").trim(),
-            state:String(lead.region||lead.state||"").trim().toUpperCase(),
-            attorneys:Number(lead.attorney_count_estimate||lead.attorney_count||0),
-            headcountSource:String(lead.attorney_count_source||"").trim(),
-            address:String(lead.address||"").trim(),
-            maps:String(lead.google_maps_url||lead.maps_url||"").trim(),
-            priority:Number(lead.lead_priority_score||0)||0,
-            personalAngle:String(lead.personalization_fact||"").trim(),
-            source:emailEligible?emailSource:String(lead.attorney_count_source||lead.personalization_source||lead.google_maps_url||lead.maps_url||"").trim(),
-            callReady:true,
-            emailEligible
-          });
-        }
-      }
-      rows.sort((a,b)=>b.priority-a.priority||Number(b.emailEligible)-Number(a.emailEligible)||a.firm.localeCompare(b.firm));
+      const rows=await collectCallReadyLawRows();
       res.writeHead(200,{"content-type":"application/json","cache-control":"no-store"});
       res.end(JSON.stringify({count:rows.length,rows}));
     })().catch(error=>{
       res.writeHead(500,{"content-type":"application/json","cache-control":"no-store"});
       res.end(JSON.stringify({error:error?.message||"call_ready_export_failed"}));
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === "/exports/law-call-ready.csv" && req.method === "GET") {
+    void (async () => {
+      const token=String(requestUrl.searchParams.get("token")||"");
+      if(!lawCallReadyExportAuthorized(token)){
+        res.writeHead(401,{"content-type":"application/json","cache-control":"no-store"});
+        res.end(JSON.stringify({error:"unauthorized"}));
+        return;
+      }
+      const rows=await collectCallReadyLawRows();
+      const headers=[
+        "Phone","Firm","Practice","Email","Email Status","Attorneys",
+        "Phone Type","Phone Status","City","State","Strict Eligible","Priority",
+        "Address","Google Maps","Personal Angle","Headcount Source","Contact Source","Status"
+      ];
+      const data=rows.map(row=>[
+        row.phone,row.firm,row.type,row.email,row.emailStatus,row.attorneys||"",
+        row.phoneType,row.phoneStatus,row.city,row.state,row.strictEligible?"Yes":"No",row.priority||"",
+        row.address,row.maps,row.personalAngle,row.headcountSource,row.source,row.status
+      ]);
+      const esc=value=>{
+        const s=String(value??"");
+        return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
+      };
+      const csv=[headers,...data].map(row=>row.map(esc).join(",")).join("\r\n");
+      res.writeHead(200,{
+        "content-type":"text/csv; charset=utf-8",
+        "content-disposition":'inline; filename="law-call-ready.csv"',
+        "cache-control":"no-store, max-age=0",
+        "access-control-allow-origin":"*"
+      });
+      res.end(csv);
+    })().catch(error=>{
+      res.writeHead(500,{"content-type":"application/json","cache-control":"no-store"});
+      res.end(JSON.stringify({error:error?.message||"call_ready_csv_export_failed"}));
     });
     return;
   }
