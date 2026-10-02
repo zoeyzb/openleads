@@ -59,4 +59,20 @@ const wrap = body => `<!doctype html><html><body>${body}</body></html>`;
   assert.doesNotMatch(scoped,/Unrelated One/,"related attorney roster must be outside target scope");
 }
 
+{
+  const html=wrap(`
+    <main>
+      <h1>Target Firm</h1>
+      <h3>lawyers</h3>
+      <a href="/lawyer/target-one">Target One</a>
+      <h3>LAW FIRMS NEARBY</h3>
+      <a href="/lawyer/unrelated-one">Unrelated One</a>
+      <a href="/lawyer/unrelated-two">Unrelated Two</a>
+      <a href="/lawyer/unrelated-three">Unrelated Three</a>
+    </main>`);
+  const scoped=targetScopedLawyerComHtml(html);
+  assert.match(scoped,/Target One/);
+  assert.doesNotMatch(scoped,/Unrelated One/,"'LAW FIRMS NEARBY' must terminate the target-firm scope");
+}
+
 console.log("lawyer.com firm-size scope tests passed");

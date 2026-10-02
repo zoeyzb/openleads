@@ -313,7 +313,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v11-lawyercom-all-paths-target-scope";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v12-lawyercom-nearby-boundary";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -3508,7 +3508,7 @@ function isPublishedHeadcountSource(source="",lead={}){
   }catch{return false;}
 }
 
-const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v6-lawyercom-all-paths-target-scope";
+const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v7-lawyercom-nearby-boundary";
 
 function headcountSourceNeedsV2Identity(source=""){
   const host=hostOf(source);
