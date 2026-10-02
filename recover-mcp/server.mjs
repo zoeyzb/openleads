@@ -339,6 +339,7 @@ async function getLawExportRedis() {
 
 async function collectCallReadyLawRows(){
   const redis=await getLawExportRedis();
+  const strictEligibleKeys=new Set(await redis.sMembers("recover:law-firm:unique-eligible:v1"));
   const rows=[];
   const seen=new Set();
   for await (const page of redis.hScanIterator("recover:leadstore:qualified",{COUNT:500})){
@@ -388,7 +389,7 @@ async function collectCallReadyLawRows(){
         source:emailEligible?emailSource:String(lead.attorney_count_source||lead.personalization_source||lead.google_maps_url||lead.maps_url||"").trim(),
         callReady:true,
         emailEligible,
-        strictEligible:Boolean(lead.qualified_lead===true&&emailEligible),
+        strictEligible:Boolean(strictEligibleKeys.has(entry.field)&&emailEligible),
         status:"New"
       });
     }
