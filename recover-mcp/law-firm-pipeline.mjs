@@ -3706,13 +3706,16 @@ async function enrichLead(key,lead){
           firm_size_tier:firmSizeTier(earlyCount),
           primary_pain_point:"No website",
           website_opportunity:"website_build",
-          law_firm_enriched_at:new Date().toISOString()
+          law_firm_enriched_at:new Date().toISOString(),
+          law_email_validation:"recovery_pending"
         };
         await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
         await redis.sRem(REJECTED_SET,key);
-        // Strict eligibility requires a source-verified usable email. Continue
-        // inline into email discovery now that 2-10 + no-owned-site is proven.
-        await redis.hIncrBy(STATS,"size_ready_email_inline",1);
+        // Do not make a headcount worker spend the rest of its slot on a broad
+        // email search. Persist the proven 2-10/no-site lead and let the
+        // conversion-first SIZE_READY lane finish the mandatory email gate.
+        await redis.hIncrBy(STATS,"size_ready_email_deferred",1);
+        return true;
       }
     }
 
@@ -5202,6 +5205,18 @@ async function enrichBatch(){
   const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
   const keys=[...new Set([...sizeReadyKeys,...regularKeys,...phonePriorityKeys,...chicagoKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
   if(!keys.length)return 0;
+  console.log(JSON.stringify({
+    event:"law_enrich_batch_selected",
+    sizeReady:sizeReadyKeys.length,
+    regular:regularKeys.length,
+    phonePriority:phonePriorityKeys.length,
+    phonePending:chicagoKeys.length,
+    fresh:freshKeys.length,
+    priority:priorityKeys.length,
+    recoverable:recoverableKeys.length,
+    total:keys.length,
+    concurrency:ENRICH_CONCURRENCY
+  }));
   await redis.hIncrBy(STATS,"enrich_non_destructive_batch_selected",keys.length);
   let index=0,done=0;
   const run=async()=>{
@@ -5887,10 +5902,14 @@ async function seedLoop(){
   }
 }
 
+let LAST_ENRICH_CYCLE_AT=Date.now(),LAST_ENRICH_CYCLE_MS=0;
 async function enrichmentLoop(){
   while(true){
     try{
+      const cycleStarted=Date.now();
       const enriched=await enrichBatch();
+      LAST_ENRICH_CYCLE_MS=Date.now()-cycleStarted;
+      LAST_ENRICH_CYCLE_AT=Date.now();
       const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,pendingSizeReady,websitePending,websiteReady,currentEmailCandidates,uniqueVerifiedEmails,uniqueVerifiedHeadcounts,uniqueEligibleLeads,emailStats]=await Promise.all([
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
         redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),redis.sCard(SIZE_READY_PENDING_SET),
@@ -5899,7 +5918,7 @@ async function enrichmentLoop(){
         redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","scrapling_search_hit","bing_source_links","bing_source_pages_matched","bing_source_email_pages","email_raw_candidate_leads","email_identity_mx_pass_leads","email_identity_mx_reject_leads","email_keelead_pass_leads","email_keelead_reject_leads","email_source_verified_leads","jina_source_hit","jina_source_fail","email_existing_recorroborated","email_existing_recorroboration_miss","post_email_headcount_verified","post_email_headcount_miss","post_email_headcount_bing","post_email_headcount_duck","rejected_no_verified_email","rejected_unverified_attorney_count","rejected_wrong_size","rejected_has_website","scrapling_static_hit","scrapling_static_fail","bing_queries_with_links","bing_source_page_fetch_reject","bing_rss_query_hit","bing_query_fetch_reject","bing_fallback_error","email_source_binding_reject_leads","scrapling_generic_skip","owned_website_research_hit","website_preflight_hit","website_preflight_miss","bar_query_hit","bar_source_page_matched","bar_email_page","email_zero_cost_fail","email_source_binding_page_miss","email_source_binding_identity_reject","email_source_binding_exact_email_miss","email_source_binding_fetch_error","website_preflight_deferred","scrapling_browser_skip","bing_relative_result_links","scrapling_broad_discovery_skip","bing_source_raw_email_pages","bing_source_context_reject_email_pages","duck_source_raw_email_pages","duck_source_context_reject_email_pages","owned_website_verified_email_hit","bing_generic_link_reject","calbar_decoy_email_reject","bing_trusted_link_reject","expected_bar_query_with_links","expected_bar_result_links","expected_bar_page_matched","expected_bar_email_page","yahoo_expected_bar_query_hit","yahoo_expected_bar_result_links","yahoo_expected_bar_query_miss","yahoo_expected_bar_fetch_error","expected_bar_eligible_query_checks","expected_bar_query_executed","expected_bar_state_direct","expected_bar_state_derived","direct_calbar_search_attempt","direct_calbar_profile_links","direct_calbar_search_error","direct_calbar_page_matched","direct_calbar_email_page","candidate_owned_website_recheck_hit","calbar_profile_identity_reject","calbar_profile_website_hit","candidate_calbar_identity_reject","candidate_calbar_website_hit","owner_name_firm_label_bypass","direct_calbar_unique_profile","direct_calbar_deep_read_attempt","direct_calbar_deep_read_match","enrich_non_destructive_batch_selected","direct_calbar_deep_read_chars","direct_calbar_active_from_search","direct_calbar_unique_active","calbar_strong_email_accept","direct_calbar_search_identity_reject","direct_lawyercom_size_attempt","direct_lawyercom_size_hit","direct_lawyercom_size_miss","post_email_headcount_direct_lawyercom","candidate_source_owned_website_hit","candidate_lawyercom_size_hit","candidate_lawyercom_website_hit","candidate_source_email_phone_owned_hit","candidate_source_jina_recheck","direct_txbar_search_attempt","direct_txbar_profile_links","direct_txbar_search_error","direct_ilbar_search_attempt","direct_ilbar_profile_links","direct_ilbar_search_error","direct_gabar_search_attempt","direct_gabar_profile_links","direct_gabar_search_error","direct_ncbar_search_attempt","direct_ncbar_profile_links","direct_ncbar_search_error","direct_wabar_search_attempt","direct_wabar_profile_links","direct_wabar_search_error","direct_floridabar_search_attempt","direct_floridabar_profile_links","direct_floridabar_search_error"])
       ]);
       console.log(JSON.stringify({
-        event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,pendingSizeReady,websitePending,websiteReady,
+        event:"law_firm_pipeline_cycle",seeded:null,enriched,enrichCycleMs:LAST_ENRICH_CYCLE_MS,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,pendingSizeReady,websitePending,websiteReady,
         emailExisting:Number(emailStats?.[0]||0),emailDuck:Number(emailStats?.[1]||0),emailBing:Number(emailStats?.[2]||0),
         emailZeroCost:Number(emailStats?.[3]||0),emailNoHit:Number(emailStats?.[4]||0),
         scraplingSourceHit:Number(emailStats?.[5]||0),scraplingSourceFail:Number(emailStats?.[6]||0),
@@ -5929,7 +5948,13 @@ async function statusLoop(){
         redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),
         redis.sCard(SIZE_READY_PENDING_SET),redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),redis.sCard(CHICAGO_PENDING_SET)
       ]);
-      console.log(JSON.stringify({event:"law_firm_pipeline_heartbeat",qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,phoneHeadcountPriority,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady}));
+      const enrichSilenceMs=Math.max(0,Date.now()-LAST_ENRICH_CYCLE_AT);
+      console.log(JSON.stringify({
+        event:"law_firm_pipeline_heartbeat",qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
+        phoneHeadcountPriority,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,
+        lastEnrichCycleMs:LAST_ENRICH_CYCLE_MS,enrichSilenceMs,
+        enrichmentStalled:enrichSilenceMs>Math.max(180000,LOOP_MS*6)
+      }));
     }catch(error){
       console.error("law_firm_status_loop_error",error?.stack||error?.message||error);
     }
