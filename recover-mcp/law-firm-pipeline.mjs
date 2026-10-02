@@ -255,7 +255,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v7-indexed-directory-size";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v8-lawyercom-strict-roster";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -1310,6 +1310,22 @@ function strictFirmPageRosterCount(html="",source="",lead={}){
   return best;
 }
 
+function strictLawyerComRosterCount(html="",source="",lead={}){
+  if(!/(^|\.)lawyer\.com$/i.test(hostOf(source)))return 0;
+  const raw=String(html||"");
+  if(!raw||!strictLawyerComIdentityMatch(source,stripHtml(raw).slice(0,70000),lead))return 0;
+
+  // Count only the firm's dedicated Lawyers section. Never count Reviews,
+  // recommendations, nearby attorneys, footer profiles, or other page modules.
+  const heading=/<h([2-4])\b[^>]*>\s*(?:<[^>]+>\s*)*Lawyers(?:\s*<[^>]+>)*\s*<\/h\1>/i.exec(raw);
+  if(!heading)return 0;
+  const start=(heading.index||0)+heading[0].length;
+  const tail=raw.slice(start,start+90000);
+  const next=/<h[2-4]\b[^>]*>\s*(?:<[^>]+>\s*)*(?:Reviews?|Contact|About|Similar|Nearby|Location|Office|Services?)/i.exec(tail);
+  const section=next?tail.slice(0,next.index):tail.slice(0,45000);
+  return directoryRosterCount(section,source,lead);
+}
+
 function officialFirmSizeEstimate(text=""){
   const plain=String(text||"").replace(/\s+/g," ").trim();
   if(!plain)return 0;
@@ -1942,9 +1958,11 @@ async function directLawyerComSizeEvidence(lead={},key=""){
     if(!/(^|\.)lawyer\.com$/i.test(hostOf(source)))continue;
     const text=stripHtml(page.html).slice(0,36000);
     if(!strictDirectoryFirmIdentity(page.html,source,lead))continue;
-    // Only an explicit published Firm Size value is authoritative here.
-    // Generic profile-link counts can include recommendations/nearby lawyers.
-    const count=officialFirmSizeEstimate(text);
+    // Explicit firm size is preferred. Otherwise count only the dedicated
+    // Lawyers section on this exact identity-matched firm page.
+    const explicitCount=officialFirmSizeEstimate(text);
+    const rosterCount=explicitCount>0?0:strictLawyerComRosterCount(page.html,source,lead);
+    const count=explicitCount>0?explicitCount:rosterCount;
     if(count>0){
       // A third-party "Firm Size: 1" conflicts with an explicit multi-attorney
       // business name often enough that it must not terminate strict research.
