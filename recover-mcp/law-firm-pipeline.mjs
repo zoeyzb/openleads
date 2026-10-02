@@ -8,6 +8,7 @@ import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PR
 import { buildLawEmailSearchQueries } from "./law-email-search-plan.mjs";
 import { decodePublishedRot13Emails } from "./published-email-obfuscation.mjs";
 import { alignEligibleToReady } from "./law-eligible-set-align.mjs";
+import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml } from "./lawyercom-firm-size.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -312,7 +313,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v9-lawyercom-slug-variants";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v10-lawyercom-target-scope";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -2155,10 +2156,12 @@ async function directLawyerComSizeEvidence(lead={},key=""){
     if(!/(^|\.)lawyer\.com$/i.test(hostOf(source)))continue;
     const text=stripHtml(page.html).slice(0,36000);
     if(!strictDirectoryFirmIdentity(page.html,source,lead))continue;
-    // Explicit firm size is preferred. Otherwise count only the dedicated
-    // Lawyers section on this exact identity-matched firm page.
-    const explicitCount=officialFirmSizeEstimate(text);
-    const rosterCount=explicitCount>0?0:strictLawyerComRosterCount(page.html,source,lead);
+    // Lawyer.com pages often append nearby/similar firm cards containing their
+    // own "Firm Size" and attorney links. Scope both numerical and roster
+    // evidence to the target firm's primary section before those modules.
+    const targetHtml=targetScopedLawyerComHtml(page.html);
+    const explicitCount=targetScopedLawyerComFirmSize(targetHtml);
+    const rosterCount=explicitCount>0?0:strictLawyerComRosterCount(targetHtml,source,lead);
     const count=explicitCount>0?explicitCount:rosterCount;
     if(count>0){
       // A third-party "Firm Size: 1" conflicts with an explicit multi-attorney
@@ -3497,7 +3500,7 @@ function isPublishedHeadcountSource(source="",lead={}){
   }catch{return false;}
 }
 
-const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v4-fetched-source-only";
+const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v5-lawyercom-target-scope";
 
 function headcountSourceNeedsV2Identity(source=""){
   const host=hostOf(source);
