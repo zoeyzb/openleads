@@ -39,7 +39,7 @@ jobs:
           git remote add origin https://github.com/zoeyzb/email-enrich.git
           git fetch --depth 1 origin "$EMAIL_ENRICH_REF"
           git checkout --detach FETCH_HEAD
-          npm ci
+          npm install --no-audit --no-fund
           npm run typecheck
           npm test -- --runInBand
           npm run build
