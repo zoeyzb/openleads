@@ -5,6 +5,7 @@ on:
     branches: [recover-scrape-mcp]
     paths:
       - "recover-mcp/law-firm-pipeline.mjs"
+      - "recover-mcp/lawyercom-firm-size*.mjs"
       - "recover-mcp/law-eligible-set-align*.mjs"
       - "recover-mcp/published-email-obfuscation*.mjs"
       - "recover-mcp/law-firm-targeting.mjs"
@@ -53,6 +54,8 @@ jobs:
         run: node recover-mcp/published-email-obfuscation.node-test.mjs
       - name: Run eligible set alignment regression test
         run: node recover-mcp/law-eligible-set-align.node-test.mjs
+      - name: Run Lawyer.com firm-size scope regression test
+        run: node recover-mcp/lawyercom-firm-size.node-test.mjs
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
       - name: Run law sheet metrics regression test
