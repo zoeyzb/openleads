@@ -44,6 +44,8 @@ jobs:
           npm test -- --runInBand
           npm run build
           cd "$GITHUB_WORKSPACE"
+      - name: Run law email search plan regression test
+        run: node recover-mcp/law-email-search-plan.node-test.mjs
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
       - name: Check law sheet sync syntax

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { resolveMx } from "node:dns/promises";
 import { orchestrate as enrichProfessionalEmail } from "email-enrich";
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
+import { buildLawEmailSearchQueries } from "./law-email-search-plan.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -25,7 +26,7 @@ const ENRICH_CONCURRENCY=Math.max(1,Math.min(80,Number(process.env.LAW_FIRM_ENRI
 const SIZE_READY_EMAIL_BATCH=Math.max(4,Math.min(96,Number(process.env.LAW_SIZE_READY_EMAIL_BATCH||48)));
 const SIZE_READY_EMAIL_CONCURRENCY=Math.max(2,Math.min(48,Number(process.env.LAW_SIZE_READY_EMAIL_CONCURRENCY||24)));
 const EMAIL_METHOD_VERSION="email-v67-recovery-diversity-free-mail";
-const SIZE_READY_EMAIL_METHOD_VERSION="size-ready-email-v4-headcount-roster-identities";
+const SIZE_READY_EMAIL_METHOD_VERSION="size-ready-email-v5-email-first-search-plan";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
@@ -2638,20 +2639,25 @@ async function duckFallback(lead,key=""){
   const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
     .filter(x=>isUsableLawEmail(x)&&!isThirdPartyEmailDomain(x));
   const shape=lawFirmNameShape(lead);
-  // Email is the first money gate. Firm-shaped names used to prioritize size
-  // before contact discovery, starving the first search waves of email queries.
-  // Only switch to size-first after an email exists or in the dedicated
-  // post-email headcount conversion pass.
+  const existingAttorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
+  const sizeVerified=existingAttorneyCount>=2&&existingAttorneyCount<=10;
   const chicagoWebsiteBuild=/\bchicago\b/i.test(String(lead.acquisition_location||lead.target_area||"")) &&
     !String(lead.website||"").trim() &&
     (shape==="multi"||shape==="firm");
   const phoneReady=isUsableLawPhone(lead.phone);
-  const prioritizeSize=phoneReady||existingEmails.length>0||lead.conversion_headcount_priority===true||chicagoWebsiteBuild;
-  const queries=[...new Set(prioritizeSize
-    ? [...headcountQueries,...attorneyQueries.slice(0,2),...baseQueries,...attorneyQueries.slice(2)]
-    : [...attorneyQueries,...baseQueries,...headcountQueries])];
+  // Once 2-10 attorneys is already verified, do not spend the first bounded
+  // search waves re-proving headcount. The remaining hard gate is a published,
+  // identity-bound, MX-valid email, so attorney/public-record queries go first.
+  const queries=buildLawEmailSearchQueries({
+    attorneyQueries,
+    baseQueries,
+    headcountQueries,
+    sizeVerified,
+    phoneReady,
+    conversionHeadcountPriority:lead.conversion_headcount_priority===true,
+    chicagoWebsiteBuild
+  });
   if(!queries.length)return {emails:[],text:"",source:"",attorneyCount:0,personalFact:"",personalFactSource:""};
-  const existingAttorneyCount=lead.attorney_count_evidence_verified===true?Number(lead.attorney_count_estimate||0):0;
   if(existingEmails.length&&existingAttorneyCount>=2&&existingAttorneyCount<=10){
     return {
       emails:rankLawEmails(existingEmails).slice(0,5),
