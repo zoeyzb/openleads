@@ -1875,7 +1875,8 @@ async function directFloridaFirmRosterHeadcountEvidence(lead={},key=""){
 
       const pages=await Promise.allSettled(links.slice(0,11).map(async url=>{
         const page=await fetchText(url,5000);
-        const text=stripHtml(String(page?.html||"")).slice(0,60000);
+        const html=String(page?.html||"");
+        const text=stripHtml(html).slice(0,60000);
         if(!text)return null;
         const norm=normalize(text);
         const digits=text.replace(/\D/g,"");
@@ -1885,17 +1886,34 @@ async function directFloridaFirmRosterHeadcountEvidence(lead={},key=""){
         const firmMatch=(fullFirm.length>=8&&norm.includes(fullFirm)) ||
           (firmTokens.length>=2&&tokenHits>=Math.min(2,firmTokens.length));
         const phoneMatch=Boolean(phone&&digits.includes(phone));
-        return (phoneMatch||firmMatch)?url:null;
+        return (phoneMatch||firmMatch)?{url,html,text}:null;
       }));
-      const matched=[...new Set(pages.filter(x=>x.status==="fulfilled"&&x.value).map(x=>x.value))];
+      const matchedRaw=pages.filter(x=>x.status==="fulfilled"&&x.value).map(x=>x.value);
+      const matched=[...new Map(matchedRaw.map(x=>[x.url,x])).values()];
       if(matched.length){
         const count=matched.length>10?11:matched.length;
+        const emailEvidence=[];
+        for(const item of matched.slice(0,10)){
+          for(const email of contextualEmails(item.html,lead,item.url)){
+            emailEvidence.push({email,source:item.url});
+          }
+        }
+        const checked=await Promise.all([...new Map(emailEvidence.map(x=>[x.email,x])).values()].slice(0,8).map(async x=>({
+          ...x,ok:await hasMailExchange(x.email)
+        })));
+        const published=checked.filter(x=>x.ok);
         await redis.hIncrBy(STATS,"florida_firm_roster_hit",1);
+        if(published.length)await redis.hIncrBy(STATS,"florida_firm_roster_email_hit",1);
         console.log(JSON.stringify({
           event:"law_florida_firm_roster_headcount_hit",key,name:rawFirm,
-          count,firm,city,source:matched[0]
+          count,firm,city,source:matched[0].url,
+          publishedEmails:published.map(x=>x.email).slice(0,3)
         }));
-        return {count,source:matched[0]};
+        return {
+          count,source:matched[0].url,
+          publishedEmails:rankLawEmails(published.map(x=>x.email)).slice(0,5),
+          emailSource:published[0]?.source||""
+        };
       }
     }catch(error){
       await redis.hIncrBy(STATS,"florida_firm_roster_error",1);
@@ -2053,7 +2071,15 @@ async function directLawyerComSizeEvidence(lead={},key=""){
       }
       await redis.hIncrBy(STATS,"direct_lawyercom_size_hit",1);
       console.log(JSON.stringify({event:"law_direct_lawyercom_size_hit",key,name:String(lead.name||lead.title||""),count,source}));
-      return {count,source};
+      const rosterNames=explicitCount>0?[]:strictFirmPageRosterNames(page.html,source,lead);
+      const profileEmails=contextualEmails(page.html,lead,source)
+        .filter(email=>isUsableLawEmail(email)&&!isThirdPartyEmailDomain(email));
+      const checkedEmails=await Promise.all([...new Set(profileEmails)].slice(0,6).map(async email=>({
+        email,ok:await hasMailExchange(email)
+      })));
+      const publishedEmails=rankLawEmails(checkedEmails.filter(x=>x.ok).map(x=>x.email)).slice(0,5);
+      if(publishedEmails.length)await redis.hIncrBy(STATS,"direct_lawyercom_email_hit",1);
+      return {count,source,attorneyNames:rosterNames.slice(0,10),publishedEmails,emailSource:publishedEmails.length?source:""};
     }
   }
   await redis.hIncrBy(STATS,"direct_lawyercom_size_miss",1);
@@ -3608,6 +3634,12 @@ async function enrichLead(key,lead){
       const floridaRoster=await directFloridaFirmRosterHeadcountEvidence(lead,key);
       if(Number(floridaRoster?.count||0)>0&&isPublishedHeadcountSource(String(floridaRoster?.source||""),lead)){
         earlyCount=Number(floridaRoster.count);earlySource=String(floridaRoster.source);
+        if(Array.isArray(floridaRoster.publishedEmails)&&floridaRoster.publishedEmails.length){
+          emails.push(...floridaRoster.publishedEmails);
+          source=String(floridaRoster.emailSource||floridaRoster.source||"");
+          for(const email of floridaRoster.publishedEmails)emailEvidenceSources[String(email).toLowerCase()]=source;
+          emailMethod="florida_roster";
+        }
         await redis.hIncrBy(STATS,"phone_first_headcount_florida_firm_roster",1);
       }
     }catch{await redis.hIncrBy(STATS,"phone_first_headcount_florida_firm_roster_fail",1);}
@@ -3621,6 +3653,18 @@ async function enrichLead(key,lead){
         const lawyer=await directLawyerComSizeEvidence(lead,key);
         if(Number(lawyer?.count||0)>0&&isPublishedHeadcountSource(String(lawyer?.source||""),lead)){
           earlyCount=Number(lawyer.count);earlySource=String(lawyer.source);
+          if(Array.isArray(lawyer.attorneyNames)&&lawyer.attorneyNames.length){
+            lead={...lead,directory_attorney_names:[...new Set([
+              ...(Array.isArray(lead.directory_attorney_names)?lead.directory_attorney_names:[]),
+              ...lawyer.attorneyNames
+            ])].slice(0,10)};
+          }
+          if(Array.isArray(lawyer.publishedEmails)&&lawyer.publishedEmails.length){
+            emails.push(...lawyer.publishedEmails);
+            source=String(lawyer.emailSource||lawyer.source||"");
+            for(const email of lawyer.publishedEmails)emailEvidenceSources[String(email).toLowerCase()]=source;
+            emailMethod="lawyercom_profile";
+          }
           await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom",1);
         }
       }catch{await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom_fail",1);}
@@ -3740,7 +3784,7 @@ async function enrichLead(key,lead){
         }));
       }
 
-      if(!existingSourceBacked){
+      if(!emails.length){
         const earlyEvidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
         const earlyPracticeKeys=[...new Set([
           ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
