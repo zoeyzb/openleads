@@ -1241,17 +1241,46 @@ function calBarEmailCandidateStrong(email="",lead={}){
   return localIdentity||domainIdentity||FREE_MAIL_DOMAINS.has(domain);
 }
 
+function extractConcatenatedCalBarEmails(text=""){
+  // CalBar intentionally renders the Email field as a delimiter-free chain of
+  // decoy addresses surrounding the real published mailbox. A generic email
+  // regex therefore swallows the beginning of the next decoy into the previous
+  // TLD (for example: real@firm.comdecoy@x.gov). Split on the next local-part@
+  // boundary so each published candidate is recovered before identity scoring.
+  const raw=normalizePublishedEmailText(text);
+  const fieldMatch=raw.match(/\bEmail\s*:\s*([\s\S]{1,7000}?)(?=\|\s*Website\s*:|\bWebsite\s*:|$)/i);
+  const field=String(fieldMatch?.[1]||"").trim();
+  if(!field||!field.includes("@"))return [];
+  const pattern=/([A-Z0-9._%+-]{1,96})@([A-Z0-9.-]+?\.[A-Z]{2,24}?)(?=[A-Z0-9._%+-]{1,96}@|\s|\||$)/ig;
+  const out=[];
+  for(const m of field.matchAll(pattern)){
+    const email=String((m[1]||"")+"@"+(m[2]||"")).toLowerCase().replace(/[),.;:]+$/,"");
+    if(isUsableLawEmail(email)&&!isThirdPartyEmailDomain(email))out.push(email);
+  }
+  return [...new Set(out)].slice(0,40);
+}
+
 function contextualEmails(text="",lead={},sourceUrl=""){
   const raw=normalizePublishedEmailText(text),out=[];
   const re=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
-  let all=[...raw.matchAll(re)]
-    .map(m=>({email:String(m[0]||"").toLowerCase().replace(/[),.;:]+$/,""),index:m.index||0}))
-    .filter(x=>isUsableLawEmail(x.email)&&!isThirdPartyEmailDomain(x.email));
   const isCalBar=/apps\.calbar\.ca\.gov$/i.test(hostOf(sourceUrl));
+  let all;
+  if(isCalBar){
+    const separated=extractConcatenatedCalBarEmails(raw);
+    all=separated.map(email=>{
+      const index=raw.toLowerCase().indexOf(email.toLowerCase());
+      return {email,index:index>=0?index:0};
+    });
+  }else{
+    all=[...raw.matchAll(re)]
+      .map(m=>({email:String(m[0]||"").toLowerCase().replace(/[),.;:]+$/,""),index:m.index||0}))
+      .filter(x=>isUsableLawEmail(x.email)&&!isThirdPartyEmailDomain(x.email));
+  }
   if(isCalBar){
     const before=all.length;
     all=all.filter(x=>calBarEmailCandidateStrong(x.email,lead));
     if(before>all.length)void redis.hIncrBy(STATS,"calbar_decoy_email_reject",before-all.length).catch(()=>{});
+    if(all.length)void redis.hIncrBy(STATS,"calbar_delimiter_chain_recovered",all.length).catch(()=>{});
   }
   const uniqueAll=[...new Set(all.map(x=>x.email))];
   const fullPageMatch=pageMatchesLead(raw,lead,sourceUrl);
