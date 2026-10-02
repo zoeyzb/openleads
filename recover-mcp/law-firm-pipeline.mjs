@@ -5612,6 +5612,7 @@ async function seed(cities){
 
 async function bootstrapPhoneFirstInventory(){
   let scanned=0,callableNoSite=0,queuedHeadcount=0,seededCallReady=0,wrongSizeKnown=0,verifiedSolo=0,verifiedTarget=0,verifiedOversize=0;
+  const callableByState=new Map(),priorityByState=new Map();
   const pendingChunk=[],priorityChunk=[],readyChunk=[],sizeReadyEmailChunk=[];
   await Promise.all([redis.del(CALL_READY_SET),redis.del(PHONE_HEADCOUNT_PRIORITY_SET),redis.del(CHICAGO_PENDING_SET)]);
 
@@ -5649,6 +5650,8 @@ async function bootstrapPhoneFirstInventory(){
       if(/^https?:\/\//i.test(website))continue;
       if(!isUsableLawPhone(lead.phone))continue;
       callableNoSite++;
+      const stateCode=String(normalizedStateCode(lead)||lead.region||lead.state||"").toUpperCase().trim()||"UNKNOWN";
+      callableByState.set(stateCode,(callableByState.get(stateCode)||0)+1);
 
       const n=Number(lead.attorney_count_estimate||lead.attorney_count||0);
       const source=String(lead.attorney_count_source||"");
@@ -5679,8 +5682,10 @@ async function bootstrapPhoneFirstInventory(){
           String(lead.phone_headcount_method_version||"")===PHONE_HEADCOUNT_METHOD_VERSION;
         if(!exhaustedCurrentMethod){
           const shape=lawFirmNameShape(lead);
-          if(shape==="multi"||shape==="firm")priorityChunk.push(entry.field);
-          else pendingChunk.push(entry.field);
+          if(shape==="multi"||shape==="firm"){
+            priorityChunk.push(entry.field);
+            priorityByState.set(stateCode,(priorityByState.get(stateCode)||0)+1);
+          }else pendingChunk.push(entry.field);
         }
       }
 
@@ -5691,6 +5696,9 @@ async function bootstrapPhoneFirstInventory(){
   console.log(JSON.stringify({
     event:"law_phone_first_fast_bootstrap",
     scanned,callableNoSite,queuedHeadcount,seededCallReady,wrongSizeKnown,
+    verifiedSolo,verifiedTarget,verifiedOversize,
+    topCallableStates:[...callableByState.entries()].sort((a,b)=>b[1]-a[1]).slice(0,15),
+    topPriorityStates:[...priorityByState.entries()].sort((a,b)=>b[1]-a[1]).slice(0,15),
     headcountPriorityQueue:await redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),
     headcountQueue:await redis.sCard(CHICAGO_PENDING_SET),
     callReady:await redis.sCard(CALL_READY_SET)
