@@ -7,6 +7,7 @@ import { orchestrate as enrichProfessionalEmail } from "email-enrich";
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
 import { buildLawEmailSearchQueries } from "./law-email-search-plan.mjs";
 import { decodePublishedRot13Emails } from "./published-email-obfuscation.mjs";
+import { alignEligibleToReady } from "./law-eligible-set-align.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -5284,16 +5285,14 @@ async function bootstrapExistingQualified(){
   if(associationDocketRecovery)await redis.set(ASSOCIATION_DOCKET_RECOVERY_KEY,ASSOCIATION_DOCKET_RECOVERY_VERSION);
   if(sizeReadyWebsiteAudit)await redis.set(SIZE_READY_WEBSITE_AUDIT_KEY,SIZE_READY_WEBSITE_AUDIT_VERSION);
 
-  // READY_SET is revalidated record-by-record above. Keep the secondary
-  // UNIQUE_ELIGIBLE_SET exactly aligned so monitoring/export counts cannot
-  // retain stale leads after a website/size/email rejection.
-  const validatedReady=[...readySet];
-  await redis.del(UNIQUE_ELIGIBLE_SET);
-  if(validatedReady.length){
-    for(let i=0;i<validatedReady.length;i+=500){
-      await redis.sAdd(UNIQUE_ELIGIBLE_SET,validatedReady.slice(i,i+500));
-    }
-  }
+  // READY_SET is revalidated record-by-record above. Align the secondary
+  // UNIQUE_ELIGIBLE_SET atomically instead of delete/rebuilding it from the
+  // startup snapshot. The old rebuild could erase a lead qualified by a live
+  // worker while this background bootstrap was still scanning.
+  await alignEligibleToReady(redis,{
+    eligibleSet:UNIQUE_ELIGIBLE_SET,
+    readySet:READY_SET
+  });
 
   console.log(JSON.stringify({
     event:"law_firm_bootstrap_existing",scanned,qualifiedAdded,qualifiedRemoved,alreadyQualified,FULL_REQUAL_VERSION,HISTORICAL_RECOVERY_VERSION,EMAIL_METHOD_VERSION,CALBAR_ADAPTER_VERSION,calbarAdapterRecoveryQueued,floridaDirectRecoveryQueued:floridaRecoveryKeys.length,chicagoHeadcountRecoveryQueued,associationDocketRecoveryQueued,
