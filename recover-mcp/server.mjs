@@ -373,7 +373,7 @@ async function collectCallReadyLawRows(){
         type,
         firm:name,
         phone,
-        phoneType:String(lead.phone_type||lead.line_type||lead.phone_line_type||"").trim(),
+        phoneType:String(lead.phone_type||lead.line_type||lead.phone_line_type||"").trim()||"Unknown",
         phoneStatus:"Usable",
         email:emailEligible?(emails[0]||""):"",
         emailStatus:emailEligible?"Source-verified":"Missing strict email",
@@ -388,7 +388,7 @@ async function collectCallReadyLawRows(){
         source:emailEligible?emailSource:String(lead.attorney_count_source||lead.personalization_source||lead.google_maps_url||lead.maps_url||"").trim(),
         callReady:true,
         emailEligible,
-        strictEligible:emailEligible,
+        strictEligible:Boolean(lead.qualified_lead===true&&emailEligible),
         status:"New"
       });
     }
