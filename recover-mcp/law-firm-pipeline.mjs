@@ -321,8 +321,12 @@ const DIRECTORY_DISCOVERY_ENABLED=String(process.env.LAW_DIRECTORY_DISCOVERY_ENA
 const DIRECTORY_DISCOVERY_BATCH=Math.max(1,Math.min(8,Number(process.env.LAW_DIRECTORY_DISCOVERY_BATCH||6)));
 const DIRECTORY_DISCOVERY_PAGES=Math.max(1,Math.min(4,Number(process.env.LAW_DIRECTORY_DISCOVERY_PAGES||2)));
 const DIRECTORY_DISCOVERY_MAX_PAGES=Math.max(DIRECTORY_DISCOVERY_PAGES,Math.min(6,Number(process.env.LAW_DIRECTORY_DISCOVERY_MAX_PAGES||4)));
-const DIRECTORY_CURSOR_KEY="recover:law-firm:lawyerscom-directory-cursor:v2";
-const DIRECTORY_SEEDED_SET="recover:law-firm:lawyerscom-directory-seeded:v2";
+// v3 restarts source-first directory coverage after the prior v2 frontier was
+// exhausted. This lane is the fastest way to acquire leads that are already
+// explicitly published as 2-10 attorneys instead of proving size from raw Maps
+// records one firm at a time.
+const DIRECTORY_CURSOR_KEY="recover:law-firm:lawyerscom-directory-cursor:v3";
+const DIRECTORY_SEEDED_SET="recover:law-firm:lawyerscom-directory-seeded:v3";
 const STATS="recover:law-firm:stats:v3";
 let INDEXED_HEADCOUNT_DIAGNOSTICS=0;
 const PROFILE={industry:"LAW_FIRM",require_phone:true,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,min_score:45};
@@ -5761,7 +5765,11 @@ async function seedLawyersComDirectory(cities=[]){
       areaSeedKey=seedKey;
       break;
     }
-    if(!area)break;
+    if(!area){
+      await redis.hIncrBy(STATS,"directory_coverage_exhausted",1);
+      console.log(JSON.stringify({event:"law_directory_coverage_exhausted",cursor,cities:cities.length}));
+      break;
+    }
     citiesDone++;
 
     const pageTasks=[];
