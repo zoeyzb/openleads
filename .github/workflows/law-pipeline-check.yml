@@ -6,6 +6,8 @@ on:
     paths:
       - "recover-mcp/law-firm-pipeline.mjs"
       - "recover-mcp/law-firm-targeting.mjs"
+      - "recover-mcp/law-sheet-sync.mjs"
+      - "recover-mcp/law-sheet-sync.mjs"
       - "recover-mcp/acquisition-worker*.mjs"
       - "package.json"
       - "Dockerfile"
@@ -30,6 +32,8 @@ jobs:
           node-version: "22"
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
+      - name: Check law sheet sync syntax
+        run: node --check recover-mcp/law-sheet-sync.mjs
       - name: Check acquisition worker syntax
         run: |
           node --check recover-mcp/acquisition-worker.mjs
