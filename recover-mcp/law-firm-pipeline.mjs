@@ -5220,11 +5220,24 @@ async function bootstrapExistingQualified(){
 }
 
 async function popSetBatch(setKey,count){
-  // Keep work queued until enrichLead finishes, but do not download an entire
-  // 10k+ Redis set just to choose a small batch. SRANDMEMBER is non-destructive.
-  const members=await redis.sRandMember(setKey,count);
+  // node-redis v5 splits single-member and count variants into two methods:
+  // sRandMember(key) returns ONE member; sRandMemberCount(key,count) returns
+  // the requested batch. Using sRandMember(key,count) silently ignored count
+  // and throttled every enrichment lane to one lead per queue per cycle.
+  const requested=Math.max(1,Math.floor(Number(count)||1));
+  const cardinality=await redis.sCard(setKey);
+  if(cardinality<=0)return [];
+  const target=Math.min(requested,cardinality);
+  const members=await redis.sRandMemberCount(setKey,target);
   const values=Array.isArray(members)?members:(members?[members]:[]);
-  return [...new Set(values.filter(Boolean))].slice(0,count);
+  const unique=[...new Set(values.filter(Boolean))].slice(0,target);
+  if(unique.length<target){
+    await redis.hIncrBy(STATS,"set_batch_short_read",1);
+    console.warn(JSON.stringify({
+      event:"law_set_batch_short_read",setKey,requested,target,cardinality,received:unique.length
+    }));
+  }
+  return unique;
 }
 async function moveToEmailQueue(key,targetSet){
   await Promise.all([
