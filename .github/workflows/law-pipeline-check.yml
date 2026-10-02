@@ -30,6 +30,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Verify pinned email enrichment
+        env:
+          EMAIL_ENRICH_REF: 875fba0528b53e9a0291205caca3a1ce7cec23b9
+        run: |
+          git init /tmp/email-enrich
+          cd /tmp/email-enrich
+          git remote add origin https://github.com/zoeyzb/email-enrich.git
+          git fetch --depth 1 origin "$EMAIL_ENRICH_REF"
+          git checkout --detach FETCH_HEAD
+          npm ci
+          npm run typecheck
+          npm test -- --runInBand
+          npm run build
+          cd "$GITHUB_WORKSPACE"
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
       - name: Check law sheet sync syntax
