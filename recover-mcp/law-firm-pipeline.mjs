@@ -255,7 +255,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v8-lawyercom-strict-roster";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v9-lawyercom-slug-variants";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -1400,23 +1400,35 @@ function attorneyEstimate(html="",text=""){
   return Math.min(500,Math.max(...candidates));
 }
 function lawyerComCandidateFirmUrls(lead={}){
-  const raw=String(lead.name||lead.title||"")
+  const original=String(lead.name||lead.title||"")
     .replace(/\b(?:esq(?:uire)?|attorney\s+at\s+law)\b\.?/ig," ")
-    .replace(/\b(?:llc|pllc|pc|p\.c\.|apc|llp|pa|p\.a\.)\b/ig," ")
+    .trim();
+  if(!original)return [];
+
+  const slugify=value=>String(value||"")
+    .replace(/\s*&\s*/g," and ")
     .replace(/[^a-z0-9]+/gi," ")
-    .trim().toLowerCase();
-  if(!raw)return [];
-  const slug=raw.replace(/\s+/g,"-");
-  const state=normalizedStateCode(lead).toLowerCase();
-  const stripped=slug
+    .trim().toLowerCase().replace(/\s+/g,"-");
+
+  const fullSlug=slugify(original);
+  const noSuffix=original
+    .replace(/\b(?:llc|pllc|pc|apc|llp|pa)\b\.?/ig," ")
+    .replace(/\b(?:p\s*\.\s*c|p\s*\.\s*a|l\s*\.\s*l\s*\.\s*c)\b\.?/ig," ");
+  const baseSlug=slugify(noSuffix);
+  const stripped=baseSlug
     .replace(/^the-/,"")
     .replace(/^law-offices?-of-/,"")
     .replace(/^law-firm-of-/,"");
+  const state=normalizedStateCode(lead).toLowerCase();
+
   return [...new Set([
-    `https://www.lawyer.com/firm/${slug}.html`,
+    `https://www.lawyer.com/firm/${fullSlug}.html`,
+    ...(state?[`https://www.lawyer.com/firm/${fullSlug}-${state}.html`]:[]),
+    `https://www.lawyer.com/firm/${baseSlug}.html`,
+    ...(state?[`https://www.lawyer.com/firm/${baseSlug}-${state}.html`]:[]),
     `https://www.lawyer.com/firm/law-offices-of-${stripped}.html`,
     `https://www.lawyer.com/firm/law-office-of-${stripped}${state?"-"+state:""}.html`
-  ])];
+  ])].filter(url=>!/\/firm\/\.html$/i.test(url)).slice(0,6);
 }
 async function verifyOwnedWebsiteCandidate(url="",lead={}){
   if(!/^https?:\/\//i.test(String(url||"")))return "";
