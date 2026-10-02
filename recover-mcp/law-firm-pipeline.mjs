@@ -23,6 +23,7 @@ const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||
 const ENRICH_BATCH=Math.max(1,Math.min(256,Number(process.env.LAW_FIRM_ENRICH_BATCH||96)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(80,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||32)));
 const EMAIL_METHOD_VERSION="email-v67-recovery-diversity-free-mail";
+const SIZE_READY_EMAIL_METHOD_VERSION="size-ready-email-v2-exact-phone-public-sources";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
@@ -4309,6 +4310,7 @@ async function enrichLead(key,lead){
     target_area:String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"").trim(),
     email_angle:emailAngle,lead_priority_score:priority,qualified_lead:qualified,call_ready_lead:callReady,
     law_email_enrich_version:EMAIL_METHOD_VERSION,
+    size_ready_email_method_version:sizeReadyForEmail?SIZE_READY_EMAIL_METHOD_VERSION:String(lead.size_ready_email_method_version||""),
     law_email_method:emailMethod,law_email_source:source||"",
     law_email_source_verified:emailSourceVerified,
     law_email_validation:emailSourceVerified?(KEELEAD_BASE_URL?"published_exact+strict_firm_identity+mx+optional_smtp":"published_exact+strict_firm_identity+mx"):"rejected",
@@ -5705,7 +5707,20 @@ async function bootstrapPhoneFirstInventory(){
           readyChunk.push(entry.field);
           const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email].filter(isUsableLawEmail);
           const sourceVerifiedEmail=(lead.law_email_source_verified===true||lead.email_source_verified===true)&&existingEmails.length>0;
-          if(!sourceVerifiedEmail)sizeReadyEmailChunk.push(entry.field);
+          if(!sourceVerifiedEmail){
+            // A new size-ready email method gets a fresh bounded retry budget.
+            // This only resets already-proven 2-10/no-site firms, not the 8k+
+            // generic recovery backlog.
+            if(String(lead.size_ready_email_method_version||"")!==SIZE_READY_EMAIL_METHOD_VERSION){
+              lead={...lead,
+                email_recovery_attempts:0,
+                law_email_validation:"recovery_pending",
+                size_ready_email_method_version:SIZE_READY_EMAIL_METHOD_VERSION
+              };
+              await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(lead));
+            }
+            sizeReadyEmailChunk.push(entry.field);
+          }
         }else{
           wrongSizeKnown++;
           if(n===1)verifiedSolo++; else if(n>10)verifiedOversize++;
