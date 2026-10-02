@@ -566,7 +566,7 @@ async function persistPermanentQualified(redis, job, leads) {
       // serialized hundreds of Redis round trips and could stall a dense city
       // acquisition for minutes after Maps had already finished.
       const fast=[],background=[],solo=[],shapeUpdates=[];
-      const phoneHeadcountMethodVersion="phone-headcount-v7-indexed-directory-size";
+      const phoneHeadcountMethodVersion="phone-headcount-v8-lawyercom-strict-roster";
       for(let offset=0;offset<identities.length;offset+=500){
         const chunk=identities.slice(offset,offset+500);
         const values=await redis.hmGet("recover:leadstore:qualified",chunk);
