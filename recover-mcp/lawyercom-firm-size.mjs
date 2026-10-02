@@ -11,7 +11,7 @@ function stripHtml(input=""){
     .trim();
 }
 
-const RELATED_SECTION_RE=/^(?:top\s+local\s+lawyers?|nearby\s+(?:lawyers?|attorneys?|law\s+firms?)|similar\s+(?:lawyers?|attorneys?|law\s+firms?)|related\s+(?:lawyers?|attorneys?|law\s+firms?)|recommended\s+(?:lawyers?|attorneys?|law\s+firms?)|reviews?)$/i;
+const RELATED_SECTION_RE=/^(?:(?:top\s+local|nearby)\s+(?:lawyers?|attorneys?|law\s+firms?)|(?:lawyers?|attorneys?|law\s+firms?)\s+nearby|similar\s+(?:lawyers?|attorneys?|law\s+firms?)|related\s+(?:lawyers?|attorneys?|law\s+firms?)|recommended\s+(?:lawyers?|attorneys?|law\s+firms?)|reviews?)$/i;
 
 export function targetScopedLawyerComHtml(html=""){
   const raw=String(html||"");
