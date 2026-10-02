@@ -7,6 +7,7 @@ on:
       - "recover-mcp/law-firm-pipeline.mjs"
       - "recover-mcp/lawyercom-firm-size*.mjs"
       - "recover-mcp/headcount-source-policy*.mjs"
+      - "recover-mcp/strict-owned-website-gate*.mjs"
       - "recover-mcp/law-eligible-set-align*.mjs"
       - "recover-mcp/published-email-obfuscation*.mjs"
       - "recover-mcp/law-firm-targeting.mjs"
@@ -59,6 +60,8 @@ jobs:
         run: node recover-mcp/lawyercom-firm-size.node-test.mjs
       - name: Run headcount source policy regression test
         run: node recover-mcp/headcount-source-policy.node-test.mjs
+      - name: Run strict owned-website gate regression test
+        run: node recover-mcp/strict-owned-website-gate.node-test.mjs
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
       - name: Run law sheet metrics regression test

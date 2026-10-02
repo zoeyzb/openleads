@@ -10,6 +10,7 @@ import { decodePublishedRot13Emails } from "./published-email-obfuscation.mjs";
 import { alignEligibleToReady } from "./law-eligible-set-align.mjs";
 import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml } from "./lawyercom-firm-size.mjs";
 import { isFirmSpecificDirectoryHeadcountUrl } from "./headcount-source-policy.mjs";
+import { needsStrictOwnedWebsiteAudit } from "./strict-owned-website-gate.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -4539,7 +4540,41 @@ async function enrichLead(key,lead){
   const painPoint="No website";
   const evidenceOwnedWebsite="";
   const discoveredOwnedWebsite="";
-  const effectiveWebsite=website||discoveredOwnedWebsite;
+  let effectiveWebsite=website||discoveredOwnedWebsite;
+
+  // "No owned website" is a hard eligibility requirement, not a cleanup task.
+  // A candidate that has already passed the expensive email + 2-10 attorney
+  // gates gets one final forced site audit before it can enter READY_SET. This
+  // prevents temporary false positives from surviving until the delayed
+  // candidate-cleanup pass.
+  if(needsStrictOwnedWebsiteAudit({
+    website:effectiveWebsite,
+    emailSourceVerified,
+    emails,
+    attorneyCount,
+    attorneyCountVerified
+  })){
+    let strictOwnedWebsite="";
+    try{strictOwnedWebsite=await detectOwnedWebsiteFromEmailDomains(emails,lead);}catch{}
+    if(!strictOwnedWebsite){
+      try{strictOwnedWebsite=await findOwnedWebsitePreflight({...lead,emails},key,true);}catch{}
+    }
+    if(strictOwnedWebsite){
+      effectiveWebsite=strictOwnedWebsite;
+      await redis.hIncrBy(STATS,"strict_final_owned_website_hit",1);
+      console.log(JSON.stringify({
+        event:"law_strict_final_owned_website_reject",
+        key,
+        name:String(lead.name||lead.title||""),
+        website:strictOwnedWebsite,
+        attorneyCount,
+        email:String(emails[0]||"")
+      }));
+    }else{
+      await redis.hIncrBy(STATS,"strict_final_owned_website_miss",1);
+    }
+  }
+
   const emailCandidate=!effectiveWebsite&&emailSourceVerified&&emails.length>0&&(!attorneyCountVerified||(attorneyCount>=2&&attorneyCount<=10));
   if(emailCandidate)await redis.sAdd(EMAIL_CANDIDATE_SET,key);
   else await redis.sRem(EMAIL_CANDIDATE_SET,key);
