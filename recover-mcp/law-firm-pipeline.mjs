@@ -3990,18 +3990,41 @@ async function enrichLead(key,lead){
     const soloShape=lawFirmNameShape(lead)==="solo";
     const hasDirectOfficial=directOfficialLinks.length>0;
     const sizeReadyEmailPriority=attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10;
-    const dualSearch=sizeReadyEmailPriority||(!hasDirectOfficial&&((!soloShape&&(highValue||emailRecoveryPriority(lead)>=5))||Number(lead.email_recovery_attempts||0)>=1));
-    // Already-proven 2-10 firms are the closest-to-revenue cohort. Use a
-    // source-first query set (bar/court/public records + exact phone/name)
-    // instead of spending most requests on broad generic discovery.
-    const sizeReadyQueries=sizeReadyEmailPriority?[...new Set([
+    const sizeReadyAttempt=Math.max(0,Number(lead.email_recovery_attempts||0));
+
+    // Retry diversity matters more than repeating the same searches five times.
+    // Proven 2-10/no-site passes rotate through bounded source waves:
+    // official/exact identity -> public records -> professional directories -> broad recovery.
+    const sizeReadyWave1=[...new Set([
       ...barQueries,
-      ...publicRecordQueries,
       ...(phone&&name?[`"${name}" "${phonePretty||phone}" email`]:[]),
       ...(person?[`"${person}" "${region}" attorney email`]:[]),
-      ...(name?[`"${name}" "${region}" email filetype:pdf`]:[]),
-      ...directoryEmailQueries.slice(0,6)
-    ].filter(Boolean))].slice(0,12):[];
+      ...(phone?[`"${phonePretty||phone}" attorney "Email:"`]:[])
+    ].filter(Boolean))].slice(0,6);
+    const sizeReadyWave2=[...new Set([
+      ...publicRecordQueries,
+      ...(person?[`"${person}" "${region}" "E-mail address" filetype:pdf`]:[]),
+      ...(name?[`"${name}" "${region}" email filetype:pdf`]:[])
+    ].filter(Boolean))].slice(0,10);
+    const sizeReadyWave3=[...new Set([
+      ...professionalDirectoryQueries,
+      ...directoryEmailQueries.slice(0,8),
+      ...docketQueries
+    ].filter(Boolean))].slice(0,12);
+    const sizeReadyWave4=[...new Set([
+      ...directoryEmailQueries.slice(8),
+      ...docketQueries,
+      ...(name?[`"${name}" ${city} ${region} contact email`.trim(),`"${name}" "E-mail" filetype:pdf`]:[]),
+      ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[]),
+      ...(phone?[`"${phonePretty||phone}" lawyer email`]:[])
+    ].filter(Boolean))].slice(0,12);
+    const sizeReadyQueries=!sizeReadyEmailPriority?[]:
+      sizeReadyAttempt<=0?sizeReadyWave1:
+      sizeReadyAttempt===1?sizeReadyWave2:
+      sizeReadyAttempt===2?sizeReadyWave3:
+      sizeReadyWave4;
+    const runDuckForSizeReady=sizeReadyEmailPriority&&sizeReadyAttempt>=1;
+    const dualSearch=runDuckForSizeReady||(!sizeReadyEmailPriority&&!hasDirectOfficial&&((!soloShape&&(highValue||emailRecoveryPriority(lead)>=5))||Number(lead.email_recovery_attempts||0)>=1));
     const effectiveQueries=sizeReadyEmailPriority
       ? sizeReadyQueries
       : (hasDirectOfficial?bingQueries.slice(0,4):(soloShape?bingQueries.slice(0,5):bingQueries));
@@ -4013,10 +4036,10 @@ async function enrichLead(key,lead){
       bingFallback(
         lead,
         effectiveQueries,
-        sizeReadyEmailPriority?10:(hasDirectOfficial?4:(soloShape?5:(highValue?10:(dualSearch?8:7)))),
+        sizeReadyEmailPriority?(sizeReadyAttempt<=0?6:8):(hasDirectOfficial?4:(soloShape?5:(highValue?10:(dualSearch?8:7)))),
         key,
         [],
-        sizeReadyEmailPriority?3:(hasDirectOfficial?1:(highValue?2:1)),
+        sizeReadyEmailPriority?(sizeReadyAttempt<=0?2:3):(hasDirectOfficial?1:(highValue?2:1)),
         directOfficialLinks
       ),
       dualSearch
