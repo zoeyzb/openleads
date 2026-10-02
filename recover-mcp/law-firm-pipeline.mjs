@@ -320,6 +320,7 @@ const DISCOVERY_BACKLOG_LIMIT=Math.max(1000,Number(process.env.LAW_FIRM_DISCOVER
 const DIRECTORY_DISCOVERY_ENABLED=String(process.env.LAW_DIRECTORY_DISCOVERY_ENABLED||"true").toLowerCase()!=="false";
 const DIRECTORY_DISCOVERY_BATCH=Math.max(1,Math.min(8,Number(process.env.LAW_DIRECTORY_DISCOVERY_BATCH||6)));
 const DIRECTORY_DISCOVERY_PAGES=Math.max(1,Math.min(4,Number(process.env.LAW_DIRECTORY_DISCOVERY_PAGES||2)));
+const DIRECTORY_DISCOVERY_MAX_PAGES=Math.max(DIRECTORY_DISCOVERY_PAGES,Math.min(6,Number(process.env.LAW_DIRECTORY_DISCOVERY_MAX_PAGES||4)));
 const DIRECTORY_CURSOR_KEY="recover:law-firm:lawyerscom-directory-cursor:v2";
 const DIRECTORY_SEEDED_SET="recover:law-firm:lawyerscom-directory-seeded:v2";
 const STATS="recover:law-firm:stats:v3";
@@ -5356,6 +5357,23 @@ function extractDirectoryPhone(text=""){
   return matches.find(isUsableLawPhone)||"";
 }
 
+function directoryCardWebsiteCandidate(block="",profileUrl=""){
+  const raw=String(block||"");
+  for(const m of raw.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,120}?)<\/a>/gi)){
+    const label=stripHtml(String(m[2]||"")).replace(/\s+/g," ").trim();
+    if(!/^(?:visit\s+)?website$/i.test(label))continue;
+    try{
+      const u=new URL(String(m[1]||""),profileUrl||"https://www.lawyers.com");
+      const host=hostOf(u.href);
+      if(!/^https?:$/.test(u.protocol)||!host)continue;
+      if(/(^|\.)lawyers\.com$/i.test(host))continue;
+      if(knownThirdPartyDirectoryHost(u.href))continue;
+      return u.href;
+    }catch{}
+  }
+  return "";
+}
+
 function directoryCardFirmAnchor(beforeHtml=""){
   const raw=String(beforeHtml||"");
   const candidates=[];
@@ -5398,10 +5416,10 @@ function extractLawyersComDirectoryCandidates(html="",sourceUrl="",area={}){
     const block=raw.slice(blockStart,Math.min(raw.length,nextIndex));
     const plain=stripHtml(block).replace(/\s+/g," ").trim();
 
-    // If Lawyers.com exposes an explicit external Website action in this exact
-    // firm card, it is not a no-website prospect. The final owned-site preflight
-    // still runs later for cards without that action.
-    if(/\bWebsite\b/i.test(plain)&&/<a\b[^>]*href=["']https?:\/\/[^"']+["'][^>]*>[^<]{0,80}Website/i.test(block))continue;
+    // Do not discard a firm merely because the directory renders a Website
+    // action. Tracking/alias links can be false positives. Preserve the
+    // candidate and verify ownership against firm identity later.
+    const websiteCandidate=directoryCardWebsiteCandidate(block,profileUrl);
 
     const phone=extractDirectoryPhone(plain);
     if(!phone)continue;
@@ -5416,7 +5434,7 @@ function extractLawyersComDirectoryCandidates(html="",sourceUrl="",area={}){
     out.push({
       name,phone,address,
       city:String(area.city||""),state:String(area.state||"").toUpperCase(),
-      attorneyCount:n,profileUrl,listingUrl:sourceUrl
+      attorneyCount:n,profileUrl,listingUrl:sourceUrl,websiteCandidate
     });
   }
   return out;
@@ -5459,6 +5477,13 @@ async function verifyDirectoryCandidate(candidate={}){
     // The city listing and dedicated profile are independent pages on the same
     // legal directory. Require exact phone OR exact agreement on the published size.
     if(!profilePhoneMatch&&count!==Number(candidate.attorneyCount||0))return null;
+
+    if(candidate.websiteCandidate){
+      const verifiedListingWebsite=await verifyOwnedWebsiteCandidate(candidate.websiteCandidate,seedLead);
+      if(verifiedListingWebsite){
+        return {...candidate,rejectWebsite:verifiedListingWebsite,count,source,attorneyNames};
+      }
+    }
 
     if(page.via!=="jina"){
       const profileWebsite=outboundFirmWebsiteFromDirectory(page.html,seedLead);
@@ -5639,7 +5664,47 @@ async function seedLawyersComDirectory(cities=[]){
         return {url,html:"",error:true};
       })());
     }
-    const pages=await Promise.all(pageTasks);
+    let pages=await Promise.all(pageTasks);
+
+    // Productive cities get a deeper pass immediately. This concentrates
+    // source-first acquisition where the directory is already proving 2-10
+    // firms instead of spending equal time on empty/sparse markets.
+    if(DIRECTORY_DISCOVERY_MAX_PAGES>DIRECTORY_DISCOVERY_PAGES){
+      const firstWaveCandidates=pages.flatMap(page=>page?.html?extractLawyersComDirectoryCandidates(page.html,page.url,area):[]);
+      if(firstWaveCandidates.length>=6){
+        const extraTasks=[];
+        for(let page=DIRECTORY_DISCOVERY_PAGES+1;page<=DIRECTORY_DISCOVERY_MAX_PAGES;page++){
+          const url=lawyersComCityUrl(area,page);
+          if(!url)continue;
+          extraTasks.push((async()=>{
+            const areaLead={
+              name:String(area.city||"")+" law firms",
+              city:String(area.city||""),region:String(area.state||""),state:String(area.state||""),
+              industry:"LAW_FIRM",search_profile:"law-firm",conversion_headcount_priority:true
+            };
+            const hasDirectoryRows=html=>/Law\s+(?:Firm|Office)\s+with\s+\d{1,2}\s+lawyers?/i.test(String(html||""));
+            try{
+              const direct=await fetchText(url,6000);
+              if(direct?.html&&hasDirectoryRows(direct.html))return {url,html:String(direct.html),via:"direct"};
+            }catch{}
+            try{
+              const jina=await callJinaReader(url,areaLead);
+              if(jina?.html&&hasDirectoryRows(jina.html))return {url,html:String(jina.html),via:"jina"};
+            }catch{}
+            try{
+              const scrap=await callScrapling(url,{allowBrowser:true});
+              if(scrap?.html&&hasDirectoryRows(scrap.html))return {url,html:String(scrap.html),via:"scrapling"};
+            }catch{}
+            return {url,html:"",error:true};
+          })());
+        }
+        if(extraTasks.length){
+          const extraPages=await Promise.all(extraTasks);
+          pages=[...pages,...extraPages];
+          await redis.hIncrBy(STATS,"directory_productive_city_deepened",1);
+        }
+      }
+    }
     // Only mark coverage complete after at least one real directory page was
     // fetched. Temporary blocks/timeouts must not permanently burn a city.
     if(areaSeedKey&&pages.some(page=>!page.error&&page.html)){
