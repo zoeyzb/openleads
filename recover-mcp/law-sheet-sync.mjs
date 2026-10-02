@@ -365,7 +365,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       {updateSheetProperties:{properties:{sheetId:archiveSheetId,gridProperties:{rowCount:50000,columnCount:18,frozenRowCount:0,frozenColumnCount:0}},fields:"gridProperties(rowCount,columnCount,frozenRowCount,frozenColumnCount)"}},
       {repeatCell:{range:{sheetId:archiveSheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:18},cell:{userEnteredFormat:{backgroundColor:{red:0.92,green:0.93,blue:0.95},textFormat:{foregroundColor:{red:0.08,green:0.10,blue:0.14},bold:true,fontSize:10},verticalAlignment:"MIDDLE",wrapStrategy:"WRAP"}},fields:"userEnteredFormat(backgroundColor,textFormat,verticalAlignment,wrapStrategy)"}},
       {updateDimensionProperties:{range:{sheetId:archiveSheetId,dimension:"ROWS",startIndex:0,endIndex:1},properties:{pixelSize:30},fields:"pixelSize"}},
-      {updateDimensionProperties:{range:{sheetId:archiveSheetId,dimension:"COLUMNS",startIndex:13,endIndex:18},properties:{hiddenByUser:true},fields:"hiddenByUser"}}
+      {updateDimensionProperties:{range:{sheetId:archiveSheetId,dimension:"COLUMNS",startIndex:11,endIndex:18},properties:{hiddenByUser:true},fields:"hiddenByUser"}}
     ];
     widths.forEach((pixelSize,i)=>formatRequests.push({updateDimensionProperties:{range:{sheetId:archiveSheetId,dimension:"COLUMNS",startIndex:i,endIndex:i+1},properties:{pixelSize},fields:"pixelSize"}}));
     await request(":batchUpdate",{method:"POST",body:{requests:formatRequests}});
@@ -503,7 +503,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
         {repeatCell:{range:{sheetId,startRowIndex:1,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:1},cell:{userEnteredFormat:{textFormat:{bold:true}}},fields:"userEnteredFormat.textFormat.bold"}},
         {addConditionalFormatRule:{rule:{ranges:[{sheetId,startRowIndex:1,endRowIndex:rowCount,startColumnIndex:4,endColumnIndex:5}],booleanRule:{condition:{type:"TEXT_EQ",values:[{userEnteredValue:"Verified"}]},format:{backgroundColor:{red:0.91,green:0.97,blue:0.92},textFormat:{bold:true}}}},index:0}},
         {addConditionalFormatRule:{rule:{ranges:[{sheetId,startRowIndex:1,endRowIndex:rowCount,startColumnIndex:4,endColumnIndex:5}],booleanRule:{condition:{type:"TEXT_EQ",values:[{userEnteredValue:"Missing"}]},format:{backgroundColor:{red:1,green:0.96,blue:0.86}}}},index:1}},
-        {updateDimensionProperties:{range:{sheetId,dimension:"COLUMNS",startIndex:13,endIndex:18},properties:{hiddenByUser:true},fields:"hiddenByUser"}}
+        {updateDimensionProperties:{range:{sheetId,dimension:"COLUMNS",startIndex:11,endIndex:18},properties:{hiddenByUser:true},fields:"hiddenByUser"}}
       );
       await request(":batchUpdate",{method:"POST",body:{requests}});
       const archive=await appendLeadArchive(leads);
