@@ -32,7 +32,7 @@ jobs:
           node-version: "22"
       - name: Verify pinned email enrichment
         env:
-          EMAIL_ENRICH_REF: 875fba0528b53e9a0291205caca3a1ce7cec23b9
+          EMAIL_ENRICH_REF: ab129e4ffbcb31d05f8b720fb7a0330411256696
         run: |
           git init /tmp/email-enrich
           cd /tmp/email-enrich
