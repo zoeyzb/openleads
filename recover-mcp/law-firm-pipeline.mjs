@@ -9,6 +9,7 @@ import { buildLawEmailSearchQueries } from "./law-email-search-plan.mjs";
 import { decodePublishedRot13Emails } from "./published-email-obfuscation.mjs";
 import { alignEligibleToReady } from "./law-eligible-set-align.mjs";
 import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml } from "./lawyercom-firm-size.mjs";
+import { isFirmSpecificDirectoryHeadcountUrl } from "./headcount-source-policy.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -313,7 +314,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v12-lawyercom-nearby-boundary";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v13-firm-specific-directory-source";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -3499,7 +3500,7 @@ function isPublishedHeadcountSource(source="",lead={}){
     const u=new URL(String(source||""));
     const host=u.hostname.toLowerCase().replace(/^www\./,"");
     if(!/^https?:$/.test(u.protocol))return false;
-    if(/(^|\.)(lawyers|martindale|lawyer|findlaw|justia)\.com$/i.test(host))return true;
+    if(/(^|\.)(lawyers|martindale|lawyer|findlaw|justia)\.com$/i.test(host))return isFirmSpecificDirectoryHeadcountUrl(source);
     if(/^(?:lawyers\.)?law\.cornell\.edu$/i.test(host)||/^lawyers\.oyez\.org$/i.test(host)||/^lawyers\.lawyerlegion\.com$/i.test(host))return true;
     const expected=expectedBarHost(lead);
     if(expected&&(host===expected||host.endsWith("."+expected)))return true;
@@ -3508,7 +3509,7 @@ function isPublishedHeadcountSource(source="",lead={}){
   }catch{return false;}
 }
 
-const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v7-lawyercom-nearby-boundary";
+const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v8-firm-specific-directory-source";
 
 function headcountSourceNeedsV2Identity(source=""){
   const host=hostOf(source);
