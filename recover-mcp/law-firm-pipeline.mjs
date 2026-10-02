@@ -4310,7 +4310,7 @@ async function enrichLead(key,lead){
     target_area:String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"").trim(),
     email_angle:emailAngle,lead_priority_score:priority,qualified_lead:qualified,call_ready_lead:callReady,
     law_email_enrich_version:EMAIL_METHOD_VERSION,
-    size_ready_email_method_version:sizeReadyForEmail?SIZE_READY_EMAIL_METHOD_VERSION:String(lead.size_ready_email_method_version||""),
+    size_ready_email_method_version:(attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10&&!effectiveWebsite)?SIZE_READY_EMAIL_METHOD_VERSION:String(lead.size_ready_email_method_version||""),
     law_email_method:emailMethod,law_email_source:source||"",
     law_email_source_verified:emailSourceVerified,
     law_email_validation:emailSourceVerified?(KEELEAD_BASE_URL?"published_exact+strict_firm_identity+mx+optional_smtp":"published_exact+strict_firm_identity+mx"):"rejected",
