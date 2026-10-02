@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { targetScopedLawyerComFirmSize } from "./lawyercom-firm-size.mjs";
+import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml } from "./lawyercom-firm-size.mjs";
 
 const wrap = body => `<!doctype html><html><body>${body}</body></html>`;
 
@@ -45,6 +45,18 @@ const wrap = body => `<!doctype html><html><body>${body}</body></html>`;
       <p>At this office location, there are 8 lawyers.</p>
     </main>`);
   assert.equal(targetScopedLawyerComFirmSize(html),3,"must accept office-location count before nearby modules");
+}
+
+{
+  const html=wrap(`
+    <main>
+      <h1>Target Firm</h1>
+      <h2>Lawyers</h2><a href="/lawyer/target-one">Target One</a>
+      <h2>Nearby Lawyers</h2><a href="/lawyer/unrelated-one">Unrelated One</a><a href="/lawyer/unrelated-two">Unrelated Two</a>
+    </main>`);
+  const scoped=targetScopedLawyerComHtml(html);
+  assert.match(scoped,/Target One/);
+  assert.doesNotMatch(scoped,/Unrelated One/,"related attorney roster must be outside target scope");
 }
 
 console.log("lawyer.com firm-size scope tests passed");
