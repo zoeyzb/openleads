@@ -485,7 +485,8 @@ async function fetchText(url,timeout=FETCH_TIMEOUT_MS){
   const started=Date.now();
   try{
     const isCalBar=/https?:\/\/apps\.calbar\.ca\.gov\/attorney\//i.test(String(url||""));
-    const requestHeaders=isCalBar?{
+    const isSearchEngine=/https?:\/\/(?:www\.)?(?:google|bing)\.com\//i.test(String(url||""))||/https?:\/\/html\.duckduckgo\.com\//i.test(String(url||""));
+    const requestHeaders=(isCalBar||isSearchEngine)?{
       "user-agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
       "accept":"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
       "accept-language":"en-US,en;q=0.9",
@@ -1604,18 +1605,20 @@ async function directDirectorySizeEvidence(lead={},key=""){
   ].filter(Boolean))].slice(0,6);
 
   const searchResults=await Promise.allSettled(queries.map(async query=>{
-    const [htmlResult,rssResult,duckResult]=await Promise.allSettled([
+    const [htmlResult,rssResult,duckResult,googleResult]=await Promise.allSettled([
       fetchText("https://www.bing.com/search?q="+encodeURIComponent(query),3800),
       fetchText("https://www.bing.com/search?format=rss&q="+encodeURIComponent(query),3800),
-      fetchText("https://html.duckduckgo.com/html/?q="+encodeURIComponent(query),3800)
+      fetchText("https://html.duckduckgo.com/html/?q="+encodeURIComponent(query),3800),
+      fetchText("https://www.google.com/search?num=10&hl=en&q="+encodeURIComponent(query),4200)
     ]);
     const html=htmlResult.status==="fulfilled"?String(htmlResult.value?.html||""):"";
     const rss=rssResult.status==="fulfilled"?String(rssResult.value?.html||""):"";
     const duck=duckResult.status==="fulfilled"?String(duckResult.value?.html||""):"";
+    const google=googleResult.status==="fulfilled"?String(googleResult.value?.html||""):"";
     return {
       links:[...new Set([
         ...bingResultLinks(html),...bingRssResultLinks(rss),
-        ...duckResultLinks(duck),...markdownResultLinks(duck)
+        ...duckResultLinks(duck),...markdownResultLinks(duck),...googleResultLinks(google)
       ])],
       records:[...bingResultRecords(html),...bingRssResultRecords(rss),...duckResultRecords(duck)]
     };
@@ -1988,6 +1991,29 @@ function markdownResultLinks(text=""){
   }
   return [...new Set(out)].slice(0,16);
 }
+function googleResultLinks(html=""){
+  const out=[];
+  const raw=String(html||"").replace(/&amp;/g,"&");
+  for(const m of raw.matchAll(/href=["'](?:\/url\?q=|https?:\/\/www\.google\.com\/url\?q=)(https?%3A%2F%2F[^"'&]+|https?:\/\/[^"'&]+)[^"']*["']/gi)){
+    let value=String(m[1]||"");
+    try{value=decodeURIComponent(value);}catch{}
+    try{
+      const u=new URL(value);
+      if(/google\.com$/i.test(u.hostname))continue;
+      if(!out.includes(u.href))out.push(u.href);
+    }catch{}
+  }
+  // Modern Google often places the destination directly in href.
+  for(const m of raw.matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)){
+    try{
+      const u=new URL(String(m[1]||""));
+      if(/(^|\.)google\.com$/i.test(u.hostname))continue;
+      if(!out.includes(u.href))out.push(u.href);
+    }catch{}
+  }
+  return out.slice(0,20);
+}
+
 function bingResultLinks(html=""){
   const out=[];
   let relativeRecovered=0;
