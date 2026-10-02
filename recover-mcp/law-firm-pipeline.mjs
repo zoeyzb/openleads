@@ -2030,7 +2030,7 @@ async function phoneRosterHeadcountEvidence(lead={},key=""){
           parts=identity.split(/\s+/).filter(Boolean);
         }
         const identityKey=normalize(identity)||normalize(source);
-        return {source,identity:identityKey,official};
+        return {source,identity:identityKey,official,html:String(page.html||"")};
       }catch{return null;}
     }));
 
@@ -2038,13 +2038,29 @@ async function phoneRosterHeadcountEvidence(lead={},key=""){
     const unique=[...new Map(matched.map(x=>[x.identity,x])).values()];
     if(unique.length>=2){
       const count=unique.length>10?11:unique.length;
+      const emailEvidence=[];
+      for(const item of unique.slice(0,10)){
+        for(const email of contextualEmails(item.html||"",lead,item.source)){
+          emailEvidence.push({email,source:item.source});
+        }
+      }
+      const checked=await Promise.all([...new Map(emailEvidence.map(x=>[x.email,x])).values()].slice(0,8).map(async x=>({
+        ...x,ok:await hasMailExchange(x.email)
+      })));
+      const published=checked.filter(x=>x.ok);
       await redis.hIncrBy(STATS,"phone_roster_headcount_hit",1);
       if(official)await redis.hIncrBy(STATS,"phone_roster_official_hit",1);
+      if(published.length)await redis.hIncrBy(STATS,"phone_roster_email_hit",1);
       console.log(JSON.stringify({
         event:"law_phone_roster_headcount_hit",key,name:String(lead.name||lead.title||""),
-        count,phone:phonePretty,host,official,sources:unique.slice(0,10).map(x=>x.source)
+        count,phone:phonePretty,host,official,sources:unique.slice(0,10).map(x=>x.source),
+        publishedEmails:published.map(x=>x.email).slice(0,3)
       }));
-      return {count,source:unique[0].source};
+      return {
+        count,source:unique[0].source,
+        publishedEmails:rankLawEmails(published.map(x=>x.email)).slice(0,5),
+        emailSource:published[0]?.source||""
+      };
     }
   }
 
@@ -3685,6 +3701,12 @@ async function enrichLead(key,lead){
         const roster=await phoneRosterHeadcountEvidence(lead,key);
         if(Number(roster?.count||0)>0&&isPublishedHeadcountSource(String(roster?.source||""),lead)){
           earlyCount=Number(roster.count);earlySource=String(roster.source);
+          if(Array.isArray(roster.publishedEmails)&&roster.publishedEmails.length){
+            emails.push(...roster.publishedEmails);
+            source=String(roster.emailSource||roster.source||"");
+            for(const email of roster.publishedEmails)emailEvidenceSources[String(email).toLowerCase()]=source;
+            emailMethod="phone_roster";
+          }
           await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster",1);
         }
       }catch{await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster_fail",1);}
