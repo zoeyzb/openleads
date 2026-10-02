@@ -45,16 +45,38 @@ Changes:
 - stopped discarding Lawyer.com roster names merely because the same page already had an explicit Firm Size value;
 - did not relax any eligibility, MX, source-binding, website, or headcount gate.
 
+## 2026-10-02 capacity/backpressure change
+Commit: `f24575a086a63117a2c5faf2ed77993a352c0cd9`
+
+Observed before this change, one deployment launched a size-ready batch of 96 at concurrency 48 and a general batch of 256 at concurrency 80 at the same time. Both lanes then crossed the stall threshold. This was resource contention, not proof that more concurrency meant more throughput.
+
+Change:
+- strict size-ready batch capped at 64, concurrency capped at 32;
+- while any size-ready backlog exists, general enrichment is capped at 64 records and concurrency 16;
+- when the strict backlog drains, general enrichment returns to its configured limits;
+- no eligibility gate was changed.
+
+Verified after deployment:
+- Railway deployment succeeded.
+- Runtime selected strict batch 64 / concurrency 32.
+- Runtime selected general batch 64 / concurrency 16 while `sizeReadyBacklog=188`.
+- The strict-email lane is therefore receiving reserved network capacity instead of competing with 80 simultaneous headcount workers.
+
 ## Verification checklist
-- [ ] Railway law-pipeline deployment succeeds for commit c875d148...
-- [ ] service stays healthy and heartbeat resumes
-- [ ] new roster-identity counters/logs appear
-- [ ] size-ready backlog is reprocessed
-- [ ] unique source-verified email count rises above the pre-change baseline of 42, or logs prove the new lane executes without unsafe acceptance
+- [x] Railway deployment succeeds for roster-identity commit c875d148...
+- [x] Railway deployment succeeds for backpressure commit f24575a...
+- [x] service boots and heartbeat resumes
+- [x] size-ready method v4 requeues the existing strict backlog
+- [x] adaptive runtime caps are active (strict 64/32, general 64/16 under pressure)
+- [ ] wait for completed post-change cycles and compare cycle latency/yield
+- [ ] confirm the new roster identities create additional source-verified email candidates
+- [ ] unique source-verified email count rises above the pre-change baseline of 42
 - [ ] unique eligible count is checked separately; do not claim success from call-ready growth
+
+Important correctness observation: a previously call-ready firm was later found to have an owned website and was rejected. Strict eligible count moved from 3 to 2 during revalidation. That is a quality correction, not a regression to hide.
 
 ## Known operational risk
 Railway UI currently shows the subscription as past due. Services are online at this checkpoint, but billing suspension could interrupt the pipeline independently of code quality.
 
 ## Next action
-Verify the deployment and production counters. If roster identities execute but verified emails remain flat, inspect the exact source-stage loss (search result discovery vs page identity/context vs MX vs owned-site rejection) before changing another gate or adding more volume.
+Let the lower-contention strict batch complete and compare its latency/yield against the pre-change multi-minute stalls. If verified emails remain flat after the v4 roster pass, inspect the exact source-stage loss (search result discovery vs page identity/context vs MX vs owned-site rejection). California Bar is a known secondary target: canonical profile links are being found, but profile identity matching is still rejecting them before email acceptance; fix that only with strong name/geo/profile evidence, never by relaxing source verification.
