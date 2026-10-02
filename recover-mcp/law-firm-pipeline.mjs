@@ -800,9 +800,6 @@ function likelyAttorneyName(lead={}){
 }
 function attorneyNameVariants(lead={}){
   const values=[];
-  const primary=likelyAttorneyName(lead);
-  if(primary)values.push(primary);
-
   const raw=String(lead.name||lead.title||"").replace(/\s+/g," ").trim();
   const addPerson=(candidate="")=>{
     const cleaned=String(candidate||"")
@@ -816,6 +813,17 @@ function attorneyNameVariants(lead={}){
     if(/\b(group|associates|partners|legal|services|office|firm)\b/i.test(cleaned))return;
     values.push(cleaned);
   };
+
+  // Directory-first discovery knows the actual roster. Feed those verified
+  // attorney identities into state-bar/public-record email lookup instead of
+  // trying to reverse-engineer people from a generic firm name.
+  const rosterNames=[
+    ...(Array.isArray(lead.directory_attorney_names)?lead.directory_attorney_names:[]),
+    ...(Array.isArray(lead.attorney_names)?lead.attorney_names:[])
+  ];
+  for(const candidate of rosterNames.slice(0,10))addPerson(candidate);
+  const primary=likelyAttorneyName(lead);
+  if(primary)addPerson(primary);
 
   // Google Maps frequently appends an attorney after the firm label:
   // "Firm Name: Jane Doe", "Firm Name | Jane Doe", or "Firm - Jane Doe".
@@ -1274,9 +1282,9 @@ function linksFrom(base,html=""){
   }
   return [...new Set(out)].slice(0,4);
 }
-function directoryRosterCount(html="",source="",lead={}){
+function directoryRosterNames(html="",source="",lead={}){
   const host=hostOf(source);
-  if(!(/(^|\.)(?:lawyers|martindale|lawyer|findlaw)\.com$/i.test(host)||/^(?:lawyers\.)?law\.cornell\.edu$/i.test(host)||/^lawyers\.oyez\.org$/i.test(host)||/^lawyers\.lawyerlegion\.com$/i.test(host)))return 0;
+  if(!(/(^|\.)(?:lawyers|martindale|lawyer|findlaw)\.com$/i.test(host)||/^(?:lawyers\.)?law\.cornell\.edu$/i.test(host)||/^lawyers\.oyez\.org$/i.test(host)||/^lawyers\.lawyerlegion\.com$/i.test(host)))return [];
   const names=[];
   const seen=new Set();
   for(const m of String(html||"").matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{1,180}?)<\/a>/gi)){
@@ -1292,36 +1300,44 @@ function directoryRosterCount(html="",source="",lead={}){
     const key=normalize(cleaned);
     if(!key||seen.has(key))continue;
     seen.add(key); names.push(cleaned);
-    if(names.length>10)return 11;
+    if(names.length>10)break;
   }
+  return names;
+}
+function directoryRosterCount(html="",source="",lead={}){
+  const names=directoryRosterNames(html,source,lead);
   // On an identity-matched dedicated firm directory page, one unique attorney
   // is positive solo evidence, not "unknown". Returning 1 lets the strict 2-10
   // gate reject it instead of keeping it forever as an unresolved candidate.
-  return names.length>=1?names.length:0;
+  return names.length>10?11:names.length;
 }
 
-function strictFirmPageRosterCount(html="",source="",lead={}){
+function strictFirmPageRosterNames(html="",source="",lead={}){
   const raw=String(html||"");
-  if(!raw)return 0;
+  if(!raw)return [];
   const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
-  if(!phone||!raw.replace(/\D/g,"").includes(phone))return 0;
-  if(!strictDirectoryFirmIdentity(raw,source,lead))return 0;
+  if(!phone||!raw.replace(/\D/g,"").includes(phone))return [];
+  if(!strictDirectoryFirmIdentity(raw,source,lead))return [];
 
-  // Count only links inside an explicit attorney/team section. This avoids
-  // nearby/recommended-lawyer modules that made the old whole-page roster count unsafe.
+  // Keep only the firm's explicit attorney/team section so nearby/recommended
+  // attorneys never become email-search identities.
   const heading=/<h([2-4])\b[^>]*>\s*(?:<[^>]+>\s*)*(?:attorneys?|lawyers?|our\s+team|professionals?|people)(?:\s*<[^>]+>)*\s*<\/h\1>/ig;
-  let best=0,m;
+  let best=[],m;
   while((m=heading.exec(raw))){
     const level=m[1];
     const start=m.index+m[0].length;
     const tail=raw.slice(start,start+120000);
     const next=new RegExp("<h"+level+"\\b","i").exec(tail);
     const section=next?tail.slice(0,next.index):tail.slice(0,50000);
-    const count=directoryRosterCount(section,source,lead);
-    if(count>best)best=count;
-    if(best>10)return 11;
+    const names=directoryRosterNames(section,source,lead);
+    if(names.length>best.length)best=names;
+    if(best.length>10)break;
   }
-  return best;
+  return best.slice(0,11);
+}
+function strictFirmPageRosterCount(html="",source="",lead={}){
+  const names=strictFirmPageRosterNames(html,source,lead);
+  return names.length>10?11:names.length;
 }
 
 function strictLawyerComRosterCount(html="",source="",lead={}){
@@ -5365,7 +5381,8 @@ async function verifyDirectoryCandidate(candidate={}){
     const phoneDigits=normalizeLawPhone(candidate.phone);
     const profilePhoneMatch=Boolean(phoneDigits&&String(text).replace(/\D/g,"").includes(phoneDigits));
     const profileCount=officialFirmSizeEstimate(text);
-    const rosterCount=page.via==="jina"?0:strictFirmPageRosterCount(page.html,source,seedLead);
+    const attorneyNames=page.via==="jina"?[]:strictFirmPageRosterNames(page.html,source,seedLead);
+    const rosterCount=page.via==="jina"?0:(attorneyNames.length>10?11:attorneyNames.length);
     const count=profileCount>0?profileCount:rosterCount;
     if(count<2||count>10)return null;
 
@@ -5377,10 +5394,27 @@ async function verifyDirectoryCandidate(candidate={}){
       const profileWebsite=outboundFirmWebsiteFromDirectory(page.html,seedLead);
       if(profileWebsite){
         const verifiedWebsite=await verifyOwnedWebsiteCandidate(profileWebsite,seedLead);
-        if(verifiedWebsite)return {...candidate,rejectWebsite:verifiedWebsite,count,source};
+        if(verifiedWebsite)return {...candidate,rejectWebsite:verifiedWebsite,count,source,attorneyNames};
       }
     }
-    return {...candidate,count,source,profilePhoneMatch,profileVia:String(page.via||"direct")};
+
+    // Zero-extra-fetch win: some legal-directory profiles publish a direct
+    // mailbox. The profile has already passed strict firm identity + phone/size
+    // checks, so keep only contextual, non-directory addresses with valid MX.
+    const profileEmailCandidates=contextualEmails(page.html,seedLead,source);
+    const emailChecks=await Promise.all(profileEmailCandidates.slice(0,5).map(async email=>({
+      email,ok:await hasMailExchange(email)
+    })));
+    const publishedEmails=emailChecks.filter(x=>x.ok).map(x=>x.email);
+    if(publishedEmails.length){
+      await redis.hIncrBy(STATS,"directory_profile_email_hit",1);
+      console.log(JSON.stringify({
+        event:"law_directory_profile_email_hit",
+        name:String(candidate.name||""),source,
+        emails:publishedEmails.slice(0,3),attorneys:count
+      }));
+    }
+    return {...candidate,count,source,profilePhoneMatch,profileVia:String(page.via||"direct"),attorneyNames,publishedEmails};
   }catch{return null;}
 }
 
@@ -5441,9 +5475,26 @@ async function persistDirectorySeed(candidate={}){
     preferred_firm_size:true,
     firm_size_tier:"preferred_2_10",
     law_directory_seed_source:candidate.listingUrl,
-    law_directory_seeded_at:now
+    law_directory_seeded_at:now,
+    directory_attorney_names:[...new Set([
+      ...(Array.isArray(existing.directory_attorney_names)?existing.directory_attorney_names:[]),
+      ...(Array.isArray(candidate.attorneyNames)?candidate.attorneyNames:[])
+    ])].slice(0,10),
+    conversion_headcount_priority:true,
+    ...(Array.isArray(candidate.publishedEmails)&&candidate.publishedEmails.length?{
+      emails:[...new Set([
+        ...(Array.isArray(existing.emails)?existing.emails:[]),
+        ...candidate.publishedEmails
+      ])],
+      email:candidate.publishedEmails[0],
+      law_email_source:candidate.source,
+      law_email_source_verified:true,
+      law_email_validation:"published_exact+strict_firm_identity+mx",
+      law_email_verified_at:now
+    }:{})
   };
 
+  const profileEmails=Array.isArray(candidate.publishedEmails)?candidate.publishedEmails:[];
   await Promise.all([
     redis.hSet(LEAD_HASH,key,JSON.stringify(lead)),
     redis.hSet("recover:leadstore:phone-index",phone,key),
@@ -5451,6 +5502,15 @@ async function persistDirectorySeed(candidate={}){
       count:candidate.count,source:candidate.source,verified_at:now,
       verification:"lawyerscom_profile_size+"+HEADCOUNT_IDENTITY_VERSION
     })),
+    ...(profileEmails.length?[
+      redis.hSet(VERIFIED_EMAIL_EVIDENCE_HASH,key,JSON.stringify({
+        emails:[...new Set(profileEmails)],
+        source:candidate.source,
+        verified_at:now,
+        verification:"published_exact+strict_firm_identity+mx"
+      })),
+      redis.sAdd(UNIQUE_VERIFIED_EMAIL_SET,key)
+    ]:[]),
     redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key),
     redis.sAdd(SIZE_READY_PENDING_SET,key),
     redis.sAdd(SCOPE_SET,key),
@@ -5592,15 +5652,26 @@ async function lawAreaSaturated(area={}){
 }
 
 async function seed(cities){
-  const [queue,pendingPriority,pendingSource,pendingSizeReady,pendingRegular,pendingRecoverable]=await Promise.all([
+  const [queue,pendingPriority,pendingSource,pendingSizeReady,pendingRegular,pendingRecoverable,phonePriority,phonePending]=await Promise.all([
     redis.lLen(ACTIVE_QUEUE),
     redis.sCard(PRIORITY_PENDING_SET),
     redis.sCard(SOURCE_PENDING_SET),
     redis.sCard(SIZE_READY_PENDING_SET),
     redis.sCard(PENDING_SET),
-    redis.sCard(RECOVERABLE_PENDING_SET)
+    redis.sCard(RECOVERABLE_PENDING_SET),
+    redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),
+    redis.sCard(CHICAGO_PENDING_SET)
   ]);
   if(queue>=QUEUE_HIGH_WATER)return 0;
+  const phoneBacklog=phonePriority+phonePending;
+  // Generic Maps acquisition already has far more raw work than the strict
+  // funnel can convert. Stop creating low-information records while thousands
+  // still need headcount proof or while a meaningful 2-10 cohort is waiting on
+  // the mandatory email gate. Directory-first discovery continues separately.
+  if(phoneBacklog>=5000||pendingSizeReady>=100){
+    await redis.hIncrBy(STATS,"generic_discovery_paused_for_strict_backlog",1);
+    return 0;
+  }
   // Raw discovery is not the bottleneck anymore. Count recoverable work too so
   // a 35K-record inventory cannot keep growing while thousands of email/headcount
   // candidates wait for enrichment.
