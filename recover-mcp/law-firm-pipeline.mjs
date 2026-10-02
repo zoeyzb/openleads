@@ -22,6 +22,8 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(256,Number(process.env.LAW_FIRM_ENRICH_BATCH||96)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(80,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||32)));
+const SIZE_READY_EMAIL_BATCH=Math.max(4,Math.min(96,Number(process.env.LAW_SIZE_READY_EMAIL_BATCH||48)));
+const SIZE_READY_EMAIL_CONCURRENCY=Math.max(2,Math.min(48,Number(process.env.LAW_SIZE_READY_EMAIL_CONCURRENCY||24)));
 const EMAIL_METHOD_VERSION="email-v67-recovery-diversity-free-mail";
 const SIZE_READY_EMAIL_METHOD_VERSION="size-ready-email-v2-exact-phone-public-sources";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
@@ -5207,75 +5209,24 @@ async function normalizeEmailQueues(){
     demotedPriority,promotedPriority
   }));
 }
-async function enrichBatch(){
-  // Conversion-first scheduling:
-  // 1) source-backed email missing size proof,
-  // 2) verified 2-10 size missing an email,
-  // 3) high-potential firm/multi or strong-identity email recovery,
-  // 4) fresh discovery output,
-  // 5) broad recovery backlog.
-  // The old allocator capped PRIORITY_PENDING_SET at 6/64 even when thousands
-  // of high-value leads were waiting; reserve materially more of each batch.
-  // Reserve capacity for every high-value lane so a large historical backlog
-  // cannot starve newly discovered firms. Fresh discovery gets a guaranteed
-  // slice while email-backed and size-ready conversion work stays prioritized.
-  // Source-verified email is a hard eligibility gate, not a bonus. Proven 2-10
-  // no-site firms are closest to revenue, so reserve one third of every batch
-  // for finishing that final gate before spending the rest on headcount discovery.
-  const sizeReadyTarget=Math.min(ENRICH_BATCH,Math.max(32,Math.floor(ENRICH_BATCH/3)));
-  const sizeReadyKeys=await popSetBatch(SIZE_READY_PENDING_SET,sizeReadyTarget);
-  const afterSizeReady=Math.max(0,ENRICH_BATCH-sizeReadyKeys.length);
-
-  // Existing source-backed emails are also close to conversion because only
-  // size proof may be missing.
-  const regularKeys=afterSizeReady?await popSetBatch(PENDING_SET,Math.min(16,afterSizeReady)):[];
-  const afterRegular=Math.max(0,afterSizeReady-regularKeys.length);
-
-  // Among the raw callable/no-site population, explicit multi-attorney name
-  // signals are the highest-yield headcount work.
-  const phonePriorityTarget=Math.min(afterRegular,Math.max(48,Math.floor(ENRICH_BATCH*0.5)));
-  const phonePriorityKeys=afterRegular?await popSetBatch(PHONE_HEADCOUNT_PRIORITY_SET,phonePriorityTarget):[];
-  const afterPhonePriority=Math.max(0,afterRegular-phonePriorityKeys.length);
-
-  // Once the explicit multi-name priority queue drains, use the freed
-  // capacity on the large callable/no-site headcount backlog rather than
-  // leaving most of the batch to low-value generic retries.
-  const chicagoTarget=Math.min(afterPhonePriority,Math.max(48,Math.floor(ENRICH_BATCH*0.55)));
-  const chicagoKeys=afterPhonePriority?await popSetBatch(CHICAGO_PENDING_SET,chicagoTarget):[];
-  const afterChicago=Math.max(0,afterPhonePriority-chicagoKeys.length);
-
-  // Keep a small guaranteed slice for new discovery/email evidence and retries.
-  const freshKeys=afterChicago?await popSetBatch(SOURCE_PENDING_SET,Math.min(6,afterChicago)):[];
-  const afterFresh=Math.max(0,afterChicago-freshKeys.length);
-  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(8,afterFresh)):[];
-  const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
-  const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
-  const keys=[...new Set([...sizeReadyKeys,...regularKeys,...phonePriorityKeys,...chicagoKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
-  if(!keys.length)return 0;
-  console.log(JSON.stringify({
-    event:"law_enrich_batch_selected",
-    sizeReady:sizeReadyKeys.length,
-    regular:regularKeys.length,
-    phonePriority:phonePriorityKeys.length,
-    phonePending:chicagoKeys.length,
-    fresh:freshKeys.length,
-    priority:priorityKeys.length,
-    recoverable:recoverableKeys.length,
-    total:keys.length,
-    concurrency:ENRICH_CONCURRENCY
-  }));
-  await redis.hIncrBy(STATS,"enrich_non_destructive_batch_selected",keys.length);
-  let index=0,done=0;
+async function processEnrichKeys(keys=[],lane="general",concurrency=ENRICH_CONCURRENCY){
+  const uniqueKeys=[...new Set(keys.filter(Boolean))];
+  if(!uniqueKeys.length)return 0;
+  let index=0,done=0,skippedForSizeReady=0;
   const run=async()=>{
-    while(index<keys.length){
-      const key=keys[index++];
+    while(index<uniqueKeys.length){
+      const key=uniqueKeys[index++];
       try{
+        // The strict-conversion loop owns SIZE_READY_PENDING_SET. A general
+        // batch that sampled a stale overlapping queue entry must yield rather
+        // than race the same lead through two expensive research paths.
+        if(lane!=="size_ready"&&await redis.sIsMember(SIZE_READY_PENDING_SET,key)){
+          skippedForSizeReady++;
+          continue;
+        }
         const raw=await redis.hGet(LEAD_HASH,key);
         if(!raw)continue;
         let lead;try{lead=JSON.parse(raw)||{};}catch{continue;}
-        // Every fetch inside enrichLead is independently bounded. An outer
-        // Promise.race did not cancel enrichLead, so timed-out work kept mutating
-        // Redis after the lead had been requeued. Await it directly instead.
         const result=await enrichLead(key,lead);
         const finalRaw=await redis.hGet(LEAD_HASH,key);
         let finalLead={};try{finalLead=finalRaw?JSON.parse(finalRaw):{};}catch{}
@@ -5300,8 +5251,12 @@ async function enrichBatch(){
         const rawRetry=await redis.hGet(LEAD_HASH,key);
         let retryLead={};try{retryLead=rawRetry?JSON.parse(rawRetry):{};}catch{}
         const retryWebsite=String(retryLead.website||retryLead.website_url||"").trim();
+        const retryCount=Number(retryLead.attorney_count_estimate||retryLead.attorney_count||0);
+        const retrySizeReady=retryLead.attorney_count_evidence_verified===true&&retryCount>=2&&retryCount<=10&&!/^https?:\/\//i.test(retryWebsite);
         const needsPhoneHeadcount=!/^https?:\/\//i.test(retryWebsite)&&isUsableLawPhone(retryLead.phone)&&retryLead.attorney_count_evidence_verified!==true;
-        if(needsPhoneHeadcount){
+        if(retrySizeReady){
+          await redis.sAdd(SIZE_READY_PENDING_SET,key);
+        }else if(needsPhoneHeadcount){
           const shape=lawFirmNameShape(retryLead);
           await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
         }else{
@@ -5309,12 +5264,63 @@ async function enrichBatch(){
           const retrySet=retryEmails.length?PENDING_SET:(emailRecoveryPriority(retryLead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET);
           await moveToEmailQueue(key,retrySet);
         }
-        console.warn(JSON.stringify({event:"law_firm_enrich_retry",key,error:String(error?.message||error)}));
+        console.warn(JSON.stringify({event:"law_firm_enrich_retry",lane,key,error:String(error?.message||error)}));
       }
     }
   };
-  await Promise.all(Array.from({length:Math.min(ENRICH_CONCURRENCY,keys.length)},()=>run()));
+  await Promise.all(Array.from({length:Math.min(concurrency,uniqueKeys.length)},()=>run()));
+  if(skippedForSizeReady)await redis.hIncrBy(STATS,"general_enrich_yielded_to_size_ready",skippedForSizeReady);
   return done;
+}
+
+async function enrichSizeReadyBatch(){
+  const keys=await popSetBatch(SIZE_READY_PENDING_SET,SIZE_READY_EMAIL_BATCH);
+  if(!keys.length)return 0;
+  console.log(JSON.stringify({
+    event:"law_size_ready_batch_selected",
+    total:keys.length,
+    concurrency:SIZE_READY_EMAIL_CONCURRENCY
+  }));
+  await redis.hIncrBy(STATS,"size_ready_batch_selected",keys.length);
+  return processEnrichKeys(keys,"size_ready",SIZE_READY_EMAIL_CONCURRENCY);
+}
+
+async function enrichBatch(){
+  // General worker: prove size and recover non-size-ready evidence. Strict
+  // 2-10/no-site email completion has its own independent loop so a slow
+  // headcount batch cannot starve the final eligibility gate.
+  const regularKeys=await popSetBatch(PENDING_SET,Math.min(16,ENRICH_BATCH));
+  const afterRegular=Math.max(0,ENRICH_BATCH-regularKeys.length);
+
+  const phonePriorityTarget=Math.min(afterRegular,Math.max(48,Math.floor(ENRICH_BATCH*0.55)));
+  const phonePriorityKeys=afterRegular?await popSetBatch(PHONE_HEADCOUNT_PRIORITY_SET,phonePriorityTarget):[];
+  const afterPhonePriority=Math.max(0,afterRegular-phonePriorityKeys.length);
+
+  const chicagoTarget=Math.min(afterPhonePriority,Math.max(48,Math.floor(ENRICH_BATCH*0.65)));
+  const chicagoKeys=afterPhonePriority?await popSetBatch(CHICAGO_PENDING_SET,chicagoTarget):[];
+  const afterChicago=Math.max(0,afterPhonePriority-chicagoKeys.length);
+
+  const freshKeys=afterChicago?await popSetBatch(SOURCE_PENDING_SET,Math.min(8,afterChicago)):[];
+  const afterFresh=Math.max(0,afterChicago-freshKeys.length);
+  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(12,afterFresh)):[];
+  const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
+  const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
+  const keys=[...new Set([...regularKeys,...phonePriorityKeys,...chicagoKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
+  if(!keys.length)return 0;
+  console.log(JSON.stringify({
+    event:"law_enrich_batch_selected",
+    lane:"general",
+    regular:regularKeys.length,
+    phonePriority:phonePriorityKeys.length,
+    phonePending:chicagoKeys.length,
+    fresh:freshKeys.length,
+    priority:priorityKeys.length,
+    recoverable:recoverableKeys.length,
+    total:keys.length,
+    concurrency:ENRICH_CONCURRENCY
+  }));
+  await redis.hIncrBy(STATS,"enrich_non_destructive_batch_selected",keys.length);
+  return processEnrichKeys(keys,"general",ENRICH_CONCURRENCY);
 }
 
 const LAWYERS_STATE_SLUGS={
@@ -5950,6 +5956,27 @@ async function seedLoop(){
 }
 
 let LAST_ENRICH_CYCLE_AT=Date.now(),LAST_ENRICH_CYCLE_MS=0;
+let LAST_SIZE_READY_CYCLE_AT=Date.now(),LAST_SIZE_READY_CYCLE_MS=0;
+async function sizeReadyConversionLoop(){
+  while(true){
+    try{
+      const cycleStarted=Date.now();
+      const converted=await enrichSizeReadyBatch();
+      LAST_SIZE_READY_CYCLE_MS=Date.now()-cycleStarted;
+      LAST_SIZE_READY_CYCLE_AT=Date.now();
+      if(converted||LAST_SIZE_READY_CYCLE_MS>15000){
+        console.log(JSON.stringify({
+          event:"law_size_ready_cycle",
+          converted,
+          cycleMs:LAST_SIZE_READY_CYCLE_MS,
+          pendingSizeReady:await redis.sCard(SIZE_READY_PENDING_SET),
+          uniqueEligible:await redis.sCard(UNIQUE_ELIGIBLE_SET)
+        }));
+      }
+    }catch(error){console.error("law_size_ready_loop_error",error?.stack||error?.message||error);}
+    await sleep(Math.max(1200,Math.min(LOOP_MS,3000)));
+  }
+}
 async function enrichmentLoop(){
   while(true){
     try{
@@ -5996,11 +6023,14 @@ async function statusLoop(){
         redis.sCard(SIZE_READY_PENDING_SET),redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),redis.sCard(CHICAGO_PENDING_SET)
       ]);
       const enrichSilenceMs=Math.max(0,Date.now()-LAST_ENRICH_CYCLE_AT);
+      const sizeReadySilenceMs=Math.max(0,Date.now()-LAST_SIZE_READY_CYCLE_AT);
       console.log(JSON.stringify({
         event:"law_firm_pipeline_heartbeat",qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
         phoneHeadcountPriority,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,
         lastEnrichCycleMs:LAST_ENRICH_CYCLE_MS,enrichSilenceMs,
-        enrichmentStalled:enrichSilenceMs>Math.max(180000,LOOP_MS*6)
+        lastSizeReadyCycleMs:LAST_SIZE_READY_CYCLE_MS,sizeReadySilenceMs,
+        enrichmentStalled:enrichSilenceMs>Math.max(180000,LOOP_MS*6),
+        sizeReadyStalled:pendingSizeReady>0&&sizeReadySilenceMs>Math.max(120000,LOOP_MS*4)
       }));
     }catch(error){
       console.error("law_firm_status_loop_error",error?.stack||error?.message||error);
@@ -6025,4 +6055,4 @@ async function websiteAuditLoop(){
   }
 }
 
-await Promise.all([seedLoop(),directorySeedLoop(),enrichmentLoop(),statusLoop()]);
+await Promise.all([seedLoop(),directorySeedLoop(),sizeReadyConversionLoop(),enrichmentLoop(),statusLoop()]);
