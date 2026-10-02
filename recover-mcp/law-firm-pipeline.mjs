@@ -157,6 +157,39 @@ async function detectOwnedWebsiteFromEvidenceSource(source="",emails=[],lead={},
   return "";
 }
 
+async function publishedEmailEvidenceFromHeadcountSource(lead={},key=""){
+  const source=String(lead.attorney_count_source||"").trim();
+  if(!source||!isDirectPublishedEmailSource(source))return {emails:[],source:""};
+  try{
+    const page=await fetchResearchPage(source,lead,key,true);
+    if(!page?.html)return {emails:[],source:""};
+    const finalUrl=String(page.final_url||source);
+    const text=stripHtml(page.html).slice(0,60000);
+    if(!pageMatchesLead(text,lead,finalUrl))return {emails:[],source:""};
+
+    const candidates=contextualEmails(page.html,lead,finalUrl)
+      .filter(email=>isUsableLawEmail(email)&&!isThirdPartyEmailDomain(email));
+    if(!candidates.length)return {emails:[],source:""};
+
+    const checked=await Promise.all([...new Set(candidates)].slice(0,6).map(async email=>({
+      email,ok:await hasMailExchange(email)
+    })));
+    const emails=checked.filter(x=>x.ok).map(x=>x.email);
+    if(!emails.length)return {emails:[],source:""};
+
+    await redis.hIncrBy(STATS,"headcount_source_email_fastpath_hit",1);
+    console.log(JSON.stringify({
+      event:"law_headcount_source_email_fastpath_hit",
+      key,name:String(lead.name||lead.title||""),
+      source:finalUrl,emails:emails.slice(0,3)
+    }));
+    return {emails:rankLawEmails(emails).slice(0,5),source:finalUrl};
+  }catch(error){
+    await redis.hIncrBy(STATS,"headcount_source_email_fastpath_error",1);
+    return {emails:[],source:""};
+  }
+}
+
 async function publishedEmailsOnExactSource(source="",emails=[],lead={},key=""){
   const tagged=(values,status)=>{const out=[...(values||[])];out.bindingStatus=status;return out;};
   if(!isDirectPublishedEmailSource(source)||!emails.length)return tagged([],"invalid");
@@ -3541,6 +3574,20 @@ async function enrichLead(key,lead){
   let personalFact="",personalFactSource="";
   let emailMethod=emails.length?"existing_source_backed":"none";
   if(emailMethod!=="none")await redis.hIncrBy(STATS,"email_existing_hit",1);
+
+  // Proven 2-10 firms already have an identity-matched published headcount
+  // source. Reuse that exact page before launching search engines. This is the
+  // cheapest path for the current size-ready backlog and preserves provenance.
+  if(!emails.length&&attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10){
+    const headcountEmail=await publishedEmailEvidenceFromHeadcountSource(lead,key);
+    if(headcountEmail.emails.length){
+      emails.push(...headcountEmail.emails);
+      source=headcountEmail.source;
+      for(const email of headcountEmail.emails)emailEvidenceSources[String(email).toLowerCase()]=headcountEmail.source;
+      emailMethod="headcount_source";
+      await redis.hIncrBy(STATS,"email_headcount_source_hit",1);
+    }
+  }
 
   // Prove 2-10 attorneys before spending the expensive broad email-discovery
   // pass, but keep the campaign contract explicit: phone + verified 2-10 +
