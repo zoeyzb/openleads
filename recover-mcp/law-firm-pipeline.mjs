@@ -3513,14 +3513,16 @@ async function enrichLead(key,lead){
     return true;
   }
 
-  // Final no-website integrity gate for the tiny verified 2-10 cohort.
-  // These are the only records close enough to revenue to justify an exact
-  // owned-site search on every pass.
+  // Cheap no-website integrity check for the verified 2-10 cohort. Reuse the
+  // exact trusted headcount profile here, but defer broad web search until a
+  // source-verified email exists. Historical data showed broad website
+  // preflight had very low hit rate and was burning conversion capacity before
+  // the mandatory email gate.
   if(knownSizeReady){
     const profileSite=await ownedWebsiteFromTrustedProfile(String(lead.attorney_count_source||""),lead,key);
-    const discoveredSizeReadySite=profileSite||await findOwnedWebsitePreflight({...lead,conversion_headcount_priority:false},key,true);
+    const discoveredSizeReadySite=profileSite;
     if(discoveredSizeReadySite){
-      const updated={...lead,website:discoveredSizeReadySite,website_opportunity:"website_refresh",owned_website_evidence_source:"size_ready_preflight"};
+      const updated={...lead,website:discoveredSizeReadySite,website_opportunity:"website_refresh",owned_website_evidence_source:"size_ready_profile"};
       await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
       await Promise.all([
         redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),
@@ -3689,13 +3691,13 @@ async function enrichLead(key,lead){
         return true;
       }
 
-      // Now that 2-10 is actually proven, verify the no-owned-website gate.
-      // This preserves lead quality without wasting website research on the
-      // thousands of solos, oversized firms, and unresolved headcounts.
+      // Headcount workers stop after proof. Only reject an owned site if the
+      // exact trusted size source publishes it. The broad owned-site search is
+      // deferred to the dedicated strict-email lane after email proof.
       const profileSite=await ownedWebsiteFromTrustedProfile(earlySource,lead,key);
-      const discoveredSite=profileSite||await findOwnedWebsitePreflight({...lead,conversion_headcount_priority:false},key,true);
+      const discoveredSite=profileSite;
       if(discoveredSite){
-        const websiteLead={...lead,website:discoveredSite,website_opportunity:"website_refresh",owned_website_evidence_source:profileSite?earlySource:"post_size_preflight"};
+        const websiteLead={...lead,website:discoveredSite,website_opportunity:"website_refresh",owned_website_evidence_source:earlySource||"post_size_profile"};
         await redis.hSet(LEAD_HASH,key,JSON.stringify(websiteLead));
         await Promise.all([
           redis.sRem(CALL_READY_SET,key),redis.sRem(CHICAGO_PENDING_SET,key),
