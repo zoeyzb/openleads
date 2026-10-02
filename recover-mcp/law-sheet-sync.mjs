@@ -1,7 +1,7 @@
 import { createSign } from "node:crypto";
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, qualifiesCallReadyNoWebsiteLawLead, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
 
-// Law sheet sync deploy rev: phone-first-call-ready-v1
+// Law sheet sync deploy rev: strict-live-metrics-v2
 const TOKEN_URL="https://oauth2.googleapis.com/token";
 const SHEETS_API="https://sheets.googleapis.com/v4/spreadsheets";
 const SCOPE="https://www.googleapis.com/auth/spreadsheets";
@@ -253,11 +253,40 @@ async function collectWebsiteRefreshRows(redis){
   return out;
 }
 
+
+async function collectMetricsSnapshot(redis){
+  const [
+    strictEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
+    pendingSizeReady,headcountPriority,headcountGeneral,emailPriority,emailRecoverable
+  ]=await Promise.all([
+    redis.sCard("recover:law-firm:unique-eligible:v1"),
+    redis.sCard("recover:law-firm:call-ready:v1"),
+    redis.sCard("recover:law-firm:unique-verified-email:v1"),
+    redis.sCard("recover:law-firm:unique-verified-headcount:v1"),
+    redis.sCard("recover:law-firm:email-candidates:v1"),
+    redis.sCard("recover:law-firm:size-ready-pending:v1"),
+    redis.sCard("recover:law-firm:phone-headcount-priority:v1"),
+    redis.sCard("recover:law-firm:chicago-headcount-pending:v1"),
+    redis.sCard("recover:law-firm:priority-pending:v1"),
+    redis.sCard("recover:law-firm:recoverable-pending:v1")
+  ]);
+  return {
+    timestamp:new Date().toISOString(),
+    strictEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
+    pendingSizeReady,headcountPriority,headcountGeneral,
+    headcountTotal:headcountPriority+headcountGeneral,
+    emailPriority,emailRecoverable,
+    strictConversion:callReady>0?strictEligible/callReady:0
+  };
+}
+
 export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadsheetId="",enabled=false,intervalMs=120000}={}){
   if(!enabled||!spreadsheetId)return;
   const sa=serviceAccount(serviceAccountJson);
   if(!sa){console.error("law_sheet_sync_not_configured");return;}
   let token="",tokenAt=0,running=false,sheetId=null,tabName="Call Ready Leads";
+  const metricsTabName="Live Metrics";
+  const metricsHistoryTabName="Metrics History";
 
   async function auth(){
     if(token&&Date.now()-tokenAt<50*60*1000)return token;
@@ -275,24 +304,21 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
   async function ensureSheet(){
     const meta=await request("?fields=sheets.properties");
     const sheets=meta.sheets||[];
-    let target=sheets.find(s=>s?.properties?.title===tabName);
-    if(!target&&sheets[0]){
-      sheetId=sheets[0].properties.sheetId;
-      await request(":batchUpdate",{method:"POST",body:{requests:[{updateSheetProperties:{properties:{sheetId,title:tabName},fields:"title"}}]}});
-      return;
-    }
+    const target=sheets.find(s=>s?.properties?.title===tabName);
     if(!target){
-      const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title:tabName,rowCount:100,columnCount:18}}}]}});
+      // Never rename an existing dashboard/history tab. A prepared workbook can
+      // safely coexist with the lead exports.
+      const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title:tabName,gridProperties:{rowCount:5000,columnCount:18,frozenRowCount:1}}}}]}});
       sheetId=made.replies?.[0]?.addSheet?.properties?.sheetId;
       return;
     }
     sheetId=target.properties.sheetId;
   }
-  async function ensureAdditionalSheet(title){
+  async function ensureAdditionalSheet(title,rowCount=5000,columnCount=16){
     const meta=await request("?fields=sheets.properties");
     const target=(meta.sheets||[]).find(s=>s?.properties?.title===title);
     if(target)return target.properties.sheetId;
-    const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title,gridProperties:{rowCount:100,columnCount:16}}}}]}});
+    const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title,gridProperties:{rowCount,columnCount,frozenRowCount:1}}}}]}});
     return made.replies?.[0]?.addSheet?.properties?.sheetId;
   }
   async function previousStatusesFor(title){
@@ -332,6 +358,60 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
     );
     await request(":batchUpdate",{method:"POST",body:{requests}});
   }
+  async function writeMetricsSnapshot(snapshot){
+    const metricsSheetId=await ensureAdditionalSheet(metricsTabName,100,8);
+    const historySheetId=await ensureAdditionalSheet(metricsHistoryTabName,50000,12);
+
+    const liveValues=[
+      ["Metric","Current","Meaning","Target / Note"],
+      ["Strict eligible leads",snapshot.strictEligible,"Law firm + no owned website + verified 2–10 attorneys + source-verified usable email","Primary number"],
+      ["Call-ready 2–10 / no-site",snapshot.callReady,"Verified 2–10 attorney firms with usable phone and no owned website","Intermediate"],
+      ["Unique verified emails",snapshot.verifiedEmails,"Leads with source-verified email evidence","Email gate inventory"],
+      ["Unique verified headcounts",snapshot.verifiedHeadcounts,"Law records with source-verified attorney count","All verified sizes"],
+      ["2–10 firms waiting for email",snapshot.pendingSizeReady,"Proven 2–10 + no-site firms still missing the strict email gate","Highest-priority queue"],
+      ["Headcount priority backlog",snapshot.headcountPriority,"Higher-yield unresolved headcount candidates","Needs size proof"],
+      ["Headcount general backlog",snapshot.headcountGeneral,"Other unresolved phone/no-site law firms","Needs size proof"],
+      ["Total unresolved headcount",snapshot.headcountTotal,"Priority + general headcount backlog","Backpressure input"],
+      ["Email priority backlog",snapshot.emailPriority,"Higher-priority email recovery queue","Needs email proof"],
+      ["Email recoverable backlog",snapshot.emailRecoverable,"Lower-priority/retry email recovery queue","Needs email proof"],
+      ["Verified email candidates",snapshot.emailCandidates,"Source-verified email candidates currently visible to research","Research inventory"],
+      ["Last production sync",snapshot.timestamp,"Last successful sheet-sync snapshot","Automatic"],
+      ["Strict / call-ready conversion",snapshot.strictConversion,"Strict eligible divided by call-ready 2–10/no-site","Diagnostic"],
+      ["Sync status",`Active · every ${Math.max(1,Math.round((Number(intervalMs)||120000)/60000))} min`,"Live Metrics overwrites; Metrics History appends","Persistent"]
+    ];
+    await request(`/values/${encodeURIComponent(`'${metricsTabName}'!A1:D15`)}?valueInputOption=RAW`,{
+      method:"PUT",body:{range:`'${metricsTabName}'!A1:D15`,majorDimension:"ROWS",values:liveValues}
+    });
+
+    const historyHeaders=["Timestamp UTC","Strict Eligible","Call Ready 2–10 No Site","Verified Emails","Verified Headcounts","Pending Size-Ready Email","Headcount Priority","Headcount General","Headcount Total","Email Priority","Email Recoverable"];
+    await request(`/values/${encodeURIComponent(`'${metricsHistoryTabName}'!A1:K1`)}?valueInputOption=RAW`,{
+      method:"PUT",body:{range:`'${metricsHistoryTabName}'!A1:K1`,majorDimension:"ROWS",values:[historyHeaders]}
+    });
+    const historyRow=[
+      snapshot.timestamp,snapshot.strictEligible,snapshot.callReady,snapshot.verifiedEmails,
+      snapshot.verifiedHeadcounts,snapshot.pendingSizeReady,snapshot.headcountPriority,
+      snapshot.headcountGeneral,snapshot.headcountTotal,snapshot.emailPriority,snapshot.emailRecoverable
+    ];
+    await request(`/values/${encodeURIComponent(`'${metricsHistoryTabName}'!A:K`)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,{
+      method:"POST",body:{majorDimension:"ROWS",values:[historyRow]}
+    });
+
+    const lightHeader={red:0.90,green:0.91,blue:0.93};
+    const formatRequests=[
+      {updateSheetProperties:{properties:{sheetId:metricsSheetId,gridProperties:{frozenRowCount:1}},fields:"gridProperties.frozenRowCount"}},
+      {updateSheetProperties:{properties:{sheetId:historySheetId,gridProperties:{frozenRowCount:1}},fields:"gridProperties.frozenRowCount"}},
+      {repeatCell:{range:{sheetId:metricsSheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:4},cell:{userEnteredFormat:{backgroundColor:lightHeader,textFormat:{bold:true}}},fields:"userEnteredFormat(backgroundColor,textFormat.bold)"}},
+      {repeatCell:{range:{sheetId:historySheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:11},cell:{userEnteredFormat:{backgroundColor:lightHeader,textFormat:{bold:true}}},fields:"userEnteredFormat(backgroundColor,textFormat.bold)"}},
+      {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:0,endIndex:1},properties:{pixelSize:210},fields:"pixelSize"}},
+      {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:1,endIndex:2},properties:{pixelSize:180},fields:"pixelSize"}},
+      {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:2,endIndex:3},properties:{pixelSize:420},fields:"pixelSize"}},
+      {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:3,endIndex:4},properties:{pixelSize:210},fields:"pixelSize"}},
+      {repeatCell:{range:{sheetId:metricsSheetId,startRowIndex:1,endRowIndex:15,startColumnIndex:0,endColumnIndex:1},cell:{userEnteredFormat:{textFormat:{bold:true}}},fields:"userEnteredFormat.textFormat.bold"}},
+      {repeatCell:{range:{sheetId:metricsSheetId,startRowIndex:0,endRowIndex:15,startColumnIndex:0,endColumnIndex:4},cell:{userEnteredFormat:{wrapStrategy:"WRAP",verticalAlignment:"MIDDLE"}},fields:"userEnteredFormat(wrapStrategy,verticalAlignment)"}}
+    ];
+    await request(":batchUpdate",{method:"POST",body:{requests:formatRequests}});
+  }
+
   async function previousStatuses(){
     try{
       const range=encodeURIComponent(`'${tabName}'!A1:R5000`);
@@ -357,6 +437,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       if(sheetId===null)await ensureSheet();
       const statuses=await previousStatuses();
       const redis=await getRedis();
+      const metrics=await collectMetricsSnapshot(redis);
       const leads=await collectRows(redis);
       for(const item of leads){if(statuses.has(item.identity))item.row[17]=statuses.get(item.identity);}
 
@@ -390,7 +471,13 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
         {repeatCell:{range:{sheetId,startRowIndex:1,endRowIndex:endRow,startColumnIndex:0,endColumnIndex:18},cell:{userEnteredFormat:{verticalAlignment:"MIDDLE",wrapStrategy:"CLIP",textFormat:{fontSize:9}}},fields:"userEnteredFormat(verticalAlignment,wrapStrategy,textFormat.fontSize)"}}
       );
       await request(":batchUpdate",{method:"POST",body:{requests}});
-      console.log(JSON.stringify({event:"law_sheet_sync",rows:leads.length,emailCandidateRows:emailCandidates.length,spreadsheetId,tabName,candidateTitle}));
+      await writeMetricsSnapshot(metrics);
+      console.log(JSON.stringify({
+        event:"law_sheet_sync",rows:leads.length,emailCandidateRows:emailCandidates.length,
+        strictEligible:metrics.strictEligible,callReady:metrics.callReady,verifiedEmails:metrics.verifiedEmails,
+        pendingSizeReady:metrics.pendingSizeReady,headcountTotal:metrics.headcountTotal,
+        spreadsheetId,tabName,candidateTitle,metricsTabName,metricsHistoryTabName
+      }));
 
       // Website-refresh inventory is intentionally excluded from this campaign.
     }catch(error){console.error("law_sheet_sync_error",error?.message||error);}
