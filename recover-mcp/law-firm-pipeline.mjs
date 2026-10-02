@@ -25,7 +25,7 @@ const ENRICH_CONCURRENCY=Math.max(1,Math.min(80,Number(process.env.LAW_FIRM_ENRI
 const SIZE_READY_EMAIL_BATCH=Math.max(4,Math.min(96,Number(process.env.LAW_SIZE_READY_EMAIL_BATCH||48)));
 const SIZE_READY_EMAIL_CONCURRENCY=Math.max(2,Math.min(48,Number(process.env.LAW_SIZE_READY_EMAIL_CONCURRENCY||24)));
 const EMAIL_METHOD_VERSION="email-v67-recovery-diversity-free-mail";
-const SIZE_READY_EMAIL_METHOD_VERSION="size-ready-email-v3-bar-profile-recovery";
+const SIZE_READY_EMAIL_METHOD_VERSION="size-ready-email-v4-headcount-roster-identities";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
 const HISTORICAL_RECOVERY_VERSION=String(process.env.LAW_HISTORICAL_RECOVERY_VERSION||"historical-v1");
 const CHICAGO_HEADCOUNT_RECOVERY_VERSION="chicago-headcount-v2";
@@ -169,15 +169,24 @@ async function publishedEmailEvidenceFromHeadcountSource(lead={},key=""){
     const text=stripHtml(page.html).slice(0,60000);
     if(!pageMatchesLead(text,lead,finalUrl))return {emails:[],source:""};
 
+    // The same identity-matched headcount page can also expose the firm's
+    // actual attorney roster. Preserve those names even when the page has no
+    // email so the subsequent public-record/bar searches use real attorneys
+    // instead of repeatedly searching only the generic firm label.
+    const attorneyNames=strictFirmPageRosterNames(page.html,finalUrl,lead);
+    if(attorneyNames.length){
+      await redis.hIncrBy(STATS,"headcount_source_roster_identity_hit",attorneyNames.length);
+    }
+
     const candidates=contextualEmails(page.html,lead,finalUrl)
       .filter(email=>isUsableLawEmail(email)&&!isThirdPartyEmailDomain(email));
-    if(!candidates.length)return {emails:[],source:""};
+    if(!candidates.length)return {emails:[],source:finalUrl,attorneyNames};
 
     const checked=await Promise.all([...new Set(candidates)].slice(0,6).map(async email=>({
       email,ok:await hasMailExchange(email)
     })));
     const emails=checked.filter(x=>x.ok).map(x=>x.email);
-    if(!emails.length)return {emails:[],source:""};
+    if(!emails.length)return {emails:[],source:finalUrl,attorneyNames};
 
     await redis.hIncrBy(STATS,"headcount_source_email_fastpath_hit",1);
     console.log(JSON.stringify({
@@ -185,7 +194,7 @@ async function publishedEmailEvidenceFromHeadcountSource(lead={},key=""){
       key,name:String(lead.name||lead.title||""),
       source:finalUrl,emails:emails.slice(0,3)
     }));
-    return {emails:rankLawEmails(emails).slice(0,5),source:finalUrl};
+    return {emails:rankLawEmails(emails).slice(0,5),source:finalUrl,attorneyNames};
   }catch(error){
     await redis.hIncrBy(STATS,"headcount_source_email_fastpath_error",1);
     return {emails:[],source:""};
@@ -2159,7 +2168,10 @@ async function directLawyerComSizeEvidence(lead={},key=""){
       }
       await redis.hIncrBy(STATS,"direct_lawyercom_size_hit",1);
       console.log(JSON.stringify({event:"law_direct_lawyercom_size_hit",key,name:String(lead.name||lead.title||""),count,source}));
-      const rosterNames=explicitCount>0?[]:strictFirmPageRosterNames(page.html,source,lead);
+      // Always preserve the verified firm's attorney identities. Explicit
+      // "Firm Size" evidence proves count, but suppressing the Lawyers roster
+      // here starved later email discovery of the actual people to search for.
+      const rosterNames=strictFirmPageRosterNames(page.html,source,lead);
       const profileEmails=contextualEmails(page.html,lead,source)
         .filter(email=>isUsableLawEmail(email)&&!isThirdPartyEmailDomain(email));
       const checkedEmails=await Promise.all([...new Set(profileEmails)].slice(0,6).map(async email=>({
@@ -3706,6 +3718,14 @@ async function enrichLead(key,lead){
       for(const email of headcountEmail.emails)emailEvidenceSources[String(email).toLowerCase()]=headcountEmail.source;
       emailMethod="headcount_source";
       await redis.hIncrBy(STATS,"email_headcount_source_hit",1);
+    }
+    if(Array.isArray(headcountEmail.attorneyNames)&&headcountEmail.attorneyNames.length){
+      lead={...lead,directory_attorney_names:[...new Set([
+        ...(Array.isArray(lead.directory_attorney_names)?lead.directory_attorney_names:[]),
+        ...headcountEmail.attorneyNames
+      ])].slice(0,10)};
+      await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
+      await redis.hIncrBy(STATS,"headcount_source_roster_identity_lead",1);
     }
   }
 
