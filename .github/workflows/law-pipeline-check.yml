@@ -9,6 +9,7 @@ on:
       - "recover-mcp/published-email-obfuscation*.mjs"
       - "recover-mcp/law-firm-targeting.mjs"
       - "recover-mcp/law-sheet-sync.mjs"
+      - "recover-mcp/law-sheet-metrics*.mjs"
       - "recover-mcp/acquisition-worker*.mjs"
       - "package.json"
       - "Dockerfile"
@@ -54,6 +55,8 @@ jobs:
         run: node recover-mcp/law-eligible-set-align.node-test.mjs
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
+      - name: Run law sheet metrics regression test
+        run: node recover-mcp/law-sheet-metrics.node-test.mjs
       - name: Check law sheet sync syntax
         run: node --check recover-mcp/law-sheet-sync.mjs
       - name: Check acquisition worker syntax

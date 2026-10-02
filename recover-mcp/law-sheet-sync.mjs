@@ -1,5 +1,6 @@
 import { createSign } from "node:crypto";
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, qualifiesCallReadyNoWebsiteLawLead, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
+import { reconcileExportMetrics } from "./law-sheet-metrics.mjs";
 
 // Law sheet sync deploy rev: strict-live-metrics-v2
 const TOKEN_URL="https://oauth2.googleapis.com/token";
@@ -469,7 +470,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       if(sheetId===null)await ensureSheet();
       const statuses=await previousStatuses();
       const redis=await getRedis();
-      const metrics=await collectMetricsSnapshot(redis);
+      const rawMetrics=await collectMetricsSnapshot(redis);
       const leads=await collectRows(redis);
       for(const item of leads){if(statuses.has(item.identity))item.row[9]=normalizeCallStatus(statuses.get(item.identity));}
 
@@ -482,6 +483,13 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       for(const item of emailCandidates){
         if(candidateStatuses.has(item.email))item.row[10]=normalizeCallStatus(candidateStatuses.get(item.email));
       }
+      // Redis can change while one sync is collecting/writing rows. Display the
+      // strict/call-ready counts from the exact row sets written in this pass so
+      // Overview cannot contradict the visible tabs.
+      const metrics=reconcileExportMetrics(rawMetrics,{
+        strictRows:emailCandidates.length,
+        callReadyRows:leads.length
+      });
       await writeRowsToTab(candidateTitle,candidateSheetId,emailCandidates);
       const headers=["Phone","Firm","Attorneys","Email","Email Status","Practice","City","State","Phone Type","Status","Personal Angle","Address","Google Maps","Priority","Headcount Source","Contact Source","Strict Eligible","Phone Status"];
       const values=[headers,...leads.map(x=>x.row)];
