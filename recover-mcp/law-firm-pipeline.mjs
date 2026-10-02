@@ -5473,25 +5473,38 @@ async function processEnrichKeys(keys=[],lane="general",concurrency=ENRICH_CONCU
 }
 
 async function enrichSizeReadyBatch(){
-  const keys=await popSetBatch(SIZE_READY_PENDING_SET,SIZE_READY_EMAIL_BATCH);
+  // External legal/search sources degrade sharply when the strict-email lane
+  // and the headcount lane both run at their configured maximum. Keep the
+  // strict lane wide, but below the observed saturation point so requests
+  // finish instead of accumulating into multi-minute stalls.
+  const strictBatch=Math.min(SIZE_READY_EMAIL_BATCH,64);
+  const strictConcurrency=Math.min(SIZE_READY_EMAIL_CONCURRENCY,32);
+  const keys=await popSetBatch(SIZE_READY_PENDING_SET,strictBatch);
   if(!keys.length)return 0;
   console.log(JSON.stringify({
     event:"law_size_ready_batch_selected",
     total:keys.length,
-    concurrency:SIZE_READY_EMAIL_CONCURRENCY
+    concurrency:strictConcurrency,
+    configuredBatch:SIZE_READY_EMAIL_BATCH,
+    configuredConcurrency:SIZE_READY_EMAIL_CONCURRENCY
   }));
   await redis.hIncrBy(STATS,"size_ready_batch_selected",keys.length);
-  return processEnrichKeys(keys,"size_ready",SIZE_READY_EMAIL_CONCURRENCY);
+  return processEnrichKeys(keys,"size_ready",strictConcurrency);
 }
 
 async function enrichBatch(){
-  // General worker: prove size and recover non-size-ready evidence. Strict
-  // 2-10/no-site email completion has its own independent loop so a slow
-  // headcount batch cannot starve the final eligibility gate.
-  const regularKeys=await popSetBatch(PENDING_SET,Math.min(16,ENRICH_BATCH));
-  const afterRegular=Math.max(0,ENRICH_BATCH-regularKeys.length);
+  // General worker: prove size and recover non-size-ready evidence. When the
+  // strict 2-10/no-site email backlog exists, reserve network capacity for that
+  // final eligibility gate instead of running 80 headcount workers beside it.
+  const sizeReadyBacklog=await redis.sCard(SIZE_READY_PENDING_SET);
+  const strictPressure=sizeReadyBacklog>0;
+  const generalBudget=strictPressure?Math.min(64,ENRICH_BATCH):ENRICH_BATCH;
+  const generalConcurrency=strictPressure?Math.min(16,ENRICH_CONCURRENCY):ENRICH_CONCURRENCY;
 
-  const phonePriorityTarget=Math.min(afterRegular,Math.max(48,Math.floor(ENRICH_BATCH*0.55)));
+  const regularKeys=await popSetBatch(PENDING_SET,Math.min(16,generalBudget));
+  const afterRegular=Math.max(0,generalBudget-regularKeys.length);
+
+  const phonePriorityTarget=Math.min(afterRegular,Math.max(16,Math.floor(generalBudget*0.55)));
   const phonePriorityKeys=afterRegular?await popSetBatch(PHONE_HEADCOUNT_PRIORITY_SET,phonePriorityTarget):[];
   const afterPhonePriority=Math.max(0,afterRegular-phonePriorityKeys.length);
 
@@ -5508,7 +5521,7 @@ async function enrichBatch(){
   const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(12,afterFresh)):[];
   const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
   const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
-  const keys=[...new Set([...regularKeys,...phonePriorityKeys,...chicagoKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
+  const keys=[...new Set([...regularKeys,...phonePriorityKeys,...chicagoKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,generalBudget);
   if(!keys.length)return 0;
   console.log(JSON.stringify({
     event:"law_enrich_batch_selected",
@@ -5520,10 +5533,15 @@ async function enrichBatch(){
     priority:priorityKeys.length,
     recoverable:recoverableKeys.length,
     total:keys.length,
-    concurrency:ENRICH_CONCURRENCY
+    concurrency:generalConcurrency,
+    strictPressure,
+    sizeReadyBacklog,
+    configuredBatch:ENRICH_BATCH,
+    configuredConcurrency:ENRICH_CONCURRENCY
   }));
   await redis.hIncrBy(STATS,"enrich_non_destructive_batch_selected",keys.length);
-  return processEnrichKeys(keys,"general",ENRICH_CONCURRENCY);
+  if(strictPressure)await redis.hIncrBy(STATS,"general_backpressure_for_size_ready",keys.length);
+  return processEnrichKeys(keys,"general",generalConcurrency);
 }
 
 const LAWYERS_STATE_SLUGS={
