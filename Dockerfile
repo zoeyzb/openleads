@@ -3,8 +3,12 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package.json ./
 RUN npm install --omit=dev
-RUN git clone --depth 1 https://github.com/zoeyzb/email-enrich.git /tmp/email-enrich \
+ARG EMAIL_ENRICH_REF=4c594a85118046362a76bb99736a46ed94ddc462
+RUN git init /tmp/email-enrich \
     && cd /tmp/email-enrich \
+    && git remote add origin https://github.com/zoeyzb/email-enrich.git \
+    && git fetch --depth 1 origin ${EMAIL_ENRICH_REF} \
+    && git checkout --detach FETCH_HEAD \
     && npm install \
     && npm run build \
     && npm pack \

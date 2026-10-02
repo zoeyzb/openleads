@@ -1,0 +1,56 @@
+name: Law pipeline check
+
+on:
+  pull_request:
+    branches: [recover-scrape-mcp]
+    paths:
+      - "recover-mcp/law-firm-pipeline.mjs"
+      - "recover-mcp/law-firm-targeting.mjs"
+      - "recover-mcp/law-sheet-sync.mjs"
+      - "recover-mcp/acquisition-worker*.mjs"
+      - "package.json"
+      - "Dockerfile"
+      - ".github/workflows/law-pipeline-check.yml"
+  push:
+    branches: [recover-scrape-mcp]
+    paths:
+      - "recover-mcp/law-firm-pipeline.mjs"
+      - "recover-mcp/law-firm-targeting.mjs"
+      - "recover-mcp/law-sheet-sync.mjs"
+      - "recover-mcp/acquisition-worker*.mjs"
+      - "package.json"
+      - "Dockerfile"
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify pinned email enrichment
+        env:
+          EMAIL_ENRICH_REF: 4c594a85118046362a76bb99736a46ed94ddc462
+        run: |
+          git init /tmp/email-enrich
+          cd /tmp/email-enrich
+          git remote add origin https://github.com/zoeyzb/email-enrich.git
+          git fetch --depth 1 origin "$EMAIL_ENRICH_REF"
+          git checkout --detach FETCH_HEAD
+          npm install --no-audit --no-fund
+          npm run typecheck
+          npm test -- --runInBand
+          npm run build
+          cd "$GITHUB_WORKSPACE"
+      - name: Check law pipeline syntax
+        run: node --check recover-mcp/law-firm-pipeline.mjs
+      - name: Check law sheet sync syntax
+        run: node --check recover-mcp/law-sheet-sync.mjs
+      - name: Check acquisition worker syntax
+        run: |
+          node --check recover-mcp/acquisition-worker.mjs
+          node --check recover-mcp/acquisition-worker-runtime.mjs
+          node --check recover-mcp/acquisition-persistence.mjs
+          node --check recover-mcp/acquisition-coverage.mjs

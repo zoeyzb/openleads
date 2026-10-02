@@ -22,6 +22,8 @@ const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
 const ENRICH_BATCH=Math.max(1,Math.min(256,Number(process.env.LAW_FIRM_ENRICH_BATCH||96)));
 const ENRICH_CONCURRENCY=Math.max(1,Math.min(80,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||32)));
+const SIZE_READY_EMAIL_BATCH=Math.max(4,Math.min(96,Number(process.env.LAW_SIZE_READY_EMAIL_BATCH||48)));
+const SIZE_READY_EMAIL_CONCURRENCY=Math.max(2,Math.min(48,Number(process.env.LAW_SIZE_READY_EMAIL_CONCURRENCY||24)));
 const EMAIL_METHOD_VERSION="email-v67-recovery-diversity-free-mail";
 const SIZE_READY_EMAIL_METHOD_VERSION="size-ready-email-v2-exact-phone-public-sources";
 const FULL_REQUAL_VERSION=String(process.env.LAW_FULL_REQUAL_VERSION||"eligibility-v1");
@@ -33,13 +35,21 @@ const ASSOCIATION_DOCKET_RECOVERY_KEY="recover:law-firm:association-docket-recov
 const SIZE_READY_WEBSITE_AUDIT_VERSION="size-ready-website-audit-v5-consistency";
 const SIZE_READY_WEBSITE_AUDIT_KEY="recover:law-firm:size-ready-website-audit-version";
 const MX_CACHE=new Map();
+function withDeadline(promise,timeoutMs,label="operation"){
+  let timer;
+  const timeout=new Promise((_,reject)=>{
+    timer=setTimeout(()=>reject(new Error(label+" timed out after "+timeoutMs+"ms")),timeoutMs);
+    if(typeof timer?.unref==="function")timer.unref();
+  });
+  return Promise.race([promise,timeout]).finally(()=>{if(timer)clearTimeout(timer);});
+}
 async function hasMailExchange(email=""){
   const domain=String(email).split("@")[1]?.toLowerCase()||"";
   if(!domain)return false;
   if(MX_CACHE.has(domain))return MX_CACHE.get(domain);
   let ok=false;
   try{
-    const mx=await resolveMx(domain);
+    const mx=await withDeadline(resolveMx(domain),6000,"mx:"+domain);
     ok=Array.isArray(mx)&&mx.some(x=>String(x.exchange||"").trim());
   }catch{ok=false;}
   MX_CACHE.set(domain,ok);
@@ -149,6 +159,39 @@ async function detectOwnedWebsiteFromEvidenceSource(source="",emails=[],lead={},
   return "";
 }
 
+async function publishedEmailEvidenceFromHeadcountSource(lead={},key=""){
+  const source=String(lead.attorney_count_source||"").trim();
+  if(!source||!isDirectPublishedEmailSource(source))return {emails:[],source:""};
+  try{
+    const page=await fetchResearchPage(source,lead,key,true);
+    if(!page?.html)return {emails:[],source:""};
+    const finalUrl=String(page.final_url||source);
+    const text=stripHtml(page.html).slice(0,60000);
+    if(!pageMatchesLead(text,lead,finalUrl))return {emails:[],source:""};
+
+    const candidates=contextualEmails(page.html,lead,finalUrl)
+      .filter(email=>isUsableLawEmail(email)&&!isThirdPartyEmailDomain(email));
+    if(!candidates.length)return {emails:[],source:""};
+
+    const checked=await Promise.all([...new Set(candidates)].slice(0,6).map(async email=>({
+      email,ok:await hasMailExchange(email)
+    })));
+    const emails=checked.filter(x=>x.ok).map(x=>x.email);
+    if(!emails.length)return {emails:[],source:""};
+
+    await redis.hIncrBy(STATS,"headcount_source_email_fastpath_hit",1);
+    console.log(JSON.stringify({
+      event:"law_headcount_source_email_fastpath_hit",
+      key,name:String(lead.name||lead.title||""),
+      source:finalUrl,emails:emails.slice(0,3)
+    }));
+    return {emails:rankLawEmails(emails).slice(0,5),source:finalUrl};
+  }catch(error){
+    await redis.hIncrBy(STATS,"headcount_source_email_fastpath_error",1);
+    return {emails:[],source:""};
+  }
+}
+
 async function publishedEmailsOnExactSource(source="",emails=[],lead={},key=""){
   const tagged=(values,status)=>{const out=[...(values||[])];out.bindingStatus=status;return out;};
   if(!isDirectPublishedEmailSource(source)||!emails.length)return tagged([],"invalid");
@@ -215,13 +258,14 @@ async function queueWebsiteRefreshCandidate(key,lead={},website=""){
 const KEELEAD_BASE_URL=String(process.env.KEELEAD_BASE_URL||process.env.RAILWAY_SERVICE_KEELEAD_URL||"").replace(/\/$/,"");
 const SCRAPLING_MCP_URL=String(process.env.SCRAPLING_MCP_URL||"").replace(/\/$/,"");
 const SCRAPLING_MCP_TOKEN=String(process.env.SCRAPLING_MCP_TOKEN||"");
-let scraplingBrowserGate=Promise.resolve();
+let scraplingBrowserBusy=false;
 async function withScraplingBrowserSlot(fn){
-  const previous=scraplingBrowserGate;
-  let release;
-  scraplingBrowserGate=new Promise(resolve=>{release=resolve;});
-  await previous;
-  try{return await fn();}finally{release();}
+  // Browser stealth is only a fallback after direct/Jina/static reads. Never
+  // build an unbounded FIFO here: with 64 enrichers, one 16s browser slot can
+  // otherwise turn into a 15+ minute queue and stall the whole enrichment batch.
+  if(scraplingBrowserBusy)return null;
+  scraplingBrowserBusy=true;
+  try{return await fn();}finally{scraplingBrowserBusy=false;}
 }
 const JINA_READER_ENABLED=String(process.env.JINA_READER_ENABLED||"true").toLowerCase()!=="false";
 const JINA_READER_RPM=Math.max(1,Math.min(30,Number(process.env.JINA_READER_RPM||24)));
@@ -274,10 +318,11 @@ const WEBSITE_AUDIT_BATCH=Math.max(1,Math.min(32,Number(process.env.LAW_WEBSITE_
 const WEBSITE_AUDIT_CONCURRENCY=Math.max(1,Math.min(12,Number(process.env.LAW_WEBSITE_AUDIT_CONCURRENCY||8)));
 const DISCOVERY_BACKLOG_LIMIT=Math.max(1000,Number(process.env.LAW_FIRM_DISCOVERY_BACKLOG_LIMIT||15000));
 const DIRECTORY_DISCOVERY_ENABLED=String(process.env.LAW_DIRECTORY_DISCOVERY_ENABLED||"true").toLowerCase()!=="false";
-const DIRECTORY_DISCOVERY_BATCH=Math.max(1,Math.min(8,Number(process.env.LAW_DIRECTORY_DISCOVERY_BATCH||3)));
+const DIRECTORY_DISCOVERY_BATCH=Math.max(1,Math.min(8,Number(process.env.LAW_DIRECTORY_DISCOVERY_BATCH||6)));
 const DIRECTORY_DISCOVERY_PAGES=Math.max(1,Math.min(4,Number(process.env.LAW_DIRECTORY_DISCOVERY_PAGES||2)));
-const DIRECTORY_CURSOR_KEY="recover:law-firm:lawyerscom-directory-cursor:v1";
-const DIRECTORY_SEEDED_SET="recover:law-firm:lawyerscom-directory-seeded:v1";
+const DIRECTORY_DISCOVERY_MAX_PAGES=Math.max(DIRECTORY_DISCOVERY_PAGES,Math.min(6,Number(process.env.LAW_DIRECTORY_DISCOVERY_MAX_PAGES||4)));
+const DIRECTORY_CURSOR_KEY="recover:law-firm:lawyerscom-directory-cursor:v2";
+const DIRECTORY_SEEDED_SET="recover:law-firm:lawyerscom-directory-seeded:v2";
 const STATS="recover:law-firm:stats:v3";
 let INDEXED_HEADCOUNT_DIAGNOSTICS=0;
 const PROFILE={industry:"LAW_FIRM",require_phone:true,require_email:false,require_contact:true,require_no_website:true,include_no_website:true,min_score:45};
@@ -791,9 +836,6 @@ function likelyAttorneyName(lead={}){
 }
 function attorneyNameVariants(lead={}){
   const values=[];
-  const primary=likelyAttorneyName(lead);
-  if(primary)values.push(primary);
-
   const raw=String(lead.name||lead.title||"").replace(/\s+/g," ").trim();
   const addPerson=(candidate="")=>{
     const cleaned=String(candidate||"")
@@ -807,6 +849,17 @@ function attorneyNameVariants(lead={}){
     if(/\b(group|associates|partners|legal|services|office|firm)\b/i.test(cleaned))return;
     values.push(cleaned);
   };
+
+  // Directory-first discovery knows the actual roster. Feed those verified
+  // attorney identities into state-bar/public-record email lookup instead of
+  // trying to reverse-engineer people from a generic firm name.
+  const rosterNames=[
+    ...(Array.isArray(lead.directory_attorney_names)?lead.directory_attorney_names:[]),
+    ...(Array.isArray(lead.attorney_names)?lead.attorney_names:[])
+  ];
+  for(const candidate of rosterNames.slice(0,10))addPerson(candidate);
+  const primary=likelyAttorneyName(lead);
+  if(primary)addPerson(primary);
 
   // Google Maps frequently appends an attorney after the firm label:
   // "Firm Name: Jane Doe", "Firm Name | Jane Doe", or "Firm - Jane Doe".
@@ -842,21 +895,40 @@ function attorneyNameVariants(lead={}){
 async function zeroCostEmailFallback(lead={}){
   const names=attorneyNameVariants(lead).slice(0,3);
   if(!names.length)return {emails:[],source:"",name_variant:""};
+  const primaryPublicSource=[
+    lead.attorney_count_source,
+    lead.law_directory_seed_source,
+    lead.google_maps_url,
+    lead.maps_url
+  ].map(x=>String(x||"").trim()).find(x=>/^https?:\/\//i.test(x))||"";
   const attempts=await Promise.allSettled(names.map(async personName=>{
-    const result=await enrichProfessionalEmail("recover-law-email-v5",{
-      person_name:personName,
-      company_name:String(lead.name||lead.title||personName),
-      mode:"fast",
-      real_only:true,
-      use_case:"cold_outreach",
-      hints:{source_urls:[String(lead.google_maps_url||"")].filter(Boolean)}
-    });
+    const result=await withDeadline(
+      enrichProfessionalEmail("recover-law-email-v6-public-source",{
+        person_name:personName,
+        company_name:String(lead.name||lead.title||personName),
+        mode:"fast",
+        real_only:true,
+        use_case:"cold_outreach",
+        hints:{source_urls:primaryPublicSource?[primaryPublicSource]:[]}
+      }),
+      20000,
+      "email-enrich:"+personName
+    );
     const published=(result?.evidence?.found_public_emails||[])
       .map(x=>String(x||"").trim().toLowerCase())
       .filter(x=>emailIdentityStrong(x,lead));
+    const candidate=(result?.candidates||[])
+      .map(x=>({email:String(x?.email||"").trim().toLowerCase(),confidence:Number(x?.confidence||0)}))
+      .filter(x=>x.email&&published.includes(x.email)&&x.confidence>=0.9)
+      .sort((a,b)=>b.confidence-a.confidence)[0];
     const best=String(result?.best_email||"").trim().toLowerCase();
-    const accepted=best&&published.includes(best)&&Number(result?.confidence||0)>=0.9?[best]:[];
-    return {emails:accepted,source:String(result?.evidence?.sources_checked?.[0]||""),name_variant:personName};
+    // email-enrich keeps its generic name-affinity contract. For this pipeline,
+    // evidence.found_public_emails can still be used when our stronger
+    // firm/person identity guard accepted the address; exact-source binding and
+    // MX verification still run before strict eligibility.
+    const accepted=candidate?[candidate.email]:
+      (best&&published.includes(best)&&Number(result?.confidence||0)>=0.9?[best]:(published[0]?[published[0]]:[]));
+    return {emails:accepted,source:String(result?.evidence?.sources_checked?.[0]||primaryPublicSource||""),name_variant:personName};
   }));
   for(const attempt of attempts){
     if(attempt.status==="fulfilled"&&attempt.value.emails.length)return attempt.value;
@@ -1261,9 +1333,9 @@ function linksFrom(base,html=""){
   }
   return [...new Set(out)].slice(0,4);
 }
-function directoryRosterCount(html="",source="",lead={}){
+function directoryRosterNames(html="",source="",lead={}){
   const host=hostOf(source);
-  if(!(/(^|\.)(?:lawyers|martindale|lawyer|findlaw)\.com$/i.test(host)||/^(?:lawyers\.)?law\.cornell\.edu$/i.test(host)||/^lawyers\.oyez\.org$/i.test(host)||/^lawyers\.lawyerlegion\.com$/i.test(host)))return 0;
+  if(!(/(^|\.)(?:lawyers|martindale|lawyer|findlaw)\.com$/i.test(host)||/^(?:lawyers\.)?law\.cornell\.edu$/i.test(host)||/^lawyers\.oyez\.org$/i.test(host)||/^lawyers\.lawyerlegion\.com$/i.test(host)))return [];
   const names=[];
   const seen=new Set();
   for(const m of String(html||"").matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{1,180}?)<\/a>/gi)){
@@ -1279,36 +1351,44 @@ function directoryRosterCount(html="",source="",lead={}){
     const key=normalize(cleaned);
     if(!key||seen.has(key))continue;
     seen.add(key); names.push(cleaned);
-    if(names.length>10)return 11;
+    if(names.length>10)break;
   }
+  return names;
+}
+function directoryRosterCount(html="",source="",lead={}){
+  const names=directoryRosterNames(html,source,lead);
   // On an identity-matched dedicated firm directory page, one unique attorney
   // is positive solo evidence, not "unknown". Returning 1 lets the strict 2-10
   // gate reject it instead of keeping it forever as an unresolved candidate.
-  return names.length>=1?names.length:0;
+  return names.length>10?11:names.length;
 }
 
-function strictFirmPageRosterCount(html="",source="",lead={}){
+function strictFirmPageRosterNames(html="",source="",lead={}){
   const raw=String(html||"");
-  if(!raw)return 0;
+  if(!raw)return [];
   const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
-  if(!phone||!raw.replace(/\D/g,"").includes(phone))return 0;
-  if(!strictDirectoryFirmIdentity(raw,source,lead))return 0;
+  if(!phone||!raw.replace(/\D/g,"").includes(phone))return [];
+  if(!strictDirectoryFirmIdentity(raw,source,lead))return [];
 
-  // Count only links inside an explicit attorney/team section. This avoids
-  // nearby/recommended-lawyer modules that made the old whole-page roster count unsafe.
+  // Keep only the firm's explicit attorney/team section so nearby/recommended
+  // attorneys never become email-search identities.
   const heading=/<h([2-4])\b[^>]*>\s*(?:<[^>]+>\s*)*(?:attorneys?|lawyers?|our\s+team|professionals?|people)(?:\s*<[^>]+>)*\s*<\/h\1>/ig;
-  let best=0,m;
+  let best=[],m;
   while((m=heading.exec(raw))){
     const level=m[1];
     const start=m.index+m[0].length;
     const tail=raw.slice(start,start+120000);
     const next=new RegExp("<h"+level+"\\b","i").exec(tail);
     const section=next?tail.slice(0,next.index):tail.slice(0,50000);
-    const count=directoryRosterCount(section,source,lead);
-    if(count>best)best=count;
-    if(best>10)return 11;
+    const names=directoryRosterNames(section,source,lead);
+    if(names.length>best.length)best=names;
+    if(best.length>10)break;
   }
-  return best;
+  return best.slice(0,11);
+}
+function strictFirmPageRosterCount(html="",source="",lead={}){
+  const names=strictFirmPageRosterNames(html,source,lead);
+  return names.length>10?11:names.length;
 }
 
 function strictLawyerComRosterCount(html="",source="",lead={}){
@@ -1810,7 +1890,8 @@ async function directFloridaFirmRosterHeadcountEvidence(lead={},key=""){
 
       const pages=await Promise.allSettled(links.slice(0,11).map(async url=>{
         const page=await fetchText(url,5000);
-        const text=stripHtml(String(page?.html||"")).slice(0,60000);
+        const html=String(page?.html||"");
+        const text=stripHtml(html).slice(0,60000);
         if(!text)return null;
         const norm=normalize(text);
         const digits=text.replace(/\D/g,"");
@@ -1820,17 +1901,34 @@ async function directFloridaFirmRosterHeadcountEvidence(lead={},key=""){
         const firmMatch=(fullFirm.length>=8&&norm.includes(fullFirm)) ||
           (firmTokens.length>=2&&tokenHits>=Math.min(2,firmTokens.length));
         const phoneMatch=Boolean(phone&&digits.includes(phone));
-        return (phoneMatch||firmMatch)?url:null;
+        return (phoneMatch||firmMatch)?{url,html,text}:null;
       }));
-      const matched=[...new Set(pages.filter(x=>x.status==="fulfilled"&&x.value).map(x=>x.value))];
+      const matchedRaw=pages.filter(x=>x.status==="fulfilled"&&x.value).map(x=>x.value);
+      const matched=[...new Map(matchedRaw.map(x=>[x.url,x])).values()];
       if(matched.length){
         const count=matched.length>10?11:matched.length;
+        const emailEvidence=[];
+        for(const item of matched.slice(0,10)){
+          for(const email of contextualEmails(item.html,lead,item.url)){
+            emailEvidence.push({email,source:item.url});
+          }
+        }
+        const checked=await Promise.all([...new Map(emailEvidence.map(x=>[x.email,x])).values()].slice(0,8).map(async x=>({
+          ...x,ok:await hasMailExchange(x.email)
+        })));
+        const published=checked.filter(x=>x.ok);
         await redis.hIncrBy(STATS,"florida_firm_roster_hit",1);
+        if(published.length)await redis.hIncrBy(STATS,"florida_firm_roster_email_hit",1);
         console.log(JSON.stringify({
           event:"law_florida_firm_roster_headcount_hit",key,name:rawFirm,
-          count,firm,city,source:matched[0]
+          count,firm,city,source:matched[0].url,
+          publishedEmails:published.map(x=>x.email).slice(0,3)
         }));
-        return {count,source:matched[0]};
+        return {
+          count,source:matched[0].url,
+          publishedEmails:rankLawEmails(published.map(x=>x.email)).slice(0,5),
+          emailSource:published[0]?.source||""
+        };
       }
     }catch(error){
       await redis.hIncrBy(STATS,"florida_firm_roster_error",1);
@@ -1937,7 +2035,7 @@ async function phoneRosterHeadcountEvidence(lead={},key=""){
           parts=identity.split(/\s+/).filter(Boolean);
         }
         const identityKey=normalize(identity)||normalize(source);
-        return {source,identity:identityKey,official};
+        return {source,identity:identityKey,official,html:String(page.html||"")};
       }catch{return null;}
     }));
 
@@ -1945,13 +2043,29 @@ async function phoneRosterHeadcountEvidence(lead={},key=""){
     const unique=[...new Map(matched.map(x=>[x.identity,x])).values()];
     if(unique.length>=2){
       const count=unique.length>10?11:unique.length;
+      const emailEvidence=[];
+      for(const item of unique.slice(0,10)){
+        for(const email of contextualEmails(item.html||"",lead,item.source)){
+          emailEvidence.push({email,source:item.source});
+        }
+      }
+      const checked=await Promise.all([...new Map(emailEvidence.map(x=>[x.email,x])).values()].slice(0,8).map(async x=>({
+        ...x,ok:await hasMailExchange(x.email)
+      })));
+      const published=checked.filter(x=>x.ok);
       await redis.hIncrBy(STATS,"phone_roster_headcount_hit",1);
       if(official)await redis.hIncrBy(STATS,"phone_roster_official_hit",1);
+      if(published.length)await redis.hIncrBy(STATS,"phone_roster_email_hit",1);
       console.log(JSON.stringify({
         event:"law_phone_roster_headcount_hit",key,name:String(lead.name||lead.title||""),
-        count,phone:phonePretty,host,official,sources:unique.slice(0,10).map(x=>x.source)
+        count,phone:phonePretty,host,official,sources:unique.slice(0,10).map(x=>x.source),
+        publishedEmails:published.map(x=>x.email).slice(0,3)
       }));
-      return {count,source:unique[0].source};
+      return {
+        count,source:unique[0].source,
+        publishedEmails:rankLawEmails(published.map(x=>x.email)).slice(0,5),
+        emailSource:published[0]?.source||""
+      };
     }
   }
 
@@ -1988,7 +2102,15 @@ async function directLawyerComSizeEvidence(lead={},key=""){
       }
       await redis.hIncrBy(STATS,"direct_lawyercom_size_hit",1);
       console.log(JSON.stringify({event:"law_direct_lawyercom_size_hit",key,name:String(lead.name||lead.title||""),count,source}));
-      return {count,source};
+      const rosterNames=explicitCount>0?[]:strictFirmPageRosterNames(page.html,source,lead);
+      const profileEmails=contextualEmails(page.html,lead,source)
+        .filter(email=>isUsableLawEmail(email)&&!isThirdPartyEmailDomain(email));
+      const checkedEmails=await Promise.all([...new Set(profileEmails)].slice(0,6).map(async email=>({
+        email,ok:await hasMailExchange(email)
+      })));
+      const publishedEmails=rankLawEmails(checkedEmails.filter(x=>x.ok).map(x=>x.email)).slice(0,5);
+      if(publishedEmails.length)await redis.hIncrBy(STATS,"direct_lawyercom_email_hit",1);
+      return {count,source,attorneyNames:rosterNames.slice(0,10),publishedEmails,emailSource:publishedEmails.length?source:""};
     }
   }
   await redis.hIncrBy(STATS,"direct_lawyercom_size_miss",1);
@@ -3403,6 +3525,7 @@ async function enrichLead(key,lead){
   }
   const knownVerifiedCount=storedHeadcountValid?Number(lead.attorney_count_estimate||0):0;
   const knownSizeReady=knownVerifiedCount>=2&&knownVerifiedCount<=10;
+  const emailRecoveryAttempt=Math.max(0,Number(lead.email_recovery_attempts||0));
   if(knownVerifiedCount>0&&(knownVerifiedCount<2||knownVerifiedCount>10)){
     await redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key);
     await redis.sAdd(ENRICHED_SET,key);
@@ -3449,14 +3572,16 @@ async function enrichLead(key,lead){
     return true;
   }
 
-  // Final no-website integrity gate for the tiny verified 2-10 cohort.
-  // These are the only records close enough to revenue to justify an exact
-  // owned-site search on every pass.
+  // Cheap no-website integrity check for the verified 2-10 cohort. Reuse the
+  // exact trusted headcount profile here, but defer broad web search until a
+  // source-verified email exists. Historical data showed broad website
+  // preflight had very low hit rate and was burning conversion capacity before
+  // the mandatory email gate.
   if(knownSizeReady){
     const profileSite=await ownedWebsiteFromTrustedProfile(String(lead.attorney_count_source||""),lead,key);
-    const discoveredSizeReadySite=profileSite||await findOwnedWebsitePreflight({...lead,conversion_headcount_priority:false},key,true);
+    const discoveredSizeReadySite=profileSite;
     if(discoveredSizeReadySite){
-      const updated={...lead,website:discoveredSizeReadySite,website_opportunity:"website_refresh",owned_website_evidence_source:"size_ready_preflight"};
+      const updated={...lead,website:discoveredSizeReadySite,website_opportunity:"website_refresh",owned_website_evidence_source:"size_ready_profile"};
       await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
       await Promise.all([
         redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),
@@ -3513,10 +3638,24 @@ async function enrichLead(key,lead){
   let emailMethod=emails.length?"existing_source_backed":"none";
   if(emailMethod!=="none")await redis.hIncrBy(STATS,"email_existing_hit",1);
 
-  // Phone is now the primary outreach channel. Prove 2-10 attorneys before
-  // spending the expensive broad email-discovery pass. Email enrichment can
-  // continue afterward as a bonus, but a valid phone + verified 2-10 + no site
-  // becomes Call Ready immediately.
+  // Proven 2-10 firms already have an identity-matched published headcount
+  // source. Reuse that exact page before launching search engines. This is the
+  // cheapest path for the current size-ready backlog and preserves provenance.
+  if(!emails.length&&attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10){
+    const headcountEmail=await publishedEmailEvidenceFromHeadcountSource(lead,key);
+    if(headcountEmail.emails.length){
+      emails.push(...headcountEmail.emails);
+      source=headcountEmail.source;
+      for(const email of headcountEmail.emails)emailEvidenceSources[String(email).toLowerCase()]=headcountEmail.source;
+      emailMethod="headcount_source";
+      await redis.hIncrBy(STATS,"email_headcount_source_hit",1);
+    }
+  }
+
+  // Prove 2-10 attorneys before spending the expensive broad email-discovery
+  // pass, but keep the campaign contract explicit: phone + verified 2-10 +
+  // no-owned-site is only an intermediate candidate. A source-verified usable
+  // email is still mandatory for strict eligibility.
   const phoneHeadcountPriority=!website&&isUsableLawPhone(lead.phone);
   if(!attorneyCountVerified&&phoneHeadcountPriority){
     let earlyCount=0,earlySource="",earlyWebsite="";
@@ -3527,6 +3666,12 @@ async function enrichLead(key,lead){
       const floridaRoster=await directFloridaFirmRosterHeadcountEvidence(lead,key);
       if(Number(floridaRoster?.count||0)>0&&isPublishedHeadcountSource(String(floridaRoster?.source||""),lead)){
         earlyCount=Number(floridaRoster.count);earlySource=String(floridaRoster.source);
+        if(Array.isArray(floridaRoster.publishedEmails)&&floridaRoster.publishedEmails.length){
+          emails.push(...floridaRoster.publishedEmails);
+          source=String(floridaRoster.emailSource||floridaRoster.source||"");
+          for(const email of floridaRoster.publishedEmails)emailEvidenceSources[String(email).toLowerCase()]=source;
+          emailMethod="florida_roster";
+        }
         await redis.hIncrBy(STATS,"phone_first_headcount_florida_firm_roster",1);
       }
     }catch{await redis.hIncrBy(STATS,"phone_first_headcount_florida_firm_roster_fail",1);}
@@ -3540,6 +3685,18 @@ async function enrichLead(key,lead){
         const lawyer=await directLawyerComSizeEvidence(lead,key);
         if(Number(lawyer?.count||0)>0&&isPublishedHeadcountSource(String(lawyer?.source||""),lead)){
           earlyCount=Number(lawyer.count);earlySource=String(lawyer.source);
+          if(Array.isArray(lawyer.attorneyNames)&&lawyer.attorneyNames.length){
+            lead={...lead,directory_attorney_names:[...new Set([
+              ...(Array.isArray(lead.directory_attorney_names)?lead.directory_attorney_names:[]),
+              ...lawyer.attorneyNames
+            ])].slice(0,10)};
+          }
+          if(Array.isArray(lawyer.publishedEmails)&&lawyer.publishedEmails.length){
+            emails.push(...lawyer.publishedEmails);
+            source=String(lawyer.emailSource||lawyer.source||"");
+            for(const email of lawyer.publishedEmails)emailEvidenceSources[String(email).toLowerCase()]=source;
+            emailMethod="lawyercom_profile";
+          }
           await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom",1);
         }
       }catch{await redis.hIncrBy(STATS,"phone_first_headcount_lawyercom_fail",1);}
@@ -3550,6 +3707,12 @@ async function enrichLead(key,lead){
         const roster=await phoneRosterHeadcountEvidence(lead,key);
         if(Number(roster?.count||0)>0&&isPublishedHeadcountSource(String(roster?.source||""),lead)){
           earlyCount=Number(roster.count);earlySource=String(roster.source);
+          if(Array.isArray(roster.publishedEmails)&&roster.publishedEmails.length){
+            emails.push(...roster.publishedEmails);
+            source=String(roster.emailSource||roster.source||"");
+            for(const email of roster.publishedEmails)emailEvidenceSources[String(email).toLowerCase()]=source;
+            emailMethod="phone_roster";
+          }
           await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster",1);
         }
       }catch{await redis.hIncrBy(STATS,"phone_first_headcount_phone_roster_fail",1);}
@@ -3611,13 +3774,13 @@ async function enrichLead(key,lead){
         return true;
       }
 
-      // Now that 2-10 is actually proven, verify the no-owned-website gate.
-      // This preserves lead quality without wasting website research on the
-      // thousands of solos, oversized firms, and unresolved headcounts.
+      // Headcount workers stop after proof. Only reject an owned site if the
+      // exact trusted size source publishes it. The broad owned-site search is
+      // deferred to the dedicated strict-email lane after email proof.
       const profileSite=await ownedWebsiteFromTrustedProfile(earlySource,lead,key);
-      const discoveredSite=profileSite||await findOwnedWebsitePreflight({...lead,conversion_headcount_priority:false},key,true);
+      const discoveredSite=profileSite;
       if(discoveredSite){
-        const websiteLead={...lead,website:discoveredSite,website_opportunity:"website_refresh",owned_website_evidence_source:profileSite?earlySource:"post_size_preflight"};
+        const websiteLead={...lead,website:discoveredSite,website_opportunity:"website_refresh",owned_website_evidence_source:earlySource||"post_size_profile"};
         await redis.hSet(LEAD_HASH,key,JSON.stringify(websiteLead));
         await Promise.all([
           redis.sRem(CALL_READY_SET,key),redis.sRem(CHICAGO_PENDING_SET,key),
@@ -3659,7 +3822,7 @@ async function enrichLead(key,lead){
         }));
       }
 
-      if(!existingSourceBacked){
+      if(!emails.length){
         const earlyEvidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
         const earlyPracticeKeys=[...new Set([
           ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
@@ -3677,13 +3840,16 @@ async function enrichLead(key,lead){
           firm_size_tier:firmSizeTier(earlyCount),
           primary_pain_point:"No website",
           website_opportunity:"website_build",
-          law_firm_enriched_at:new Date().toISOString()
+          law_firm_enriched_at:new Date().toISOString(),
+          law_email_validation:"recovery_pending"
         };
         await redis.hSet(LEAD_HASH,key,JSON.stringify(lead));
         await redis.sRem(REJECTED_SET,key);
-        // Strict eligibility requires a source-verified usable email. Continue
-        // inline into email discovery now that 2-10 + no-owned-site is proven.
-        await redis.hIncrBy(STATS,"size_ready_email_inline",1);
+        // Do not make a headcount worker spend the rest of its slot on a broad
+        // email search. Persist the proven 2-10/no-site lead and let the
+        // conversion-first SIZE_READY lane finish the mandatory email gate.
+        await redis.hIncrBy(STATS,"size_ready_email_deferred",1);
+        return true;
       }
     }
 
@@ -3862,18 +4028,41 @@ async function enrichLead(key,lead){
     const soloShape=lawFirmNameShape(lead)==="solo";
     const hasDirectOfficial=directOfficialLinks.length>0;
     const sizeReadyEmailPriority=attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10;
-    const dualSearch=sizeReadyEmailPriority||(!hasDirectOfficial&&((!soloShape&&(highValue||emailRecoveryPriority(lead)>=5))||Number(lead.email_recovery_attempts||0)>=1));
-    // Already-proven 2-10 firms are the closest-to-revenue cohort. Use a
-    // source-first query set (bar/court/public records + exact phone/name)
-    // instead of spending most requests on broad generic discovery.
-    const sizeReadyQueries=sizeReadyEmailPriority?[...new Set([
+    const sizeReadyAttempt=emailRecoveryAttempt;
+
+    // Retry diversity matters more than repeating the same searches five times.
+    // Proven 2-10/no-site passes rotate through bounded source waves:
+    // official/exact identity -> public records -> professional directories -> broad recovery.
+    const sizeReadyWave1=[...new Set([
       ...barQueries,
-      ...publicRecordQueries,
       ...(phone&&name?[`"${name}" "${phonePretty||phone}" email`]:[]),
       ...(person?[`"${person}" "${region}" attorney email`]:[]),
-      ...(name?[`"${name}" "${region}" email filetype:pdf`]:[]),
-      ...directoryEmailQueries.slice(0,6)
-    ].filter(Boolean))].slice(0,12):[];
+      ...(phone?[`"${phonePretty||phone}" attorney "Email:"`]:[])
+    ].filter(Boolean))].slice(0,6);
+    const sizeReadyWave2=[...new Set([
+      ...publicRecordQueries,
+      ...(person?[`"${person}" "${region}" "E-mail address" filetype:pdf`]:[]),
+      ...(name?[`"${name}" "${region}" email filetype:pdf`]:[])
+    ].filter(Boolean))].slice(0,10);
+    const sizeReadyWave3=[...new Set([
+      ...professionalDirectoryQueries,
+      ...directoryEmailQueries.slice(0,8),
+      ...docketQueries
+    ].filter(Boolean))].slice(0,12);
+    const sizeReadyWave4=[...new Set([
+      ...directoryEmailQueries.slice(8),
+      ...docketQueries,
+      ...(name?[`"${name}" ${city} ${region} contact email`.trim(),`"${name}" "E-mail" filetype:pdf`]:[]),
+      ...(alternate?[`"${alternate}" ${region} attorney email`.trim()]:[]),
+      ...(phone?[`"${phonePretty||phone}" lawyer email`]:[])
+    ].filter(Boolean))].slice(0,12);
+    const sizeReadyQueries=!sizeReadyEmailPriority?[]:
+      sizeReadyAttempt<=0?sizeReadyWave1:
+      sizeReadyAttempt===1?sizeReadyWave2:
+      sizeReadyAttempt===2?sizeReadyWave3:
+      sizeReadyWave4;
+    const runDuckForSizeReady=sizeReadyEmailPriority&&sizeReadyAttempt>=1;
+    const dualSearch=runDuckForSizeReady||(!sizeReadyEmailPriority&&!hasDirectOfficial&&((!soloShape&&(highValue||emailRecoveryPriority(lead)>=5))||Number(lead.email_recovery_attempts||0)>=1));
     const effectiveQueries=sizeReadyEmailPriority
       ? sizeReadyQueries
       : (hasDirectOfficial?bingQueries.slice(0,4):(soloShape?bingQueries.slice(0,5):bingQueries));
@@ -3885,10 +4074,10 @@ async function enrichLead(key,lead){
       bingFallback(
         lead,
         effectiveQueries,
-        sizeReadyEmailPriority?10:(hasDirectOfficial?4:(soloShape?5:(highValue?10:(dualSearch?8:7)))),
+        sizeReadyEmailPriority?(sizeReadyAttempt<=0?6:8):(hasDirectOfficial?4:(soloShape?5:(highValue?10:(dualSearch?8:7)))),
         key,
         [],
-        sizeReadyEmailPriority?3:(hasDirectOfficial?1:(highValue?2:1)),
+        sizeReadyEmailPriority?(sizeReadyAttempt<=0?2:3):(hasDirectOfficial?1:(highValue?2:1)),
         directOfficialLinks
       ),
       dualSearch
@@ -3948,7 +4137,8 @@ async function enrichLead(key,lead){
   // Independent last-resort discovery lane. Run only after search engines miss,
   // and only when we have a plausible attorney identity. Any result still has
   // to survive exact-source binding below, so this cannot export guessed mail.
-  if(!emails.length&&!researchOwnedWebsite&&attorneyNameVariants(lead).length&&((attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10)||emailRecoveryPriority(lead)>=5||Number(lead.email_recovery_attempts||0)>=1)){
+  const runZeroCostThisAttempt=!(attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10)||emailRecoveryAttempt===0||emailRecoveryAttempt===3;
+  if(runZeroCostThisAttempt&&!emails.length&&!researchOwnedWebsite&&attorneyNameVariants(lead).length&&((attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10)||emailRecoveryPriority(lead)>=5||emailRecoveryAttempt>=1)){
     try{
       const zeroCost=await zeroCostEmailFallback(lead);
       if(zeroCost.emails.length){
@@ -4302,7 +4492,7 @@ async function enrichLead(key,lead){
     ? `Saw ${lead.name||"your firm"} while looking at ${targetLabel} firms${city?` in ${city}`:""}.${p.fact?` ${p.fact}.`:""} Couldn't find a firm website, so I reached out.`
     : "";
 
-  const recoveryAttempts=Math.max(0,Number(lead.email_recovery_attempts||0));
+  const recoveryAttempts=emailRecoveryAttempt;
   const enriched={...lead,email_recovery_attempts:recoveryAttempts,website:effectiveWebsite,emails,attorney_count_estimate:attorneyCount||null,attorney_count_evidence_verified:attorneyCountVerified,attorney_count_source:attorneyCountSource||"",headcount_identity_version:attorneyCountVerified?HEADCOUNT_IDENTITY_VERSION:"",preferred_firm_size:preferredSize,
     firm_size_tier:sizeTier,practice_areas:practices,practice_keys:practiceKeys,
     lead_type:practices.join(" + "),personalization_fact:p.fact,personalization_source:p.source,
@@ -4321,7 +4511,7 @@ async function enrichLead(key,lead){
   // Email is a hard eligibility gate. Spend materially more research on the
   // tiny cohort that already proved 2-10 attorneys + no owned website.
   const sizeReadyForEmail=attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10&&!effectiveWebsite;
-  const maxEmailRecoveryAttempts=sizeReadyForEmail?5:2;
+  const maxEmailRecoveryAttempts=sizeReadyForEmail?4:2;
   if((!emails.length||!emailSourceVerified)&&recoveryAttempts<maxEmailRecoveryAttempts){
     const recoverable={...enriched,email_recovery_attempts:recoveryAttempts+1,email_recovery_last_at:new Date().toISOString(),law_email_validation:"recovery_pending"};
     await redis.hSet(LEAD_HASH,key,JSON.stringify(recoverable));
@@ -5030,10 +5220,11 @@ async function bootstrapExistingQualified(){
 }
 
 async function popSetBatch(setKey,count){
-  // Keep work queued until enrichLead finishes. SPOP made deploy interruption
-  // lossy: the lead disappeared from every queue before the job committed.
-  const members=await redis.sMembers(setKey);
-  return [...new Set((members||[]).filter(Boolean))].slice(0,count);
+  // Keep work queued until enrichLead finishes, but do not download an entire
+  // 10k+ Redis set just to choose a small batch. SRANDMEMBER is non-destructive.
+  const members=await redis.sRandMember(setKey,count);
+  const values=Array.isArray(members)?members:(members?[members]:[]);
+  return [...new Set(values.filter(Boolean))].slice(0,count);
 }
 async function moveToEmailQueue(key,targetSet){
   await Promise.all([
@@ -5127,63 +5318,24 @@ async function normalizeEmailQueues(){
     demotedPriority,promotedPriority
   }));
 }
-async function enrichBatch(){
-  // Conversion-first scheduling:
-  // 1) source-backed email missing size proof,
-  // 2) verified 2-10 size missing an email,
-  // 3) high-potential firm/multi or strong-identity email recovery,
-  // 4) fresh discovery output,
-  // 5) broad recovery backlog.
-  // The old allocator capped PRIORITY_PENDING_SET at 6/64 even when thousands
-  // of high-value leads were waiting; reserve materially more of each batch.
-  // Reserve capacity for every high-value lane so a large historical backlog
-  // cannot starve newly discovered firms. Fresh discovery gets a guaranteed
-  // slice while email-backed and size-ready conversion work stays prioritized.
-  // Phone-first campaign is nationwide. This compatibility set now contains
-  // callable no-site law firms from every market, so headcount gets most of the
-  // batch. Email enrichment remains secondary and continues in the leftover slice.
-  // Strict send-ready work gets first claim on capacity.
-  const sizeReadyKeys=await popSetBatch(SIZE_READY_PENDING_SET,Math.min(32,ENRICH_BATCH));
-  const afterSizeReady=Math.max(0,ENRICH_BATCH-sizeReadyKeys.length);
-
-  // Existing source-backed emails are also close to conversion because only
-  // size proof may be missing.
-  const regularKeys=afterSizeReady?await popSetBatch(PENDING_SET,Math.min(16,afterSizeReady)):[];
-  const afterRegular=Math.max(0,afterSizeReady-regularKeys.length);
-
-  // Among the raw callable/no-site population, explicit multi-attorney name
-  // signals are the highest-yield headcount work.
-  const phonePriorityTarget=Math.min(afterRegular,Math.max(48,Math.floor(ENRICH_BATCH*0.5)));
-  const phonePriorityKeys=afterRegular?await popSetBatch(PHONE_HEADCOUNT_PRIORITY_SET,phonePriorityTarget):[];
-  const afterPhonePriority=Math.max(0,afterRegular-phonePriorityKeys.length);
-
-  // Once the explicit multi-name priority queue drains, use the freed
-  // capacity on the large callable/no-site headcount backlog rather than
-  // leaving most of the batch to low-value generic retries.
-  const chicagoTarget=Math.min(afterPhonePriority,Math.max(48,Math.floor(ENRICH_BATCH*0.55)));
-  const chicagoKeys=afterPhonePriority?await popSetBatch(CHICAGO_PENDING_SET,chicagoTarget):[];
-  const afterChicago=Math.max(0,afterPhonePriority-chicagoKeys.length);
-
-  // Keep a small guaranteed slice for new discovery/email evidence and retries.
-  const freshKeys=afterChicago?await popSetBatch(SOURCE_PENDING_SET,Math.min(6,afterChicago)):[];
-  const afterFresh=Math.max(0,afterChicago-freshKeys.length);
-  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(8,afterFresh)):[];
-  const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
-  const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
-  const keys=[...new Set([...sizeReadyKeys,...regularKeys,...phonePriorityKeys,...chicagoKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
-  if(!keys.length)return 0;
-  await redis.hIncrBy(STATS,"enrich_non_destructive_batch_selected",keys.length);
-  let index=0,done=0;
+async function processEnrichKeys(keys=[],lane="general",concurrency=ENRICH_CONCURRENCY){
+  const uniqueKeys=[...new Set(keys.filter(Boolean))];
+  if(!uniqueKeys.length)return 0;
+  let index=0,done=0,skippedForSizeReady=0;
   const run=async()=>{
-    while(index<keys.length){
-      const key=keys[index++];
+    while(index<uniqueKeys.length){
+      const key=uniqueKeys[index++];
       try{
+        // The strict-conversion loop owns SIZE_READY_PENDING_SET. A general
+        // batch that sampled a stale overlapping queue entry must yield rather
+        // than race the same lead through two expensive research paths.
+        if(lane!=="size_ready"&&await redis.sIsMember(SIZE_READY_PENDING_SET,key)){
+          skippedForSizeReady++;
+          continue;
+        }
         const raw=await redis.hGet(LEAD_HASH,key);
         if(!raw)continue;
         let lead;try{lead=JSON.parse(raw)||{};}catch{continue;}
-        // Every fetch inside enrichLead is independently bounded. An outer
-        // Promise.race did not cancel enrichLead, so timed-out work kept mutating
-        // Redis after the lead had been requeued. Await it directly instead.
         const result=await enrichLead(key,lead);
         const finalRaw=await redis.hGet(LEAD_HASH,key);
         let finalLead={};try{finalLead=finalRaw?JSON.parse(finalRaw):{};}catch{}
@@ -5208,8 +5360,12 @@ async function enrichBatch(){
         const rawRetry=await redis.hGet(LEAD_HASH,key);
         let retryLead={};try{retryLead=rawRetry?JSON.parse(rawRetry):{};}catch{}
         const retryWebsite=String(retryLead.website||retryLead.website_url||"").trim();
+        const retryCount=Number(retryLead.attorney_count_estimate||retryLead.attorney_count||0);
+        const retrySizeReady=retryLead.attorney_count_evidence_verified===true&&retryCount>=2&&retryCount<=10&&!/^https?:\/\//i.test(retryWebsite);
         const needsPhoneHeadcount=!/^https?:\/\//i.test(retryWebsite)&&isUsableLawPhone(retryLead.phone)&&retryLead.attorney_count_evidence_verified!==true;
-        if(needsPhoneHeadcount){
+        if(retrySizeReady){
+          await redis.sAdd(SIZE_READY_PENDING_SET,key);
+        }else if(needsPhoneHeadcount){
           const shape=lawFirmNameShape(retryLead);
           await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
         }else{
@@ -5217,12 +5373,63 @@ async function enrichBatch(){
           const retrySet=retryEmails.length?PENDING_SET:(emailRecoveryPriority(retryLead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET);
           await moveToEmailQueue(key,retrySet);
         }
-        console.warn(JSON.stringify({event:"law_firm_enrich_retry",key,error:String(error?.message||error)}));
+        console.warn(JSON.stringify({event:"law_firm_enrich_retry",lane,key,error:String(error?.message||error)}));
       }
     }
   };
-  await Promise.all(Array.from({length:Math.min(ENRICH_CONCURRENCY,keys.length)},()=>run()));
+  await Promise.all(Array.from({length:Math.min(concurrency,uniqueKeys.length)},()=>run()));
+  if(skippedForSizeReady)await redis.hIncrBy(STATS,"general_enrich_yielded_to_size_ready",skippedForSizeReady);
   return done;
+}
+
+async function enrichSizeReadyBatch(){
+  const keys=await popSetBatch(SIZE_READY_PENDING_SET,SIZE_READY_EMAIL_BATCH);
+  if(!keys.length)return 0;
+  console.log(JSON.stringify({
+    event:"law_size_ready_batch_selected",
+    total:keys.length,
+    concurrency:SIZE_READY_EMAIL_CONCURRENCY
+  }));
+  await redis.hIncrBy(STATS,"size_ready_batch_selected",keys.length);
+  return processEnrichKeys(keys,"size_ready",SIZE_READY_EMAIL_CONCURRENCY);
+}
+
+async function enrichBatch(){
+  // General worker: prove size and recover non-size-ready evidence. Strict
+  // 2-10/no-site email completion has its own independent loop so a slow
+  // headcount batch cannot starve the final eligibility gate.
+  const regularKeys=await popSetBatch(PENDING_SET,Math.min(16,ENRICH_BATCH));
+  const afterRegular=Math.max(0,ENRICH_BATCH-regularKeys.length);
+
+  const phonePriorityTarget=Math.min(afterRegular,Math.max(48,Math.floor(ENRICH_BATCH*0.55)));
+  const phonePriorityKeys=afterRegular?await popSetBatch(PHONE_HEADCOUNT_PRIORITY_SET,phonePriorityTarget):[];
+  const afterPhonePriority=Math.max(0,afterRegular-phonePriorityKeys.length);
+
+  const chicagoTarget=Math.min(afterPhonePriority,Math.max(48,Math.floor(ENRICH_BATCH*0.65)));
+  const chicagoKeys=afterPhonePriority?await popSetBatch(CHICAGO_PENDING_SET,chicagoTarget):[];
+  const afterChicago=Math.max(0,afterPhonePriority-chicagoKeys.length);
+
+  const freshKeys=afterChicago?await popSetBatch(SOURCE_PENDING_SET,Math.min(8,afterChicago)):[];
+  const afterFresh=Math.max(0,afterChicago-freshKeys.length);
+  const priorityKeys=afterFresh?await popSetBatch(PRIORITY_PENDING_SET,Math.min(12,afterFresh)):[];
+  const afterPriority=Math.max(0,afterFresh-priorityKeys.length);
+  const recoverableKeys=afterPriority?await popSetBatch(RECOVERABLE_PENDING_SET,afterPriority):[];
+  const keys=[...new Set([...regularKeys,...phonePriorityKeys,...chicagoKeys,...freshKeys,...priorityKeys,...recoverableKeys])].slice(0,ENRICH_BATCH);
+  if(!keys.length)return 0;
+  console.log(JSON.stringify({
+    event:"law_enrich_batch_selected",
+    lane:"general",
+    regular:regularKeys.length,
+    phonePriority:phonePriorityKeys.length,
+    phonePending:chicagoKeys.length,
+    fresh:freshKeys.length,
+    priority:priorityKeys.length,
+    recoverable:recoverableKeys.length,
+    total:keys.length,
+    concurrency:ENRICH_CONCURRENCY
+  }));
+  await redis.hIncrBy(STATS,"enrich_non_destructive_batch_selected",keys.length);
+  return processEnrichKeys(keys,"general",ENRICH_CONCURRENCY);
 }
 
 const LAWYERS_STATE_SLUGS={
@@ -5254,6 +5461,23 @@ function extractDirectoryPhone(text=""){
   const matches=[...raw.matchAll(/(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]\d{3}[\s.-]\d{4}/g)]
     .map(m=>String(m[0]||"").trim());
   return matches.find(isUsableLawPhone)||"";
+}
+
+function directoryCardWebsiteCandidate(block="",profileUrl=""){
+  const raw=String(block||"");
+  for(const m of raw.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,120}?)<\/a>/gi)){
+    const label=stripHtml(String(m[2]||"")).replace(/\s+/g," ").trim();
+    if(!/^(?:visit\s+)?website$/i.test(label))continue;
+    try{
+      const u=new URL(String(m[1]||""),profileUrl||"https://www.lawyers.com");
+      const host=hostOf(u.href);
+      if(!/^https?:$/.test(u.protocol)||!host)continue;
+      if(/(^|\.)lawyers\.com$/i.test(host))continue;
+      if(knownThirdPartyDirectoryHost(u.href))continue;
+      return u.href;
+    }catch{}
+  }
+  return "";
 }
 
 function directoryCardFirmAnchor(beforeHtml=""){
@@ -5298,10 +5522,10 @@ function extractLawyersComDirectoryCandidates(html="",sourceUrl="",area={}){
     const block=raw.slice(blockStart,Math.min(raw.length,nextIndex));
     const plain=stripHtml(block).replace(/\s+/g," ").trim();
 
-    // If Lawyers.com exposes an explicit external Website action in this exact
-    // firm card, it is not a no-website prospect. The final owned-site preflight
-    // still runs later for cards without that action.
-    if(/\bWebsite\b/i.test(plain)&&/<a\b[^>]*href=["']https?:\/\/[^"']+["'][^>]*>[^<]{0,80}Website/i.test(block))continue;
+    // Do not discard a firm merely because the directory renders a Website
+    // action. Tracking/alias links can be false positives. Preserve the
+    // candidate and verify ownership against firm identity later.
+    const websiteCandidate=directoryCardWebsiteCandidate(block,profileUrl);
 
     const phone=extractDirectoryPhone(plain);
     if(!phone)continue;
@@ -5316,7 +5540,7 @@ function extractLawyersComDirectoryCandidates(html="",sourceUrl="",area={}){
     out.push({
       name,phone,address,
       city:String(area.city||""),state:String(area.state||"").toUpperCase(),
-      attorneyCount:n,profileUrl,listingUrl:sourceUrl
+      attorneyCount:n,profileUrl,listingUrl:sourceUrl,websiteCandidate
     });
   }
   return out;
@@ -5351,7 +5575,8 @@ async function verifyDirectoryCandidate(candidate={}){
     const phoneDigits=normalizeLawPhone(candidate.phone);
     const profilePhoneMatch=Boolean(phoneDigits&&String(text).replace(/\D/g,"").includes(phoneDigits));
     const profileCount=officialFirmSizeEstimate(text);
-    const rosterCount=page.via==="jina"?0:strictFirmPageRosterCount(page.html,source,seedLead);
+    const attorneyNames=page.via==="jina"?[]:strictFirmPageRosterNames(page.html,source,seedLead);
+    const rosterCount=page.via==="jina"?0:(attorneyNames.length>10?11:attorneyNames.length);
     const count=profileCount>0?profileCount:rosterCount;
     if(count<2||count>10)return null;
 
@@ -5359,14 +5584,38 @@ async function verifyDirectoryCandidate(candidate={}){
     // legal directory. Require exact phone OR exact agreement on the published size.
     if(!profilePhoneMatch&&count!==Number(candidate.attorneyCount||0))return null;
 
+    if(candidate.websiteCandidate){
+      const verifiedListingWebsite=await verifyOwnedWebsiteCandidate(candidate.websiteCandidate,seedLead);
+      if(verifiedListingWebsite){
+        return {...candidate,rejectWebsite:verifiedListingWebsite,count,source,attorneyNames};
+      }
+    }
+
     if(page.via!=="jina"){
       const profileWebsite=outboundFirmWebsiteFromDirectory(page.html,seedLead);
       if(profileWebsite){
         const verifiedWebsite=await verifyOwnedWebsiteCandidate(profileWebsite,seedLead);
-        if(verifiedWebsite)return {...candidate,rejectWebsite:verifiedWebsite,count,source};
+        if(verifiedWebsite)return {...candidate,rejectWebsite:verifiedWebsite,count,source,attorneyNames};
       }
     }
-    return {...candidate,count,source,profilePhoneMatch,profileVia:String(page.via||"direct")};
+
+    // Zero-extra-fetch win: some legal-directory profiles publish a direct
+    // mailbox. The profile has already passed strict firm identity + phone/size
+    // checks, so keep only contextual, non-directory addresses with valid MX.
+    const profileEmailCandidates=contextualEmails(page.html,seedLead,source);
+    const emailChecks=await Promise.all(profileEmailCandidates.slice(0,5).map(async email=>({
+      email,ok:await hasMailExchange(email)
+    })));
+    const publishedEmails=emailChecks.filter(x=>x.ok).map(x=>x.email);
+    if(publishedEmails.length){
+      await redis.hIncrBy(STATS,"directory_profile_email_hit",1);
+      console.log(JSON.stringify({
+        event:"law_directory_profile_email_hit",
+        name:String(candidate.name||""),source,
+        emails:publishedEmails.slice(0,3),attorneys:count
+      }));
+    }
+    return {...candidate,count,source,profilePhoneMatch,profileVia:String(page.via||"direct"),attorneyNames,publishedEmails};
   }catch{return null;}
 }
 
@@ -5427,9 +5676,26 @@ async function persistDirectorySeed(candidate={}){
     preferred_firm_size:true,
     firm_size_tier:"preferred_2_10",
     law_directory_seed_source:candidate.listingUrl,
-    law_directory_seeded_at:now
+    law_directory_seeded_at:now,
+    directory_attorney_names:[...new Set([
+      ...(Array.isArray(existing.directory_attorney_names)?existing.directory_attorney_names:[]),
+      ...(Array.isArray(candidate.attorneyNames)?candidate.attorneyNames:[])
+    ])].slice(0,10),
+    conversion_headcount_priority:true,
+    ...(Array.isArray(candidate.publishedEmails)&&candidate.publishedEmails.length?{
+      emails:[...new Set([
+        ...(Array.isArray(existing.emails)?existing.emails:[]),
+        ...candidate.publishedEmails
+      ])],
+      email:candidate.publishedEmails[0],
+      law_email_source:candidate.source,
+      law_email_source_verified:true,
+      law_email_validation:"published_exact+strict_firm_identity+mx",
+      law_email_verified_at:now
+    }:{})
   };
 
+  const profileEmails=Array.isArray(candidate.publishedEmails)?candidate.publishedEmails:[];
   await Promise.all([
     redis.hSet(LEAD_HASH,key,JSON.stringify(lead)),
     redis.hSet("recover:leadstore:phone-index",phone,key),
@@ -5437,6 +5703,15 @@ async function persistDirectorySeed(candidate={}){
       count:candidate.count,source:candidate.source,verified_at:now,
       verification:"lawyerscom_profile_size+"+HEADCOUNT_IDENTITY_VERSION
     })),
+    ...(profileEmails.length?[
+      redis.hSet(VERIFIED_EMAIL_EVIDENCE_HASH,key,JSON.stringify({
+        emails:[...new Set(profileEmails)],
+        source:candidate.source,
+        verified_at:now,
+        verification:"published_exact+strict_firm_identity+mx"
+      })),
+      redis.sAdd(UNIQUE_VERIFIED_EMAIL_SET,key)
+    ]:[]),
     redis.sAdd(UNIQUE_VERIFIED_HEADCOUNT_SET,key),
     redis.sAdd(SIZE_READY_PENDING_SET,key),
     redis.sAdd(SCOPE_SET,key),
@@ -5454,7 +5729,7 @@ async function seedLawyersComDirectory(cities=[]){
   let citiesDone=0,candidatesFound=0,verified=0,added=0,ownedWebsite=0,fetchErrors=0,directPages=0,jinaPages=0,scraplingPages=0;
 
   for(let slot=0;slot<DIRECTORY_DISCOVERY_BATCH;slot++){
-    let area=null,guard=0;
+    let area=null,areaSeedKey="",guard=0;
     while(guard<cities.length){
       if(cursor>=cities.length)cursor=0;
       const candidateArea=cities[cursor++];
@@ -5462,7 +5737,7 @@ async function seedLawyersComDirectory(cities=[]){
       const seedKey=String(candidateArea.state||"")+"|"+normalize(candidateArea.city||"");
       if(await redis.sIsMember(DIRECTORY_SEEDED_SET,seedKey))continue;
       area=candidateArea;
-      await redis.sAdd(DIRECTORY_SEEDED_SET,seedKey);
+      areaSeedKey=seedKey;
       break;
     }
     if(!area)break;
@@ -5495,7 +5770,52 @@ async function seedLawyersComDirectory(cities=[]){
         return {url,html:"",error:true};
       })());
     }
-    const pages=await Promise.all(pageTasks);
+    let pages=await Promise.all(pageTasks);
+
+    // Productive cities get a deeper pass immediately. This concentrates
+    // source-first acquisition where the directory is already proving 2-10
+    // firms instead of spending equal time on empty/sparse markets.
+    if(DIRECTORY_DISCOVERY_MAX_PAGES>DIRECTORY_DISCOVERY_PAGES){
+      const firstWaveCandidates=pages.flatMap(page=>page?.html?extractLawyersComDirectoryCandidates(page.html,page.url,area):[]);
+      if(firstWaveCandidates.length>=6){
+        const extraTasks=[];
+        for(let page=DIRECTORY_DISCOVERY_PAGES+1;page<=DIRECTORY_DISCOVERY_MAX_PAGES;page++){
+          const url=lawyersComCityUrl(area,page);
+          if(!url)continue;
+          extraTasks.push((async()=>{
+            const areaLead={
+              name:String(area.city||"")+" law firms",
+              city:String(area.city||""),region:String(area.state||""),state:String(area.state||""),
+              industry:"LAW_FIRM",search_profile:"law-firm",conversion_headcount_priority:true
+            };
+            const hasDirectoryRows=html=>/Law\s+(?:Firm|Office)\s+with\s+\d{1,2}\s+lawyers?/i.test(String(html||""));
+            try{
+              const direct=await fetchText(url,6000);
+              if(direct?.html&&hasDirectoryRows(direct.html))return {url,html:String(direct.html),via:"direct"};
+            }catch{}
+            try{
+              const jina=await callJinaReader(url,areaLead);
+              if(jina?.html&&hasDirectoryRows(jina.html))return {url,html:String(jina.html),via:"jina"};
+            }catch{}
+            try{
+              const scrap=await callScrapling(url,{allowBrowser:true});
+              if(scrap?.html&&hasDirectoryRows(scrap.html))return {url,html:String(scrap.html),via:"scrapling"};
+            }catch{}
+            return {url,html:"",error:true};
+          })());
+        }
+        if(extraTasks.length){
+          const extraPages=await Promise.all(extraTasks);
+          pages=[...pages,...extraPages];
+          await redis.hIncrBy(STATS,"directory_productive_city_deepened",1);
+        }
+      }
+    }
+    // Only mark coverage complete after at least one real directory page was
+    // fetched. Temporary blocks/timeouts must not permanently burn a city.
+    if(areaSeedKey&&pages.some(page=>!page.error&&page.html)){
+      await redis.sAdd(DIRECTORY_SEEDED_SET,areaSeedKey);
+    }
 
     const rawCandidates=[];
     const pageVia={direct:0,jina:0,scrapling:0};
@@ -5573,15 +5893,26 @@ async function lawAreaSaturated(area={}){
 }
 
 async function seed(cities){
-  const [queue,pendingPriority,pendingSource,pendingSizeReady,pendingRegular,pendingRecoverable]=await Promise.all([
+  const [queue,pendingPriority,pendingSource,pendingSizeReady,pendingRegular,pendingRecoverable,phonePriority,phonePending]=await Promise.all([
     redis.lLen(ACTIVE_QUEUE),
     redis.sCard(PRIORITY_PENDING_SET),
     redis.sCard(SOURCE_PENDING_SET),
     redis.sCard(SIZE_READY_PENDING_SET),
     redis.sCard(PENDING_SET),
-    redis.sCard(RECOVERABLE_PENDING_SET)
+    redis.sCard(RECOVERABLE_PENDING_SET),
+    redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),
+    redis.sCard(CHICAGO_PENDING_SET)
   ]);
   if(queue>=QUEUE_HIGH_WATER)return 0;
+  const phoneBacklog=phonePriority+phonePending;
+  // Generic Maps acquisition already has far more raw work than the strict
+  // funnel can convert. Stop creating low-information records while thousands
+  // still need headcount proof or while a meaningful 2-10 cohort is waiting on
+  // the mandatory email gate. Directory-first discovery continues separately.
+  if(phoneBacklog>=5000||pendingSizeReady>=100){
+    await redis.hIncrBy(STATS,"generic_discovery_paused_for_strict_backlog",1);
+    return 0;
+  }
   // Raw discovery is not the bottleneck anymore. Count recoverable work too so
   // a 35K-record inventory cannot keep growing while thousands of email/headcount
   // candidates wait for enrichment.
@@ -5797,10 +6128,35 @@ async function seedLoop(){
   }
 }
 
+let LAST_ENRICH_CYCLE_AT=Date.now(),LAST_ENRICH_CYCLE_MS=0;
+let LAST_SIZE_READY_CYCLE_AT=Date.now(),LAST_SIZE_READY_CYCLE_MS=0;
+async function sizeReadyConversionLoop(){
+  while(true){
+    try{
+      const cycleStarted=Date.now();
+      const converted=await enrichSizeReadyBatch();
+      LAST_SIZE_READY_CYCLE_MS=Date.now()-cycleStarted;
+      LAST_SIZE_READY_CYCLE_AT=Date.now();
+      if(converted||LAST_SIZE_READY_CYCLE_MS>15000){
+        console.log(JSON.stringify({
+          event:"law_size_ready_cycle",
+          converted,
+          cycleMs:LAST_SIZE_READY_CYCLE_MS,
+          pendingSizeReady:await redis.sCard(SIZE_READY_PENDING_SET),
+          uniqueEligible:await redis.sCard(UNIQUE_ELIGIBLE_SET)
+        }));
+      }
+    }catch(error){console.error("law_size_ready_loop_error",error?.stack||error?.message||error);}
+    await sleep(Math.max(1200,Math.min(LOOP_MS,3000)));
+  }
+}
 async function enrichmentLoop(){
   while(true){
     try{
+      const cycleStarted=Date.now();
       const enriched=await enrichBatch();
+      LAST_ENRICH_CYCLE_MS=Date.now()-cycleStarted;
+      LAST_ENRICH_CYCLE_AT=Date.now();
       const [queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,pendingSizeReady,websitePending,websiteReady,currentEmailCandidates,uniqueVerifiedEmails,uniqueVerifiedHeadcounts,uniqueEligibleLeads,emailStats]=await Promise.all([
         redis.lLen(ACTIVE_QUEUE),redis.sCard(READY_SET),redis.sCard(ENRICHED_SET),redis.sCard(REJECTED_SET),
         redis.sCard(PENDING_SET),redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),redis.sCard(SOURCE_PENDING_SET),redis.sCard(SIZE_READY_PENDING_SET),
@@ -5809,7 +6165,7 @@ async function enrichmentLoop(){
         redis.hmGet(STATS,["email_existing_hit","email_duck_hit","email_bing_hit","email_zero_cost_hit","email_no_hit","scrapling_source_hit","scrapling_source_fail","email_verifier_unavailable","scrapling_search_hit","bing_source_links","bing_source_pages_matched","bing_source_email_pages","email_raw_candidate_leads","email_identity_mx_pass_leads","email_identity_mx_reject_leads","email_keelead_pass_leads","email_keelead_reject_leads","email_source_verified_leads","jina_source_hit","jina_source_fail","email_existing_recorroborated","email_existing_recorroboration_miss","post_email_headcount_verified","post_email_headcount_miss","post_email_headcount_bing","post_email_headcount_duck","rejected_no_verified_email","rejected_unverified_attorney_count","rejected_wrong_size","rejected_has_website","scrapling_static_hit","scrapling_static_fail","bing_queries_with_links","bing_source_page_fetch_reject","bing_rss_query_hit","bing_query_fetch_reject","bing_fallback_error","email_source_binding_reject_leads","scrapling_generic_skip","owned_website_research_hit","website_preflight_hit","website_preflight_miss","bar_query_hit","bar_source_page_matched","bar_email_page","email_zero_cost_fail","email_source_binding_page_miss","email_source_binding_identity_reject","email_source_binding_exact_email_miss","email_source_binding_fetch_error","website_preflight_deferred","scrapling_browser_skip","bing_relative_result_links","scrapling_broad_discovery_skip","bing_source_raw_email_pages","bing_source_context_reject_email_pages","duck_source_raw_email_pages","duck_source_context_reject_email_pages","owned_website_verified_email_hit","bing_generic_link_reject","calbar_decoy_email_reject","bing_trusted_link_reject","expected_bar_query_with_links","expected_bar_result_links","expected_bar_page_matched","expected_bar_email_page","yahoo_expected_bar_query_hit","yahoo_expected_bar_result_links","yahoo_expected_bar_query_miss","yahoo_expected_bar_fetch_error","expected_bar_eligible_query_checks","expected_bar_query_executed","expected_bar_state_direct","expected_bar_state_derived","direct_calbar_search_attempt","direct_calbar_profile_links","direct_calbar_search_error","direct_calbar_page_matched","direct_calbar_email_page","candidate_owned_website_recheck_hit","calbar_profile_identity_reject","calbar_profile_website_hit","candidate_calbar_identity_reject","candidate_calbar_website_hit","owner_name_firm_label_bypass","direct_calbar_unique_profile","direct_calbar_deep_read_attempt","direct_calbar_deep_read_match","enrich_non_destructive_batch_selected","direct_calbar_deep_read_chars","direct_calbar_active_from_search","direct_calbar_unique_active","calbar_strong_email_accept","direct_calbar_search_identity_reject","direct_lawyercom_size_attempt","direct_lawyercom_size_hit","direct_lawyercom_size_miss","post_email_headcount_direct_lawyercom","candidate_source_owned_website_hit","candidate_lawyercom_size_hit","candidate_lawyercom_website_hit","candidate_source_email_phone_owned_hit","candidate_source_jina_recheck","direct_txbar_search_attempt","direct_txbar_profile_links","direct_txbar_search_error","direct_ilbar_search_attempt","direct_ilbar_profile_links","direct_ilbar_search_error","direct_gabar_search_attempt","direct_gabar_profile_links","direct_gabar_search_error","direct_ncbar_search_attempt","direct_ncbar_profile_links","direct_ncbar_search_error","direct_wabar_search_attempt","direct_wabar_profile_links","direct_wabar_search_error","direct_floridabar_search_attempt","direct_floridabar_profile_links","direct_floridabar_search_error"])
       ]);
       console.log(JSON.stringify({
-        event:"law_firm_pipeline_cycle",seeded:null,enriched,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,pendingSizeReady,websitePending,websiteReady,
+        event:"law_firm_pipeline_cycle",seeded:null,enriched,enrichCycleMs:LAST_ENRICH_CYCLE_MS,queue,qualified,enrichedTotal,rejected,pending,pendingEmail,pendingRecoverable,pendingSource,pendingSizeReady,websitePending,websiteReady,
         emailExisting:Number(emailStats?.[0]||0),emailDuck:Number(emailStats?.[1]||0),emailBing:Number(emailStats?.[2]||0),
         emailZeroCost:Number(emailStats?.[3]||0),emailNoHit:Number(emailStats?.[4]||0),
         scraplingSourceHit:Number(emailStats?.[5]||0),scraplingSourceFail:Number(emailStats?.[6]||0),
@@ -5839,7 +6195,16 @@ async function statusLoop(){
         redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),
         redis.sCard(SIZE_READY_PENDING_SET),redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),redis.sCard(CHICAGO_PENDING_SET)
       ]);
-      console.log(JSON.stringify({event:"law_firm_pipeline_heartbeat",qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,phoneHeadcountPriority,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady}));
+      const enrichSilenceMs=Math.max(0,Date.now()-LAST_ENRICH_CYCLE_AT);
+      const sizeReadySilenceMs=Math.max(0,Date.now()-LAST_SIZE_READY_CYCLE_AT);
+      console.log(JSON.stringify({
+        event:"law_firm_pipeline_heartbeat",qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
+        phoneHeadcountPriority,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,
+        lastEnrichCycleMs:LAST_ENRICH_CYCLE_MS,enrichSilenceMs,
+        lastSizeReadyCycleMs:LAST_SIZE_READY_CYCLE_MS,sizeReadySilenceMs,
+        enrichmentStalled:enrichSilenceMs>Math.max(180000,LOOP_MS*6),
+        sizeReadyStalled:pendingSizeReady>0&&sizeReadySilenceMs>Math.max(120000,LOOP_MS*4)
+      }));
     }catch(error){
       console.error("law_firm_status_loop_error",error?.stack||error?.message||error);
     }
@@ -5863,4 +6228,4 @@ async function websiteAuditLoop(){
   }
 }
 
-await Promise.all([seedLoop(),directorySeedLoop(),enrichmentLoop(),statusLoop()]);
+await Promise.all([seedLoop(),directorySeedLoop(),sizeReadyConversionLoop(),enrichmentLoop(),statusLoop()]);
