@@ -52,6 +52,14 @@ assert.ok(researchQueries.length>=2);
 assert.ok(researchQueries.some(q=>q.includes("email")));
 assert.ok(researchQueries.some(q=>q.includes("practice")));
 
+const addressOnlyQueries=lawResearchQueries({
+  name:"Hussmann Rogers Law LLC",
+  address:"48 N Vermilion St, Danville, IL 61832",
+  phone:"2174469436"
+});
+assert.ok(addressOnlyQueries.some(q=>q.includes("Danville IL email")),"address-only leads must recover city/state for exact firm email queries");
+assert.ok(addressOnlyQueries.some(q=>q.includes("IL state bar email")),"address-only leads must recover state for bar queries");
+
 assert.equal(isUsableLawEmail("realfirm@gmail.com"),true);
 assert.equal(isUsableLawEmail("info@smithlaw.com"),true);
 assert.equal(isUsableLawEmail("error-lite+9c39@duckduckgo.com"),false);
