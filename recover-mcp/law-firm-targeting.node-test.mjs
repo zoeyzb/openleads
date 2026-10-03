@@ -59,7 +59,7 @@ assert.equal(shouldPauseLawDiscovery({pendingEnrichment:999,limit:1000}),false);
 const researchQueries=lawResearchQueries({name:"Smith Law",city:"Dallas",region:"TX",phone:"2145551212"});
 assert.ok(researchQueries.length>=2);
 assert.ok(researchQueries.some(q=>q.includes("email")));
-assert.ok(researchQueries.some(q=>q.includes("practice")));
+assert.ok(researchQueries.some(q=>q.includes("attorney")||q.includes("lawyer")||q.includes("state bar")));
 
 const addressOnlyQueries=lawResearchQueries({
   name:"Hussmann Rogers Law LLC",
