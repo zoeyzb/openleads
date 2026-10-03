@@ -16,8 +16,8 @@ const reconciled=reconcileExportMetrics(snapshot,{strictRows:3,callReadyRows:198
 assert.equal(reconciled.strictEligible,3);
 assert.equal(reconciled.callReady,198);
 assert.equal(reconciled.callReadyTarget,198,"call-ready target must equal callable/no-site/verified-2-10 rows");
-assert.equal(reconciled.eligible,3,"eligible must remain the send-ready source-verified-email subset");
-assert.equal(reconciled.emailReady,3);
+assert.equal(reconciled.eligible,198,"eligible must equal the callable no-site verified-2-10 cohort");
+assert.equal(reconciled.emailReady,3,"email-ready remains the bonus source-verified-email subset");
 assert.equal(reconciled.emailReadyRate,3/198);
 assert.equal(reconciled.verifiedEmails,43);
 assert.equal(reconciled.pendingSizeReady,189);
