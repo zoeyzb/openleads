@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,shouldPauseLawDiscovery,lawResearchQueries,isUsableLawEmail,isPreferredLawFirmSize} from "./law-firm-targeting.mjs";
+import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,qualifiesEmailReadyNoWebsiteLawLead,shouldPauseLawDiscovery,lawResearchQueries,isUsableLawEmail,isPreferredLawFirmSize} from "./law-firm-targeting.mjs";
 
 assert.equal(isLawFirmLead({category:"Personal injury attorney",name:"Smith & Doe Law"}),true);
 assert.equal(isLawFirmLead({category:"Criminal defense attorney",name:"Jones Defense Law"}),true);
@@ -35,7 +35,15 @@ const qualifiedBase={
   attorney_count_evidence_verified:true,
   email_source_verified:true
 };
-assert.equal(qualifiesNoWebsiteLawLead(qualifiedBase),true);
+assert.equal(qualifiesNoWebsiteLawLead({
+  ...qualifiedBase,
+  emails:[],
+  email:"",
+  email_source_verified:false,
+  phone:"3125551212"
+}),true,"eligible means callable + no owned website + verified 2-10; email is bonus");
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead(qualifiedBase),true);
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,emails:[],email:""}),false);
 assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,website:"https://example.com"}),false);
 assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,emails:[]}),false);
 assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,practice_keys:[]}),true);
