@@ -128,10 +128,17 @@ export function shouldPauseLawDiscovery({pendingEnrichment=0,limit=1000}={}){
   return Number(pendingEnrichment||0)>=Math.max(1,Number(limit||1000));
 }
 
+function locationFromAddress(address=""){
+  const raw=String(address||"").trim();
+  const m=raw.match(/(?:^|,)\s*([^,]+?)\s*,\s*([A-Z]{2})\s+\d{5}(?:-\d{4})?\s*$/);
+  return m?{city:m[1].trim(),region:m[2]}:{city:"",region:""};
+}
+
 export function lawResearchQueries(lead={}){
   const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
-  const city=String(lead.city||lead.locality||"").trim();
-  const region=String(lead.region||lead.state||lead.state_code||"").trim();
+  const addressLocation=locationFromAddress(lead.address||lead.formatted_address||"");
+  const city=String(lead.city||lead.locality||addressLocation.city||"").trim();
+  const region=String(lead.region||lead.state||lead.state_code||addressLocation.region||"").trim();
   const phone=String(lead.phone||"").replace(/\D+/g,"").slice(-10);
   const phoneDash=phone.length===10?`${phone.slice(0,3)}-${phone.slice(3,6)}-${phone.slice(6)}`:"";
   const phoneParen=phone.length===10?`(${phone.slice(0,3)}) ${phone.slice(3,6)}-${phone.slice(6)}`:"";
