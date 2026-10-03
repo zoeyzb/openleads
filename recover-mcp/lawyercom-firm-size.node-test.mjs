@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml } from "./lawyercom-firm-size.mjs";
+import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml, trustedLawyerComHeadcount } from "./lawyercom-firm-size.mjs";
 
 const wrap = body => `<!doctype html><html><body>${body}</body></html>`;
 
@@ -73,6 +73,22 @@ const wrap = body => `<!doctype html><html><body>${body}</body></html>`;
   const scoped=targetScopedLawyerComHtml(html);
   assert.match(scoped,/Target One/);
   assert.doesNotMatch(scoped,/Unrelated One/,"'LAW FIRMS NEARBY' must terminate the target-firm scope");
+}
+
+{
+  const html=wrap(`
+    <main>
+      <h1>Law Office of Example Lawyer</h1>
+      <h2>Lawyers</h2>
+      <a href="/lawyer/example">Example Lawyer</a>
+      <a href="/lawyer/unrelated-a">Unrelated A</a>
+      <a href="/lawyer/unrelated-b">Unrelated B</a>
+    </main>`);
+  assert.equal(
+    trustedLawyerComHeadcount(html),
+    0,
+    "profile links without explicit target-firm size must never become final Lawyer.com headcount evidence"
+  );
 }
 
 console.log("lawyer.com firm-size scope tests passed");
