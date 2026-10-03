@@ -403,27 +403,27 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
 
     const liveValues=[
       ["Pipeline stage","Count","What it means","What happens next"],
-      ["Call-ready target cohort",snapshot.callReadyTarget,"Law firm + no owned website + verified 2–10 attorneys + usable phone","Primary headcount KPI"],
-      ["Eligible / send-ready",snapshot.eligible,"Call-ready target that also has a source-verified usable email","Ready for outreach"],
-      ["Waiting on email",snapshot.pendingSizeReady,"Verified 2–10/no-site firms still missing source-verified email","Email enrichment lane"],
+      ["Eligible leads",snapshot.eligible,"Law firm + no owned website + verified 2–10 attorneys + usable phone","Ready to call"],
+      ["Email-ready bonus",snapshot.emailReady,"Eligible leads that also have a source-verified usable email","Can call + email"],
+      ["Waiting on email",snapshot.pendingSizeReady,"Eligible firms still missing source-verified email","Bonus enrichment lane"],
       ["Unresolved firm size",snapshot.headcountTotal,"Callable no-site law records still needing verified 2–10 attorney proof","Primary bottleneck"],
       ["Verified emails",snapshot.verifiedEmails,"Source-verified email evidence across law records","Evidence inventory"],
       ["Verified headcounts",snapshot.verifiedHeadcounts,"Current-method source-verified attorney counts across law records","Evidence inventory"],
-      ["Target",10000,"Send-ready eligible lead goal","Grow target cohort, then email-ready coverage"],
+      ["Target",10000,"Eligible lead goal: callable + no-site + verified 2–10","Grow verified headcount coverage"],
       ["Remaining",Math.max(0,10000-snapshot.eligible),"Eligible leads still needed to reach target","Pipeline gap"],
-      ["Email-ready rate",snapshot.emailReadyRate,"Eligible / call-ready target cohort","Diagnostic"],
+      ["Email-ready rate",snapshot.emailReadyRate,"Email-ready bonus / eligible leads","Diagnostic"],
       ["Last update",snapshot.timestamp,"Production snapshot","Automatic"]
     ];
     await request(`/values/${encodeURIComponent(`'${metricsTabName}'!A1:D11`)}?valueInputOption=RAW`,{
       method:"PUT",body:{range:`'${metricsTabName}'!A1:D11`,majorDimension:"ROWS",values:liveValues}
     });
 
-    const historyHeaders=["Timestamp UTC","Call-Ready Target","Eligible Send-Ready","Verified Emails","Verified Headcounts","Pending Size-Ready Email","Headcount Priority","Headcount General","Headcount Total","Email Priority","Email Recoverable"];
+    const historyHeaders=["Timestamp UTC","Eligible Leads","Email-Ready Bonus","Verified Emails","Verified Headcounts","Pending Size-Ready Email","Headcount Priority","Headcount General","Headcount Total","Email Priority","Email Recoverable"];
     await request(`/values/${encodeURIComponent(`'${metricsHistoryTabName}'!A1:K1`)}?valueInputOption=RAW`,{
       method:"PUT",body:{range:`'${metricsHistoryTabName}'!A1:K1`,majorDimension:"ROWS",values:[historyHeaders]}
     });
     const historyRow=[
-      snapshot.timestamp,snapshot.callReadyTarget,snapshot.eligible,snapshot.verifiedEmails,
+      snapshot.timestamp,snapshot.eligible,snapshot.emailReady,snapshot.verifiedEmails,
       snapshot.verifiedHeadcounts,snapshot.pendingSizeReady,snapshot.headcountPriority,
       snapshot.headcountGeneral,snapshot.headcountTotal,snapshot.emailPriority,snapshot.emailRecoverable
     ];
