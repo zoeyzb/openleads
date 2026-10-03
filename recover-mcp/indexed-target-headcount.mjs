@@ -12,14 +12,18 @@ function significantFirmTokens(value=""){
   const stop=new Set(["the","law","legal","firm","firms","office","offices","attorney","attorneys","lawyer","lawyers","group","llc","pllc","pc","pa","llp","apc","professional","corporation","associates","association","at","of","and"]);
   return normalize(value).split(" ").filter(x=>x.length>=3&&!stop.has(x));
 }
-function firmSpecificUrl(url=""){
+function sourceShape(url=""){
   let u;
-  try{u=new URL(String(url||""));}catch{return false;}
+  try{u=new URL(String(url||""));}catch{return {firmSpecific:false,lawyersListing:false};}
   const host=u.hostname.toLowerCase().replace(/^www\./,""), path=u.pathname.toLowerCase();
-  if(host==="lawyer.com"||host.endsWith(".lawyer.com"))return /^\/firms?\/[a-z0-9]/.test(path);
-  if(host==="martindale.com"||host.endsWith(".martindale.com"))return /^\/organization\/[a-z0-9]/.test(path);
-  if(host==="lawyers.com"||host.endsWith(".lawyers.com"))return /\/(?:law-firm|firm|attorney-profile)\//.test(path);
-  return false;
+  const firmSpecific=
+    (host==="lawyer.com"||host.endsWith(".lawyer.com")) ? /^\/firms?\/[a-z0-9]/.test(path) :
+    (host==="martindale.com"||host.endsWith(".martindale.com")) ? /^\/organization\/[a-z0-9]/.test(path) :
+    (host==="lawyers.com"||host.endsWith(".lawyers.com")) ? /\/(?:law-firm|firm|attorney-profile)\//.test(path) :
+    false;
+  const lawyersListing=(host==="lawyers.com"||host.endsWith(".lawyers.com")) &&
+    /\/law-firms\/?(?:$|[?#])/.test(path+u.search+u.hash);
+  return {firmSpecific,lawyersListing};
 }
 function targetCount(text=""){
   const plain=String(text||"");
@@ -65,22 +69,42 @@ export function trustedIndexedTargetHeadcount(records=[],lead={}){
     const source=String(record?.url||"");
     const host=hostOf(source);
     if(!TRUSTED_INDEX_HOSTS.some(h=>host===h||host.endsWith("."+h)))continue;
-    if(!firmSpecificUrl(source))continue;
+    const shape=sourceShape(source);
+    if(!shape.firmSpecific&&!shape.lawyersListing)continue;
     const count=targetCount(record?.text||"");
     if(count<2||count>10)continue;
     const identity=identityStrength(record,lead);
     if(!identity.strong)continue;
-    matches.push({count,source,host,phone:identity.phone,text:String(record.text||"").slice(0,1200)});
+    // Lawyers.com city/practice listing pages can publish the exact firm card,
+    // phone, and "Law Office with N lawyers" even when Railway cannot fetch the
+    // page directly. Accept those listing snippets only with exact phone; they
+    // never participate in weaker name+geo cross-source agreement.
+    if(shape.lawyersListing&&!identity.phone)continue;
+    matches.push({
+      count,source,host,phone:identity.phone,
+      listing:shape.lawyersListing,
+      firmSpecific:shape.firmSpecific,
+      text:String(record.text||"").slice(0,1200)
+    });
   }
   if(!matches.length)return null;
 
   const phoneExact=matches.find(x=>x.phone);
   if(phoneExact){
-    return {count:phoneExact.count,source:phoneExact.source,sources:[phoneExact.source],method:"indexed_exact_phone",matches:[phoneExact]};
+    return {
+      count:phoneExact.count,
+      source:phoneExact.source,
+      sources:[phoneExact.source],
+      method:phoneExact.listing?"indexed_listing_exact_phone_target_range":"indexed_exact_phone",
+      matches:[phoneExact]
+    };
   }
 
+  // Cross-source agreement is reserved for dedicated firm/profile URLs.
+  // Broad listing pages are never allowed to bootstrap one another by name+geo.
+  const crossSourceMatches=matches.filter(x=>x.firmSpecific&&!x.listing);
   const byCount=new Map();
-  for(const m of matches){
+  for(const m of crossSourceMatches){
     if(!byCount.has(m.count))byCount.set(m.count,[]);
     byCount.get(m.count).push(m);
   }
