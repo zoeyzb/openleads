@@ -70,6 +70,8 @@ jobs:
         run: node recover-mcp/law-lane-pressure.node-test.mjs
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
+      - name: Run law targeting regression test
+        run: node recover-mcp/law-firm-targeting.node-test.mjs
       - name: Run law sheet metrics regression test
         run: node recover-mcp/law-sheet-metrics.node-test.mjs
       - name: Check law sheet sync syntax
