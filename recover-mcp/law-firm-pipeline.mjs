@@ -6484,7 +6484,7 @@ async function statusLoop(){
       console.log(JSON.stringify({
         event:"law_firm_pipeline_heartbeat",
         callReadyTarget:callReady,
-        eligible:uniqueEligible,
+        eligible:callReady,
         emailReady:uniqueEligible,
         qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
         phoneHeadcountPriority,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,
