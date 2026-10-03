@@ -117,11 +117,13 @@ async function collectRows(redis){
       const maps=clean(lead.google_maps_url||lead.maps_url);
       const source=emailReady?emailSource:clean(lead.attorney_count_source||lead.personalization_source||maps);
       const phoneType=clean(lead.phone_type||lead.line_type||lead.phone_line_type)||"Unknown";
-      const strictEligible=Boolean(lead.qualified_lead===true&&emailReady);
+      const eligible=qualifiesCallReadyNoWebsiteLawLead(lead);
+      const emailReadyBonus=Boolean(eligible&&emailReady);
       out.push({
         priority,
         emailReady,
-        strictEligible,
+        eligible,
+        emailReadyBonus,
         identity:normalizeLawPhone(phone),
         row:[
           phone,
@@ -140,13 +142,13 @@ async function collectRows(redis){
           priority||"",
           clean(lead.attorney_count_source),
           source,
-          strictEligible?"Yes":"No",
+          eligible?"Yes":"No",
           "Usable"
         ]
       });
     }
   }
-  out.sort((a,b)=>b.priority-a.priority||Number(b.strictEligible)-Number(a.strictEligible)||Number(b.emailReady)-Number(a.emailReady)||String(a.row[1]).localeCompare(String(b.row[1])));
+  out.sort((a,b)=>b.priority-a.priority||Number(b.eligible)-Number(a.eligible)||Number(b.emailReadyBonus)-Number(a.emailReadyBonus)||String(a.row[1]).localeCompare(String(b.row[1])));
   return out;
 }
 
@@ -328,7 +330,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
 
   async function appendLeadArchive(leads=[]){
     const archiveSheetId=await ensureAdditionalSheet(archiveTabName,50000,18);
-    const headers=["Phone","Firm","Attorneys","Email","Email Status","Practice","City","State","Phone Type","Status","Personal Angle","Address","Google Maps","Priority","Headcount Source","Contact Source","Strict Eligible","Phone Status"];
+    const headers=["Phone","Firm","Attorneys","Email","Email Status","Practice","City","State","Phone Type","Status","Personal Angle","Address","Google Maps","Priority","Headcount Source","Contact Source","Eligible","Phone Status"];
     let existing=[];
     try{
       const range=encodeURIComponent(`'${archiveTabName}'!A1:B50000`);
@@ -401,27 +403,27 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
 
     const liveValues=[
       ["Pipeline stage","Count","What it means","What happens next"],
-      ["Strict eligible",snapshot.strictEligible,"Passed all 4 gates: law + no owned website + verified 2–10 attorneys + source-verified usable email","Ready"],
-      ["Call queue",snapshot.callReady,"Verified 2–10 attorneys + no owned website + usable phone","Call now; email worker continues"],
-      ["Waiting on email",snapshot.pendingSizeReady,"Already verified 2–10/no-site; still missing the mandatory source-verified email","Highest-priority email lane"],
-      ["Unresolved firm size",snapshot.headcountTotal,"Callable no-site law records still needing source-verified 2–10 attorney proof","Headcount lane"],
-      ["Verified emails",snapshot.verifiedEmails,"Source-verified email evidence across law records","Evidence inventory"],
-      ["Verified headcounts",snapshot.verifiedHeadcounts,"Source-verified attorney counts across law records","Evidence inventory"],
-      ["Target",10000,"Strict eligible lead goal","Intermediate records do not count as eligible"],
-      ["Remaining",Math.max(0,10000-snapshot.strictEligible),"Strict leads still needed to reach target","Pipeline gap"],
-      ["Strict conversion",snapshot.strictConversion,"Strict eligible / call queue","Diagnostic"],
+      ["Eligible leads",snapshot.eligible,"Law firm + no owned website + verified 2–10 attorneys + usable phone","Ready to call"],
+      ["Email-ready bonus",snapshot.emailReady,"Eligible leads that also have a source-verified usable email","Can call + email"],
+      ["Waiting on email",snapshot.pendingSizeReady,"Eligible/size-ready firms still missing source-verified email","Bonus enrichment lane"],
+      ["Unresolved firm size",snapshot.headcountTotal,"Callable no-site law records still needing verified 2–10 attorney proof","Primary bottleneck"],
+      ["Verified emails",snapshot.verifiedEmails,"Source-verified email evidence across law records","Bonus evidence inventory"],
+      ["Verified headcounts",snapshot.verifiedHeadcounts,"Current-method source-verified attorney counts across law records","Evidence inventory"],
+      ["Target",10000,"Eligible lead goal: callable + no-site + verified 2–10","Grow verified headcount coverage"],
+      ["Remaining",Math.max(0,10000-snapshot.eligible),"Eligible leads still needed to reach target","Pipeline gap"],
+      ["Email-ready rate",snapshot.emailReadyRate,"Email-ready bonus / eligible leads","Diagnostic"],
       ["Last update",snapshot.timestamp,"Production snapshot","Automatic"]
     ];
     await request(`/values/${encodeURIComponent(`'${metricsTabName}'!A1:D11`)}?valueInputOption=RAW`,{
       method:"PUT",body:{range:`'${metricsTabName}'!A1:D11`,majorDimension:"ROWS",values:liveValues}
     });
 
-    const historyHeaders=["Timestamp UTC","Strict Eligible","Call Ready 2–10 No Site","Verified Emails","Verified Headcounts","Pending Size-Ready Email","Headcount Priority","Headcount General","Headcount Total","Email Priority","Email Recoverable"];
+    const historyHeaders=["Timestamp UTC","Eligible Leads","Email-Ready Bonus","Verified Emails","Verified Headcounts","Pending Size-Ready Email","Headcount Priority","Headcount General","Headcount Total","Email Priority","Email Recoverable"];
     await request(`/values/${encodeURIComponent(`'${metricsHistoryTabName}'!A1:K1`)}?valueInputOption=RAW`,{
       method:"PUT",body:{range:`'${metricsHistoryTabName}'!A1:K1`,majorDimension:"ROWS",values:[historyHeaders]}
     });
     const historyRow=[
-      snapshot.timestamp,snapshot.strictEligible,snapshot.callReady,snapshot.verifiedEmails,
+      snapshot.timestamp,snapshot.eligible,snapshot.emailReady,snapshot.verifiedEmails,
       snapshot.verifiedHeadcounts,snapshot.pendingSizeReady,snapshot.headcountPriority,
       snapshot.headcountGeneral,snapshot.headcountTotal,snapshot.emailPriority,snapshot.emailRecoverable
     ];
@@ -474,9 +476,9 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       const leads=await collectRows(redis);
       for(const item of leads){if(statuses.has(item.identity))item.row[9]=normalizeCallStatus(statuses.get(item.identity));}
 
-      // The second visible tab is intentionally strict-only: no intermediate
-      // candidates are mixed into the user's final eligible list.
-      const candidateTitle="Strict Eligible";
+      // Email is a bonus outreach channel. Keep the email-ready subset separate
+      // from the primary eligible call list.
+      const candidateTitle="Email Ready Bonus";
       const candidateSheetId=await ensureAdditionalSheet(candidateTitle);
       const candidateStatuses=await previousStatusesFor(candidateTitle);
       const emailCandidates=await collectVerifiedEmailCandidateRows(redis);
@@ -491,7 +493,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
         callReadyRows:leads.length
       });
       await writeRowsToTab(candidateTitle,candidateSheetId,emailCandidates);
-      const headers=["Phone","Firm","Attorneys","Email","Email Status","Practice","City","State","Phone Type","Status","Personal Angle","Address","Google Maps","Priority","Headcount Source","Contact Source","Strict Eligible","Phone Status"];
+      const headers=["Phone","Firm","Attorneys","Email","Email Status","Practice","City","State","Phone Type","Status","Personal Angle","Address","Google Maps","Priority","Headcount Source","Contact Source","Eligible","Phone Status"];
       const values=[headers,...leads.map(x=>x.row)];
       const endRow=Math.max(2,values.length),rowCount=Math.max(10,endRow+1);
       await request(`/values/${encodeURIComponent(`'${tabName}'!A1:R${Math.max(5000,endRow)}`)}:clear`,{method:"POST",body:{}});
@@ -517,8 +519,8 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       const archive=await appendLeadArchive(leads);
       await writeMetricsSnapshot(metrics);
       console.log(JSON.stringify({
-        event:"law_sheet_sync",rows:leads.length,strictEligibleRows:emailCandidates.length,
-        strictEligible:metrics.strictEligible,callReady:metrics.callReady,verifiedEmails:metrics.verifiedEmails,
+        event:"law_sheet_sync",rows:leads.length,emailReadyRows:emailCandidates.length,
+        eligible:metrics.eligible,emailReady:metrics.emailReady,verifiedEmails:metrics.verifiedEmails,
         pendingSizeReady:metrics.pendingSizeReady,headcountTotal:metrics.headcountTotal,
         spreadsheetId,tabName,candidateTitle,archiveTabName,archiveAdded:archive.added,metricsTabName,metricsHistoryTabName
       }));
