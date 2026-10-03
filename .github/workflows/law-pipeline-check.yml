@@ -10,6 +10,7 @@ on:
       - "recover-mcp/law-lane-pressure*.mjs"
       - "recover-mcp/law-directory-runner*.mjs"
       - "recover-mcp/law-http-headers*.mjs"
+      - "recover-mcp/indexed-target-headcount*.mjs"
       - "recover-mcp/headcount-source-policy*.mjs"
       - "recover-mcp/strict-owned-website-gate*.mjs"
       - "recover-mcp/law-eligible-set-align*.mjs"
@@ -74,6 +75,8 @@ jobs:
         run: node recover-mcp/law-directory-runner.node-test.mjs
       - name: Run legal-directory HTTP header regression test
         run: node recover-mcp/law-http-headers.node-test.mjs
+      - name: Run indexed target headcount regression test
+        run: node recover-mcp/indexed-target-headcount.node-test.mjs
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
       - name: Run law targeting regression test
