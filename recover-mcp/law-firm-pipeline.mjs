@@ -6452,7 +6452,8 @@ async function statusLoop(){
       const sizeReadySilenceMs=Math.max(0,Date.now()-LAST_SIZE_READY_CYCLE_AT);
       console.log(JSON.stringify({
         event:"law_firm_pipeline_heartbeat",
-        eligible:callReady,
+        callReadyTarget:callReady,
+        eligible:uniqueEligible,
         emailReady:uniqueEligible,
         qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
         phoneHeadcountPriority,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,
