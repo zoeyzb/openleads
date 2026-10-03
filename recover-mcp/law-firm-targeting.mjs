@@ -110,17 +110,17 @@ export function qualifiesCallReadyNoWebsiteLawLead(lead={}){
 }
 
 export function qualifiesNoWebsiteLawLead(lead={}){
-  // Campaign eligibility: callable law firm + no owned website +
-  // source-verified 2-10 attorney headcount. Email is enrichment, not a gate.
-  return qualifiesCallReadyNoWebsiteLawLead(lead);
-}
-
-export function qualifiesEmailReadyNoWebsiteLawLead(lead={}){
   const contacts=Array.isArray(lead.emails)?lead.emails:[lead.email].filter(Boolean);
   const sourceVerified=lead.email_source_verified===true||lead.law_email_source_verified===true;
+  // Send-ready eligible: callable law firm + no owned website + verified 2-10
+  // attorney headcount + source-verified usable email.
   return qualifiesCallReadyNoWebsiteLawLead(lead) &&
     sourceVerified &&
     contacts.some(isUsableLawEmail);
+}
+
+export function qualifiesEmailReadyNoWebsiteLawLead(lead={}){
+  return qualifiesNoWebsiteLawLead(lead);
 }
 
 export function shouldPauseLawDiscovery({pendingEnrichment=0,limit=1000}={}){
