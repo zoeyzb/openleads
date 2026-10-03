@@ -17,6 +17,7 @@ import { runBoundedDirectoryCandidates } from "./law-directory-runner.mjs";
 import { researchRequestHeaders } from "./law-http-headers.mjs";
 import { trustedIndexedTargetHeadcount } from "./indexed-target-headcount.mjs";
 import { googleResultRecords } from "./google-serp-records.mjs";
+import { isTexasBarProfileUrl } from "./texas-bar-profile.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -322,7 +323,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v17-google-index-records";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v18-txbar-current-profile-url";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -3418,25 +3419,28 @@ async function directOfficialProfileLinks(lead={},people=[]){
     for(const q of queries){
       try{
         await redis.hIncrBy(STATS,"direct_"+state.toLowerCase()+"bar_search_attempt",1);
-        const [bingPage,bingRss,duckPage]=await Promise.allSettled([
+        const [bingPage,bingRss,duckPage,googlePage]=await Promise.allSettled([
           fetchText("https://www.bing.com/search?q="+encodeURIComponent(q),5000),
           fetchText("https://www.bing.com/search?format=rss&q="+encodeURIComponent(q),5000),
-          fetchText("https://html.duckduckgo.com/html/?q="+encodeURIComponent(q),5000)
+          fetchText("https://html.duckduckgo.com/html/?q="+encodeURIComponent(q),5000),
+          fetchText("https://www.google.com/search?num=10&hl=en&q="+encodeURIComponent(q),5000)
         ]);
         const bingHtml=bingPage.status==="fulfilled"?String(bingPage.value?.html||""):"";
         const rssHtml=bingRss.status==="fulfilled"?String(bingRss.value?.html||""):"";
         const duckHtml=duckPage.status==="fulfilled"?String(duckPage.value?.html||""):"";
+        const googleHtml=googlePage.status==="fulfilled"?String(googlePage.value?.html||""):"";
         const links=[...new Set([
           ...bingResultLinks(bingHtml),
           ...bingRssResultLinks(rssHtml),
           ...duckResultLinks(duckHtml),
+          ...googleResultLinks(googleHtml),
           ...markdownResultLinks(bingHtml),
           ...markdownResultLinks(duckHtml)
         ])]
           .filter(u=>{
             const h=hostOf(u);
             if(!h||!(h===host||h.endsWith("."+host)))return false;
-            if(state==="TX")return /Template\.cfm\?[^#]*ContactID=\d+/i.test(u);
+            if(state==="TX")return isTexasBarProfileUrl(u);
             if(state==="IL")return /lawyer/i.test(u);
             if(state==="GA")return /\/member-directory\/?\?[^#]*\bid=[A-Za-z0-9]+/i.test(u);
             if(state==="NC")return /verification|member|search/i.test(u);
