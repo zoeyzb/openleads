@@ -12,6 +12,7 @@ import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml, trustedLawyer
 import { isFirmSpecificDirectoryHeadcountUrl } from "./headcount-source-policy.mjs";
 import { needsStrictOwnedWebsiteAudit } from "./strict-owned-website-gate.mjs";
 import { withOperationDeadline } from "./enrich-deadline.mjs";
+import { shouldThrottleGeneralForSizeReady, sizeReadyFailureDisposition } from "./law-lane-pressure.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -5513,7 +5514,27 @@ async function processEnrichKeys(keys=[],lane="general",concurrency=ENRICH_CONCU
         const retrySizeReady=retryLead.attorney_count_evidence_verified===true&&retryCount>=2&&retryCount<=10&&!/^https?:\/\//i.test(retryWebsite);
         const needsPhoneHeadcount=!/^https?:\/\//i.test(retryWebsite)&&isUsableLawPhone(retryLead.phone)&&retryLead.attorney_count_evidence_verified!==true;
         if(retrySizeReady){
-          await redis.sAdd(SIZE_READY_PENDING_SET,key);
+          const disposition=sizeReadyFailureDisposition(retryLead.email_recovery_attempts,{maxAttempts:4});
+          const timedOutLead={...retryLead,
+            email_recovery_attempts:disposition.nextAttempt,
+            email_recovery_last_at:new Date().toISOString(),
+            law_email_validation:disposition.shouldRetry?"recovery_pending":"rejected",
+            qualified_lead:false
+          };
+          await redis.hSet(LEAD_HASH,key,JSON.stringify(timedOutLead));
+          await Promise.all([
+            redis.sRem(SIZE_READY_PENDING_SET,key),
+            redis.sRem(READY_SET,key),
+            redis.sRem(UNIQUE_ELIGIBLE_SET,key)
+          ]);
+          if(disposition.shouldRetry){
+            await redis.sAdd(SIZE_READY_PENDING_SET,key);
+            await redis.hIncrBy(STATS,"size_ready_timeout_requeued",1);
+          }else{
+            await redis.sAdd(ENRICHED_SET,key);
+            await redis.sRem(REJECTED_SET,key);
+            await redis.hIncrBy(STATS,"size_ready_timeout_exhausted",1);
+          }
         }else if(needsPhoneHeadcount){
           const shape=lawFirmNameShape(retryLead);
           await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
@@ -5556,7 +5577,11 @@ async function enrichBatch(){
   // strict 2-10/no-site email backlog exists, reserve network capacity for that
   // final eligibility gate instead of running 80 headcount workers beside it.
   const sizeReadyBacklog=await redis.sCard(SIZE_READY_PENDING_SET);
-  const strictPressure=sizeReadyBacklog>0;
+  // A tiny strict-email tail runs in its own worker and must not halve the only
+  // worker that can prove headcount for ~18k upstream firms. Reserve capacity
+  // only when the strict lane has enough concurrent work to create real source
+  // pressure.
+  const strictPressure=shouldThrottleGeneralForSizeReady(sizeReadyBacklog);
   const generalBudget=strictPressure?Math.min(64,ENRICH_BATCH):ENRICH_BATCH;
   const generalConcurrency=strictPressure?Math.min(16,ENRICH_CONCURRENCY):ENRICH_CONCURRENCY;
 
