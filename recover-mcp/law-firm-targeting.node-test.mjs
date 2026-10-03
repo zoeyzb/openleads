@@ -49,7 +49,7 @@ assert.equal(qualifiesNoWebsiteLawLead({
   email:"",
   email_source_verified:false,
   phone:"3125551212"
-}),false,"send-ready eligibility also requires a source-verified usable email");
+}),true,"eligible means callable + no owned website + verified 2-10; email is bonus");
 assert.equal(qualifiesEmailReadyNoWebsiteLawLead(qualifiedBase),true);
 assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,emails:[],email:""}),false);
 assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",website:"https://example.com"}),false);
