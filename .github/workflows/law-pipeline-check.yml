@@ -6,6 +6,7 @@ on:
     paths:
       - "recover-mcp/law-firm-pipeline.mjs"
       - "recover-mcp/lawyercom-firm-size*.mjs"
+      - "recover-mcp/enrich-deadline*.mjs"
       - "recover-mcp/headcount-source-policy*.mjs"
       - "recover-mcp/strict-owned-website-gate*.mjs"
       - "recover-mcp/law-eligible-set-align*.mjs"
@@ -62,6 +63,8 @@ jobs:
         run: node recover-mcp/headcount-source-policy.node-test.mjs
       - name: Run strict owned-website gate regression test
         run: node recover-mcp/strict-owned-website-gate.node-test.mjs
+      - name: Run enrichment deadline regression test
+        run: node recover-mcp/enrich-deadline.node-test.mjs
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
       - name: Run law sheet metrics regression test

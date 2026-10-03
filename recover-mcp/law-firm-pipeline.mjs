@@ -11,6 +11,7 @@ import { alignEligibleToReady } from "./law-eligible-set-align.mjs";
 import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml } from "./lawyercom-firm-size.mjs";
 import { isFirmSpecificDirectoryHeadcountUrl } from "./headcount-source-policy.mjs";
 import { needsStrictOwnedWebsiteAudit } from "./strict-owned-website-gate.mjs";
+import { withOperationDeadline } from "./enrich-deadline.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -26,8 +27,9 @@ const TARGET_TOTAL=Math.max(100,Number(process.env.LAW_FIRM_TARGET_TOTAL||25000)
 const MAX_CITIES=Math.max(50,Number(process.env.LAW_FIRM_MAX_CITIES||1200));
 const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_HIGH_WATER||24)));
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
-const ENRICH_BATCH=Math.max(1,Math.min(256,Number(process.env.LAW_FIRM_ENRICH_BATCH||96)));
-const ENRICH_CONCURRENCY=Math.max(1,Math.min(80,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||32)));
+const ENRICH_BATCH=Math.max(1,Math.min(96,Number(process.env.LAW_FIRM_ENRICH_BATCH||96)));
+const ENRICH_CONCURRENCY=Math.max(1,Math.min(32,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||32)));
+const ENRICH_LEAD_TIMEOUT_MS=Math.max(30000,Math.min(120000,Number(process.env.LAW_FIRM_ENRICH_LEAD_TIMEOUT_MS||90000)));
 const SIZE_READY_EMAIL_BATCH=Math.max(4,Math.min(96,Number(process.env.LAW_SIZE_READY_EMAIL_BATCH||48)));
 const SIZE_READY_EMAIL_CONCURRENCY=Math.max(2,Math.min(48,Number(process.env.LAW_SIZE_READY_EMAIL_CONCURRENCY||24)));
 const EMAIL_METHOD_VERSION="email-v67-recovery-diversity-free-mail";
@@ -5483,7 +5485,7 @@ async function processEnrichKeys(keys=[],lane="general",concurrency=ENRICH_CONCU
         const raw=await redis.hGet(LEAD_HASH,key);
         if(!raw)continue;
         let lead;try{lead=JSON.parse(raw)||{};}catch{continue;}
-        const result=await enrichLead(key,lead);
+        const result=await withOperationDeadline(enrichLead(key,lead),ENRICH_LEAD_TIMEOUT_MS,"law-enrich:"+key);
         const finalRaw=await redis.hGet(LEAD_HASH,key);
         let finalLead={};try{finalLead=finalRaw?JSON.parse(finalRaw):{};}catch{}
         const retryPending=String(finalLead.law_email_validation||"")==="recovery_pending";
