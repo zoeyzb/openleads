@@ -44,13 +44,13 @@ assert.equal(qualifiesNoWebsiteLawLead({
 }),true,"eligible means callable + no owned website + verified 2-10; email is bonus");
 assert.equal(qualifiesEmailReadyNoWebsiteLawLead(qualifiedBase),true);
 assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,emails:[],email:""}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,website:"https://example.com"}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,emails:[]}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,practice_keys:[]}),true);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:1}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:11}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,email_source_verified:false}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_evidence_verified:false}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",website:"https://example.com"}),false);
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",emails:[],email:""}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",practice_keys:[]}),true);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",attorney_count_estimate:1}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",attorney_count_estimate:11}),false);
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",email_source_verified:false}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",attorney_count_evidence_verified:false}),false);
 
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:1500,limit:1000}),true);
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:999,limit:1000}),false);
@@ -78,7 +78,8 @@ assert.equal(isUsableLawEmail("your@email.com"),false);
 assert.equal(isUsableLawEmail("flast@therogerslawgroup.com"),false);
 assert.equal(isUsableLawEmail("info@thesunfirm.complease"),false);
 
-assert.equal(qualifiesNoWebsiteLawLead({
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead({
   ...qualifiedBase,
+  phone:"3125551212",
   emails:["error-lite+9c39@duckduckgo.com"]
 }),false);
