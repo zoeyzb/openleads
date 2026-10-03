@@ -4584,6 +4584,7 @@ async function enrichLead(key,lead){
   else await redis.sRem(EMAIL_CANDIDATE_SET,key);
   const qualified=qualifiesEmailReadyNoWebsiteLawLead({
     website:effectiveWebsite,
+    phone:lead.phone,
     emails,
     practice_keys:practiceKeys,
     attorney_count_estimate:attorneyCount,
@@ -4635,7 +4636,11 @@ async function enrichLead(key,lead){
     lead_type:practices.join(" + "),personalization_fact:p.fact,personalization_source:p.source,
     personalization_quality:p.quality,website_opportunity:"website_build",website_audit:null,primary_pain_point:painPoint,
     target_area:String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"").trim(),
-    email_angle:emailAngle,lead_priority_score:priority,qualified_lead:qualified,call_ready_lead:callReady,
+    email_angle:emailAngle,lead_priority_score:priority,
+    eligible_lead:callReady,
+    email_ready_lead:qualified,
+    qualified_lead:qualified,
+    call_ready_lead:callReady,
     law_email_enrich_version:EMAIL_METHOD_VERSION,
     size_ready_email_method_version:(attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10&&!effectiveWebsite)?SIZE_READY_EMAIL_METHOD_VERSION:String(lead.size_ready_email_method_version||""),
     law_email_method:emailMethod,law_email_source:source||"",
@@ -5199,6 +5204,7 @@ async function bootstrapExistingQualified(){
 
       const qualifies=qualifiesEmailReadyNoWebsiteLawLead({
         website:effectiveWebsite,
+        phone:lead.phone,
         emails,
         practice_keys:practiceKeys,
         attorney_count_estimate:attorneyCount,
@@ -6420,7 +6426,10 @@ async function statusLoop(){
       const enrichSilenceMs=Math.max(0,Date.now()-LAST_ENRICH_CYCLE_AT);
       const sizeReadySilenceMs=Math.max(0,Date.now()-LAST_SIZE_READY_CYCLE_AT);
       console.log(JSON.stringify({
-        event:"law_firm_pipeline_heartbeat",qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
+        event:"law_firm_pipeline_heartbeat",
+        eligible:callReady,
+        emailReady:uniqueEligible,
+        qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
         phoneHeadcountPriority,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,
         lastEnrichCycleMs:LAST_ENRICH_CYCLE_MS,enrichSilenceMs,
         lastSizeReadyCycleMs:LAST_SIZE_READY_CYCLE_MS,sizeReadySilenceMs,
