@@ -12,6 +12,7 @@ on:
       - "recover-mcp/law-http-headers*.mjs"
       - "recover-mcp/indexed-target-headcount*.mjs"
       - "recover-mcp/google-serp-records*.mjs"
+      - "recover-mcp/texas-bar-profile*.mjs"
       - "recover-mcp/headcount-source-policy*.mjs"
       - "recover-mcp/strict-owned-website-gate*.mjs"
       - "recover-mcp/law-eligible-set-align*.mjs"
@@ -80,6 +81,8 @@ jobs:
         run: node recover-mcp/indexed-target-headcount.node-test.mjs
       - name: Run Google SERP record regression test
         run: node recover-mcp/google-serp-records.node-test.mjs
+      - name: Run Texas Bar profile URL regression test
+        run: node recover-mcp/texas-bar-profile.node-test.mjs
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
       - name: Run law targeting regression test
