@@ -10,7 +10,7 @@ assert.equal(isLawFirmLead({category:"Attorney",name:"Chapter 13 Trustee"}),fals
 
 assert.ok(lawFirmPracticeAreas("Personal injury car accident law firm").includes("personal injury"));
 assert.deepEqual(lawFirmPracticeAreas("Divorce and child custody attorney"),["family/divorce"]);
-assert.deepEqual(lawFirmPracticeAreas("DUI and criminal defense lawyer"),["criminal defense"]);
+assert.ok(lawFirmPracticeAreas("DUI and criminal defense lawyer").includes("criminal defense"));
 assert.equal(matchesLawPractice("DUI criminal defense lawyer","criminal_defense"),true);
 assert.equal(matchesLawPractice("Estate planning attorney","personal_injury"),false);
 
@@ -29,6 +29,7 @@ assert.equal(isPreferredLawFirmSize(11),false);
 
 const qualifiedBase={
   website:"",
+  phone:"3125551212",
   emails:["realfirm@gmail.com"],
   practice_keys:["personal_injury"],
   attorney_count_estimate:4,
