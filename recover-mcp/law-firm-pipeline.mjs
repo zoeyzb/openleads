@@ -5981,7 +5981,7 @@ async function seedLawyersComDirectory(cities=[]){
       city:String(area.city||""),state:String(area.state||""),
       pages:pages.length,
       usable:pages.filter(p=>!p?.error&&p?.html).length,
-      vias:pages.map(p=>String(p?.via||p?.error?"error":"")).filter(Boolean)
+      vias:pages.map(p=>String(p?.via||(p?.error?"error":""))).filter(Boolean)
     }));
 
     // Productive cities get a deeper pass immediately. This concentrates
