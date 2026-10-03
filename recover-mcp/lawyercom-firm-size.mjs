@@ -59,3 +59,16 @@ export function targetScopedLawyerComFirmSize(html=""){
   if(/\b(?:firm|office)\s+size\s*:?\s*(?:solo|sole\s+practi(?:tioner|oner))\b/i.test(plain))return 1;
   return 0;
 }
+
+
+/**
+ * Lawyer.com final headcount policy.
+ *
+ * Lawyer.com "Lawyers" sections can contain unrelated or stale profile cards.
+ * Only explicit target-firm size language is accepted as final headcount
+ * evidence. Roster/profile links may still be used as research hints for email
+ * discovery, but they must not manufacture a numeric firm size.
+ */
+export function trustedLawyerComHeadcount(html=""){
+  return targetScopedLawyerComFirmSize(html);
+}
