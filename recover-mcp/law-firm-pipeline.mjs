@@ -13,6 +13,7 @@ import { isFirmSpecificDirectoryHeadcountUrl } from "./headcount-source-policy.m
 import { needsStrictOwnedWebsiteAudit } from "./strict-owned-website-gate.mjs";
 import { withOperationDeadline } from "./enrich-deadline.mjs";
 import { shouldThrottleGeneralForSizeReady, sizeReadyFailureDisposition } from "./law-lane-pressure.mjs";
+import { runBoundedDirectoryCandidates } from "./law-directory-runner.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -339,6 +340,8 @@ const DIRECTORY_DISCOVERY_ENABLED=String(process.env.LAW_DIRECTORY_DISCOVERY_ENA
 const DIRECTORY_DISCOVERY_BATCH=Math.max(1,Math.min(8,Number(process.env.LAW_DIRECTORY_DISCOVERY_BATCH||6)));
 const DIRECTORY_DISCOVERY_PAGES=Math.max(1,Math.min(4,Number(process.env.LAW_DIRECTORY_DISCOVERY_PAGES||2)));
 const DIRECTORY_DISCOVERY_MAX_PAGES=Math.max(DIRECTORY_DISCOVERY_PAGES,Math.min(6,Number(process.env.LAW_DIRECTORY_DISCOVERY_MAX_PAGES||4)));
+const DIRECTORY_VERIFY_CONCURRENCY=Math.max(2,Math.min(12,Number(process.env.LAW_DIRECTORY_VERIFY_CONCURRENCY||6)));
+const DIRECTORY_VERIFY_TIMEOUT_MS=Math.max(15000,Math.min(60000,Number(process.env.LAW_DIRECTORY_VERIFY_TIMEOUT_MS||45000)));
 // v3 restarts source-first directory coverage after the prior v2 frontier was
 // exhausted. This lane is the fastest way to acquire leads that are already
 // explicitly published as 2-10 attorneys instead of proving size from raw Maps
@@ -6054,14 +6057,36 @@ async function seedLawyersComDirectory(cities=[]){
     const unique=[...byPhone.values()];
     candidatesFound+=unique.length;
 
-    const checks=await Promise.allSettled(unique.slice(0,40).map(verifyDirectoryCandidate));
+    console.log(JSON.stringify({
+      event:"law_directory_seed_city_candidates",
+      city:String(area.city||""),state:String(area.state||""),
+      candidates:unique.length,verifyLimit:Math.min(40,unique.length),
+      verifyConcurrency:DIRECTORY_VERIFY_CONCURRENCY,
+      verifyTimeoutMs:DIRECTORY_VERIFY_TIMEOUT_MS
+    }));
+    const checks=await runBoundedDirectoryCandidates(
+      unique.slice(0,40),
+      candidate=>verifyDirectoryCandidate(candidate),
+      {concurrency:DIRECTORY_VERIFY_CONCURRENCY,timeoutMs:DIRECTORY_VERIFY_TIMEOUT_MS}
+    );
+    let cityVerified=0,cityAdded=0,cityTimedOut=0;
     for(const check of checks){
-      if(check.status!=="fulfilled"||!check.value)continue;
-      verified++;
+      if(check.status==="rejected"){
+        if(/timed out/i.test(String(check.reason?.message||check.reason||"")))cityTimedOut++;
+        continue;
+      }
+      if(!check.value)continue;
+      verified++;cityVerified++;
       if(check.value.rejectWebsite)ownedWebsite++;
       const result=await persistDirectorySeed(check.value);
-      if(result.added)added++;
+      if(result.added){added++;cityAdded++;}
     }
+    console.log(JSON.stringify({
+      event:"law_directory_seed_city_complete",
+      city:String(area.city||""),state:String(area.state||""),
+      candidates:unique.length,verified:cityVerified,added:cityAdded,
+      timedOut:cityTimedOut,fetchErrors,directPages,jinaPages,scraplingPages
+    }));
   }
 
   await redis.set(DIRECTORY_CURSOR_KEY,String(cursor));
