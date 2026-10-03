@@ -8,7 +8,7 @@ import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PR
 import { buildLawEmailSearchQueries } from "./law-email-search-plan.mjs";
 import { decodePublishedRot13Emails } from "./published-email-obfuscation.mjs";
 import { alignEligibleToReady } from "./law-eligible-set-align.mjs";
-import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml } from "./lawyercom-firm-size.mjs";
+import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml, trustedLawyerComHeadcount } from "./lawyercom-firm-size.mjs";
 import { isFirmSpecificDirectoryHeadcountUrl } from "./headcount-source-policy.mjs";
 import { needsStrictOwnedWebsiteAudit } from "./strict-owned-website-gate.mjs";
 import { withOperationDeadline } from "./enrich-deadline.mjs";
@@ -317,7 +317,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v13-firm-specific-directory-source";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v14-lawyercom-explicit-size-only";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -1868,10 +1868,12 @@ async function directDirectorySizeEvidence(lead={},key=""){
       const isLawyerCom=/(^|\.)lawyer\.com$/i.test(host);
       const scopedHtml=isLawyerCom?targetScopedLawyerComHtml(page.html):page.html;
       const explicitCount=firmIdentityMatch
-        ?(isLawyerCom?targetScopedLawyerComFirmSize(scopedHtml):officialFirmSizeEstimate(text))
+        ?(isLawyerCom?trustedLawyerComHeadcount(scopedHtml):officialFirmSizeEstimate(text))
         :0;
-      const firmRosterCount=firmIdentityMatch
-        ?(isLawyerCom?strictLawyerComRosterCount(scopedHtml,source,lead):strictFirmPageRosterCount(page.html,source,lead))
+      // Lawyer.com roster/profile cards are research hints only. They have
+      // repeatedly included unrelated/stale profiles and cannot prove firm size.
+      const firmRosterCount=firmIdentityMatch&&!isLawyerCom
+        ?strictFirmPageRosterCount(page.html,source,lead)
         :0;
       const count=explicitCount>0?explicitCount:firmRosterCount;
       let website="";
@@ -2172,9 +2174,8 @@ async function directLawyerComSizeEvidence(lead={},key=""){
     // own "Firm Size" and attorney links. Scope both numerical and roster
     // evidence to the target firm's primary section before those modules.
     const targetHtml=targetScopedLawyerComHtml(page.html);
-    const explicitCount=targetScopedLawyerComFirmSize(targetHtml);
-    const rosterCount=explicitCount>0?0:strictLawyerComRosterCount(targetHtml,source,lead);
-    const count=explicitCount>0?explicitCount:rosterCount;
+    const explicitCount=trustedLawyerComHeadcount(targetHtml);
+    const count=explicitCount;
     if(count>0){
       // A third-party "Firm Size: 1" conflicts with an explicit multi-attorney
       // business name often enough that it must not terminate strict research.
@@ -3512,7 +3513,7 @@ function isPublishedHeadcountSource(source="",lead={}){
   }catch{return false;}
 }
 
-const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v8-firm-specific-directory-source";
+const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v9-lawyercom-explicit-size-only";
 
 function headcountSourceNeedsV2Identity(source=""){
   const host=hostOf(source);
@@ -4796,9 +4797,8 @@ async function lawyerComCandidateEvidence(lead={}){
         Boolean(phone&&String(text).replace(/\D/g,"").includes(phone));
       if(!identity)continue;
       const targetHtml=targetScopedLawyerComHtml(page.html);
-      const explicitCount=targetScopedLawyerComFirmSize(targetHtml);
-      const rosterCount=explicitCount>0?0:strictLawyerComRosterCount(targetHtml,page.final_url||url,lead);
-      const count=explicitCount>0?explicitCount:rosterCount;
+      const explicitCount=trustedLawyerComHeadcount(targetHtml);
+      const count=explicitCount;
       const website=outboundFirmWebsiteFromDirectory(page.html,lead);
       return {count,source:page.final_url||url,website};
     }catch{}
