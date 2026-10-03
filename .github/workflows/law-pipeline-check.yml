@@ -7,6 +7,7 @@ on:
       - "recover-mcp/law-firm-pipeline.mjs"
       - "recover-mcp/lawyercom-firm-size*.mjs"
       - "recover-mcp/enrich-deadline*.mjs"
+      - "recover-mcp/law-lane-pressure*.mjs"
       - "recover-mcp/headcount-source-policy*.mjs"
       - "recover-mcp/strict-owned-website-gate*.mjs"
       - "recover-mcp/law-eligible-set-align*.mjs"
@@ -65,6 +66,8 @@ jobs:
         run: node recover-mcp/strict-owned-website-gate.node-test.mjs
       - name: Run enrichment deadline regression test
         run: node recover-mcp/enrich-deadline.node-test.mjs
+      - name: Run law lane-pressure regression test
+        run: node recover-mcp/law-lane-pressure.node-test.mjs
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
       - name: Run law sheet metrics regression test
