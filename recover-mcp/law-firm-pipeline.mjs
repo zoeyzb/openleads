@@ -14,6 +14,7 @@ import { needsStrictOwnedWebsiteAudit } from "./strict-owned-website-gate.mjs";
 import { withOperationDeadline } from "./enrich-deadline.mjs";
 import { shouldThrottleGeneralForSizeReady, sizeReadyFailureDisposition } from "./law-lane-pressure.mjs";
 import { runBoundedDirectoryCandidates } from "./law-directory-runner.mjs";
+import { researchRequestHeaders } from "./law-http-headers.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -564,16 +565,7 @@ async function fetchText(url,timeout=FETCH_TIMEOUT_MS){
   const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),timeout);
   const started=Date.now();
   try{
-    const isCalBar=/https?:\/\/apps\.calbar\.ca\.gov\/attorney\//i.test(String(url||""));
-    const isSearchEngine=/https?:\/\/(?:www\.)?(?:google|bing)\.com\//i.test(String(url||""))||/https?:\/\/html\.duckduckgo\.com\//i.test(String(url||""));
-    const requestHeaders=(isCalBar||isSearchEngine)?{
-      "user-agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
-      "accept":"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-      "accept-language":"en-US,en;q=0.9",
-      "cache-control":"no-cache",
-      "pragma":"no-cache",
-      "upgrade-insecure-requests":"1"
-    }:{"user-agent":"Mozilla/5.0 (compatible; RecoverResearch/1.0)","accept":"text/html,application/xhtml+xml"};
+    const requestHeaders=researchRequestHeaders(url);
     const r=await fetch(url,{signal:ctl.signal,redirect:"follow",headers:requestHeaders});
     if(!r.ok)throw new Error("http "+r.status);
     const type=String(r.headers.get("content-type")||"");
@@ -5951,6 +5943,10 @@ async function seedLawyersComDirectory(cities=[]){
       break;
     }
     citiesDone++;
+    console.log(JSON.stringify({
+      event:"law_directory_seed_city_start",
+      city:String(area.city||""),state:String(area.state||""),cursor
+    }));
 
     const pageTasks=[];
     for(let page=1;page<=DIRECTORY_DISCOVERY_PAGES;page++){
@@ -5980,6 +5976,13 @@ async function seedLawyersComDirectory(cities=[]){
       })());
     }
     let pages=await Promise.all(pageTasks);
+    console.log(JSON.stringify({
+      event:"law_directory_seed_city_pages",
+      city:String(area.city||""),state:String(area.state||""),
+      pages:pages.length,
+      usable:pages.filter(p=>!p?.error&&p?.html).length,
+      vias:pages.map(p=>String(p?.via||(p?.error?"error":""))).filter(Boolean)
+    }));
 
     // Productive cities get a deeper pass immediately. This concentrates
     // source-first acquisition where the directory is already proving 2-10
