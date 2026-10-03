@@ -47,10 +47,26 @@ assert.equal(
 
 assert.equal(
   trustedIndexedTargetHeadcount([
-    {url:"https://www.lawyer.com/lawyers/chicago/illinois/",text:"Smith & Jones Law PLLC Chicago IL Firm Size: 4 Call 312-555-1212"}
+    {url:"https://www.lawyers.com/all-legal-issues/chicago/illinois/law-firms/",text:"Smith & Jones Law PLLC Chicago IL Law Office with 4 lawyers Call 312-555-1212"}
+  ],lead)?.count,
+  4,
+  "exact firm + exact phone + published 2-10 range on a trusted Lawyers.com listing may prove target membership"
+);
+
+assert.equal(
+  trustedIndexedTargetHeadcount([
+    {url:"https://www.lawyers.com/all-legal-issues/chicago/illinois/law-firms/",text:"Smith & Jones Law PLLC Chicago IL Law Office with 4 lawyers"}
   ],lead),
   null,
-  "broad directory pages are not firm-specific evidence"
+  "broad Lawyers.com listing without exact phone must remain only a discovery hint"
+);
+
+assert.equal(
+  trustedIndexedTargetHeadcount([
+    {url:"https://www.lawyers.com/all-legal-issues/chicago/illinois/law-firms/",text:"Smith & Jones Law PLLC Chicago IL Law Office with 1 lawyer Call 312-555-1212"}
+  ],lead),
+  null,
+  "broad listing evidence must never promote an out-of-range firm"
 );
 
 console.log("indexed target headcount tests passed");
