@@ -6,10 +6,14 @@ const seen=[];
 const items=Array.from({length:12},(_,i)=>i+1);
 const out=await runBoundedDirectoryCandidates(
   items,
-  async value=>{
+  async (value,{signal})=>{
     active++; maxActive=Math.max(maxActive,active);
     try{
-      if(value===5)await new Promise(()=>{});
+      if(value===5){
+        await new Promise((resolve,reject)=>{
+          signal.addEventListener("abort",()=>reject(new Error("candidate aborted")),{once:true});
+        });
+      }
       await new Promise(r=>setTimeout(r,8));
       seen.push(value);
       return value*2;
