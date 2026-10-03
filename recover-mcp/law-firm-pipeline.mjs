@@ -16,6 +16,7 @@ import { shouldThrottleGeneralForSizeReady, sizeReadyFailureDisposition } from "
 import { runBoundedDirectoryCandidates } from "./law-directory-runner.mjs";
 import { researchRequestHeaders } from "./law-http-headers.mjs";
 import { trustedIndexedTargetHeadcount } from "./indexed-target-headcount.mjs";
+import { googleResultRecords } from "./google-serp-records.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -321,7 +322,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v16-indexed-listing-exact-phone";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v17-google-index-records";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -1797,7 +1798,12 @@ async function directDirectorySizeEvidence(lead={},key=""){
         ...bingResultLinks(html),...bingRssResultLinks(rss),
         ...duckResultLinks(duck),...markdownResultLinks(duck),...googleResultLinks(google)
       ])],
-      records:[...bingResultRecords(html),...bingRssResultRecords(rss),...duckResultRecords(duck)]
+      records:[
+        ...bingResultRecords(html),
+        ...bingRssResultRecords(rss),
+        ...duckResultRecords(duck),
+        ...googleResultRecords(google)
+      ]
     };
   }));
 
