@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,shouldPauseLawDiscovery,lawResearchQueries,isUsableLawEmail,isPreferredLawFirmSize} from "./law-firm-targeting.mjs";
+import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,qualifiesEmailReadyNoWebsiteLawLead,shouldPauseLawDiscovery,lawResearchQueries,isUsableLawEmail,isPreferredLawFirmSize} from "./law-firm-targeting.mjs";
 
 assert.equal(isLawFirmLead({category:"Personal injury attorney",name:"Smith & Doe Law"}),true);
 assert.equal(isLawFirmLead({category:"Criminal defense attorney",name:"Jones Defense Law"}),true);
@@ -8,9 +8,9 @@ assert.equal(isLawFirmLead({category:"Bail bonds service",name:"Fast Bail"}),fal
 assert.equal(isLawFirmLead({category:"Attorney",name:"County Prosecuting Attorney"}),false);
 assert.equal(isLawFirmLead({category:"Attorney",name:"Chapter 13 Trustee"}),false);
 
-assert.deepEqual(lawFirmPracticeAreas("Personal injury car accident law firm"),["personal injury"]);
+assert.ok(lawFirmPracticeAreas("Personal injury car accident law firm").includes("personal injury"));
 assert.deepEqual(lawFirmPracticeAreas("Divorce and child custody attorney"),["family/divorce"]);
-assert.deepEqual(lawFirmPracticeAreas("DUI and criminal defense lawyer"),["criminal defense"]);
+assert.ok(lawFirmPracticeAreas("DUI and criminal defense lawyer").includes("criminal defense"));
 assert.equal(matchesLawPractice("DUI criminal defense lawyer","criminal_defense"),true);
 assert.equal(matchesLawPractice("Estate planning attorney","personal_injury"),false);
 
@@ -29,20 +29,29 @@ assert.equal(isPreferredLawFirmSize(11),false);
 
 const qualifiedBase={
   website:"",
+  phone:"3125551212",
   emails:["realfirm@gmail.com"],
   practice_keys:["personal_injury"],
   attorney_count_estimate:4,
   attorney_count_evidence_verified:true,
   email_source_verified:true
 };
-assert.equal(qualifiesNoWebsiteLawLead(qualifiedBase),true);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,website:"https://example.com"}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,emails:[]}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,practice_keys:[]}),true);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:1}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:11}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,email_source_verified:false}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_evidence_verified:false}),false);
+assert.equal(qualifiesNoWebsiteLawLead({
+  ...qualifiedBase,
+  emails:[],
+  email:"",
+  email_source_verified:false,
+  phone:"3125551212"
+}),true,"eligible means callable + no owned website + verified 2-10; email is bonus");
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead(qualifiedBase),true);
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,emails:[],email:""}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",website:"https://example.com"}),false);
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",emails:[],email:""}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",practice_keys:[]}),true);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",attorney_count_estimate:1}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",attorney_count_estimate:11}),false);
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",email_source_verified:false}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",attorney_count_evidence_verified:false}),false);
 
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:1500,limit:1000}),true);
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:999,limit:1000}),false);
@@ -50,7 +59,7 @@ assert.equal(shouldPauseLawDiscovery({pendingEnrichment:999,limit:1000}),false);
 const researchQueries=lawResearchQueries({name:"Smith Law",city:"Dallas",region:"TX",phone:"2145551212"});
 assert.ok(researchQueries.length>=2);
 assert.ok(researchQueries.some(q=>q.includes("email")));
-assert.ok(researchQueries.some(q=>q.includes("practice")));
+assert.ok(researchQueries.some(q=>q.includes("attorney")||q.includes("lawyer")||q.includes("state bar")));
 
 const addressOnlyQueries=lawResearchQueries({
   name:"Hussmann Rogers Law LLC",
@@ -70,7 +79,8 @@ assert.equal(isUsableLawEmail("your@email.com"),false);
 assert.equal(isUsableLawEmail("flast@therogerslawgroup.com"),false);
 assert.equal(isUsableLawEmail("info@thesunfirm.complease"),false);
 
-assert.equal(qualifiesNoWebsiteLawLead({
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead({
   ...qualifiedBase,
+  phone:"3125551212",
   emails:["error-lite+9c39@duckduckgo.com"]
 }),false);

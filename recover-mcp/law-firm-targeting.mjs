@@ -110,16 +110,15 @@ export function qualifiesCallReadyNoWebsiteLawLead(lead={}){
 }
 
 export function qualifiesNoWebsiteLawLead(lead={}){
-  const website=String(lead.website||"").trim();
+  // Campaign eligibility: callable law firm + no owned website +
+  // source-verified 2-10 attorney headcount. Email is enrichment, not a gate.
+  return qualifiesCallReadyNoWebsiteLawLead(lead);
+}
+
+export function qualifiesEmailReadyNoWebsiteLawLead(lead={}){
   const contacts=Array.isArray(lead.emails)?lead.emails:[lead.email].filter(Boolean);
-  const sourceVerified=lead.email_source_verified===true;
-  const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
-  const sizeEvidenceVerified=lead.attorney_count_evidence_verified===true;
-  // Campaign invariant: send-ready means law firm + no owned website +
-  // explicitly evidenced 2-10 attorneys + source-backed usable/contactable email.
-  return !/^https?:\/\//i.test(website) &&
-    sizeEvidenceVerified &&
-    isPreferredLawFirmSize(attorneyCount) &&
+  const sourceVerified=lead.email_source_verified===true||lead.law_email_source_verified===true;
+  return qualifiesCallReadyNoWebsiteLawLead(lead) &&
     sourceVerified &&
     contacts.some(isUsableLawEmail);
 }
