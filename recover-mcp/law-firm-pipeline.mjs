@@ -4,7 +4,7 @@ import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { resolveMx } from "node:dns/promises";
 import { orchestrate as enrichProfessionalEmail } from "email-enrich";
-import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
+import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesEmailReadyNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
 import { buildLawEmailSearchQueries } from "./law-email-search-plan.mjs";
 import { decodePublishedRot13Emails } from "./published-email-obfuscation.mjs";
 import { alignEligibleToReady } from "./law-eligible-set-align.mjs";
@@ -4582,7 +4582,7 @@ async function enrichLead(key,lead){
   const emailCandidate=!effectiveWebsite&&emailSourceVerified&&emails.length>0&&(!attorneyCountVerified||(attorneyCount>=2&&attorneyCount<=10));
   if(emailCandidate)await redis.sAdd(EMAIL_CANDIDATE_SET,key);
   else await redis.sRem(EMAIL_CANDIDATE_SET,key);
-  const qualified=qualifiesNoWebsiteLawLead({
+  const qualified=qualifiesEmailReadyNoWebsiteLawLead({
     website:effectiveWebsite,
     emails,
     practice_keys:practiceKeys,
@@ -5197,7 +5197,7 @@ async function bootstrapExistingQualified(){
         requalifyQueued++;
       }
 
-      const qualifies=qualifiesNoWebsiteLawLead({
+      const qualifies=qualifiesEmailReadyNoWebsiteLawLead({
         website:effectiveWebsite,
         emails,
         practice_keys:practiceKeys,
