@@ -15,6 +15,7 @@ import { withOperationDeadline } from "./enrich-deadline.mjs";
 import { shouldThrottleGeneralForSizeReady, sizeReadyFailureDisposition } from "./law-lane-pressure.mjs";
 import { runBoundedDirectoryCandidates } from "./law-directory-runner.mjs";
 import { researchRequestHeaders } from "./law-http-headers.mjs";
+import { trustedIndexedTargetHeadcount } from "./indexed-target-headcount.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 
@@ -320,7 +321,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v14-lawyercom-explicit-size-only";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v15-positive-index-cross-source";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -1817,6 +1818,33 @@ async function directDirectorySizeEvidence(lead={},key=""){
       event:"law_indexed_directory_hint_ignored",key,name,count:indexedEvidence.count,
       source:indexedEvidence.source
     }));
+  }
+
+  // Direct fetches for public legal directories are frequently blocked from
+  // Railway even when search engines expose the directory's explicit Firm Size
+  // field. Recover ONLY positive 2-10 evidence under a much stricter policy:
+  // exact phone on one firm-specific trusted result, or the same count from two
+  // independent trusted directory hosts. Never use indexed snippets for solo
+  // or oversize classification.
+  const indexedTarget=trustedIndexedTargetHeadcount(indexedRecords,{
+    ...lead,
+    city:city||lead.city||lead.locality||"",
+    region:state||lead.region||lead.state||lead.state_code||""
+  });
+  if(indexedTarget){
+    await redis.hIncrBy(STATS,"indexed_target_headcount_hit",1);
+    console.log(JSON.stringify({
+      event:"law_indexed_target_headcount_hit",key,name,
+      count:indexedTarget.count,method:indexedTarget.method,
+      source:indexedTarget.source,sources:indexedTarget.sources
+    }));
+    return {
+      count:indexedTarget.count,
+      source:indexedTarget.source,
+      website:"",
+      indexedSources:indexedTarget.sources,
+      indexedMethod:indexedTarget.method
+    };
   }
   if(INDEXED_HEADCOUNT_DIAGNOSTICS<8&&indexedRecords.length){
     INDEXED_HEADCOUNT_DIAGNOSTICS++;
@@ -3509,7 +3537,7 @@ function isPublishedHeadcountSource(source="",lead={}){
   }catch{return false;}
 }
 
-const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v9-lawyercom-explicit-size-only";
+const HEADCOUNT_IDENTITY_VERSION="headcount-identity-v10-positive-index-cross-source";
 
 function headcountSourceNeedsV2Identity(source=""){
   const host=hostOf(source);
