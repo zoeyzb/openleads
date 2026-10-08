@@ -49,12 +49,12 @@ jobs:
           PY
       - name: Direct directory discovery without search-engine dependency
         run: |
-          python3 -m law_local.source_discovery --db state/law-leads.sqlite3 --seconds 90 --max-pages 40
+          python3 -m law_local.source_discovery --db state/law-leads.sqlite3 --seconds 140 --max-pages 100
       - name: Discover fresh published law firm directory profiles
         run: |
           python3 law_local/worker.py --db state/law-leads.sqlite3 discover \
             --states FL,TX,CA,NY,IL,GA,PA,OH,NC,MI \
-            --max-queries 12 --max-pages 40 --seconds 80 --delay 0.8
+            --max-queries 4 --max-pages 20 --seconds 35 --delay 0.8
       - name: Reverify public directory evidence and owned websites
         run: |
           python3 law_local/worker.py --db state/law-leads.sqlite3 run \
