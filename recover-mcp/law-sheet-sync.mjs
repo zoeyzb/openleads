@@ -1,6 +1,8 @@
 import { createSign } from "node:crypto";
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, qualifiesCallReadyNoWebsiteLawLead, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
 import { reconcileExportMetrics } from "./law-sheet-metrics.mjs";
+import { canonicalLawFirmKey } from "./law-firm-identity.mjs";
+import { CALL_READY_WEBSITE_AUDIT_VERSION, callReadyQualificationState } from "./law-call-ready-policy.mjs";
 
 // Law sheet sync deploy rev: strict-live-metrics-v2
 const TOKEN_URL="https://oauth2.googleapis.com/token";
@@ -81,6 +83,7 @@ function normalizeCallStatus(value=""){
 }
 async function collectRows(redis){
   const out=[];
+  const seenFirms=new Set();
   // Phone-first call list: use the durable verified-headcount cohort, then require
   // a usable public phone and no owned website. Email is optional here.
   const readyKeys=await redis.sMembers("recover:law-firm:call-ready:v1");
@@ -92,17 +95,26 @@ async function collectRows(redis){
       let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
       const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
       if(!isLaw||!isLawFirmLead(lead))continue;
-      if(!qualifiesCallReadyNoWebsiteLawLead(lead))continue;
-
       const phone=clean(lead.phone);
-      if(!isUsableLawPhone(phone))continue;
+      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+      const callState=callReadyQualificationState({
+        usablePhone:isUsableLawPhone(phone),
+        attorneyCount,
+        attorneyCountVerified:lead.attorney_count_evidence_verified===true,
+        website:clean(lead.website||lead.website_url),
+        websiteAuditStatus:clean(lead.call_ready_website_audit_status),
+        websiteAuditVersion:clean(lead.call_ready_website_audit_version)
+      },{auditVersion:CALL_READY_WEBSITE_AUDIT_VERSION});
+      if(!callState.callReady)continue;
+      const firmKey=canonicalLawFirmKey(lead);
+      if(!firmKey||seenFirms.has(firmKey))continue;
+      seenFirms.add(firmKey);
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
         .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
       const emailSource=clean(lead.law_email_source||lead.email_source||lead.email_evidence_url);
       const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
       const emailReady=Boolean(emails.length&&sourceVerified&&!sourceIsOwnedEmailDomain(emailSource,emails[0]));
-      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
       const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const practiceKeys=[...new Set([
         ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
@@ -117,14 +129,14 @@ async function collectRows(redis){
       const maps=clean(lead.google_maps_url||lead.maps_url);
       const source=emailReady?emailSource:clean(lead.attorney_count_source||lead.personalization_source||maps);
       const phoneType=clean(lead.phone_type||lead.line_type||lead.phone_line_type)||"Unknown";
-      const eligible=qualifiesCallReadyNoWebsiteLawLead(lead);
-      const emailReadyBonus=Boolean(eligible&&emailReady);
+      const eligible=callState.callReady;
+      const emailReadyBonus=Boolean(emailReady);
       out.push({
         priority,
         emailReady,
         eligible,
         emailReadyBonus,
-        identity:normalizeLawPhone(phone),
+        identity:firmKey,
         row:[
           phone,
           name,
@@ -154,7 +166,8 @@ async function collectRows(redis){
 
 async function collectVerifiedEmailCandidateRows(redis){
   const out=[];
-  const keys=await redis.sMembers("recover:law-firm:unique-eligible:v1");
+  const seenFirms=new Set();
+  const keys=await redis.sMembers("recover:law-firm:call-ready:v1");
   for(let offset=0;offset<keys.length;offset+=250){
     const chunk=keys.slice(offset,offset+250);
     const values=await redis.hmGet("recover:leadstore:qualified",chunk);
@@ -162,15 +175,27 @@ async function collectVerifiedEmailCandidateRows(redis){
       if(!values[i])continue;
       let lead;try{lead=JSON.parse(values[i])||{};}catch{continue;}
       const isLaw=clean(lead.search_profile)==="law-firm"||clean(lead.industry).toUpperCase()==="LAW_FIRM";
-      if(!isLaw||!isLawFirmLead(lead)||!qualifiesCallReadyNoWebsiteLawLead(lead))continue;
+      if(!isLaw||!isLawFirmLead(lead))continue;
+      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+      const callState=callReadyQualificationState({
+        usablePhone:isUsableLawPhone(lead.phone),
+        attorneyCount,
+        attorneyCountVerified:lead.attorney_count_evidence_verified===true,
+        website:clean(lead.website||lead.website_url),
+        websiteAuditStatus:clean(lead.call_ready_website_audit_status),
+        websiteAuditVersion:clean(lead.call_ready_website_audit_version)
+      },{auditVersion:CALL_READY_WEBSITE_AUDIT_VERSION});
+      if(!callState.callReady)continue;
+      const firmKey=canonicalLawFirmKey(lead);
+      if(!firmKey||seenFirms.has(firmKey))continue;
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>clean(x).toLowerCase()).filter(exportableLawEmail)
         .sort((a,b)=>contactEmailRank(a)-contactEmailRank(b)||a.localeCompare(b));
       const emailSource=clean(lead.law_email_source||lead.email_source||lead.email_evidence_url);
       const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
       if(!emails.length||!sourceVerified||sourceIsOwnedEmailDomain(emailSource,emails[0]))continue;
-      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
       if(lead.attorney_count_evidence_verified!==true||attorneyCount<2||attorneyCount>10)continue;
+      seenFirms.add(firmKey);
       const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const practiceKeys=[...new Set([
         ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),
@@ -246,7 +271,8 @@ async function collectWebsiteRefreshRows(redis){
 async function collectMetricsSnapshot(redis){
   const [
     strictEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
-    pendingSizeReady,headcountPriority,headcountGeneral,emailPriority,emailRecoverable
+    pendingSizeReady,headcountPriority,headcountGeneral,emailPriority,emailRecoverable,
+    pendingCallReadyAudit,unresolvedCallable
   ]=await Promise.all([
     redis.sCard("recover:law-firm:unique-eligible:v1"),
     redis.sCard("recover:law-firm:call-ready:v1"),
@@ -257,14 +283,16 @@ async function collectMetricsSnapshot(redis){
     redis.sCard("recover:law-firm:phone-headcount-priority:v1"),
     redis.sCard("recover:law-firm:chicago-priority:v1"),
     redis.sCard("recover:law-firm:enrich-priority:v3"),
-    redis.sCard("recover:law-firm:enrich-recoverable:v1")
+    redis.sCard("recover:law-firm:enrich-recoverable:v1"),
+    redis.sCard("recover:law-firm:call-ready-audit-pending:v1"),
+    redis.sCard("recover:law-firm:unresolved-callable:v1")
   ]);
   return {
     timestamp:new Date().toISOString(),
     strictEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
     pendingSizeReady,headcountPriority,headcountGeneral,
     headcountTotal:headcountPriority+headcountGeneral,
-    emailPriority,emailRecoverable,
+    emailPriority,emailRecoverable,pendingCallReadyAudit,unresolvedCallable,
     strictConversion:callReady>0?strictEligible/callReady:0
   };
 }
@@ -275,8 +303,8 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
   if(!sa){console.error("law_sheet_sync_not_configured");return;}
   let token="",tokenAt=0,running=false,sheetId=null,tabName="Call Ready Leads";
   const archiveTabName="Lead Archive";
-  const metricsTabName="Overview";
-  const metricsHistoryTabName="Metrics History";
+  const metricsTabName="Diagnostics";
+  const strictTabName="Strict Eligible";
 
   async function auth(){
     if(token&&Date.now()-tokenAt<50*60*1000)return token;
@@ -341,7 +369,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
     for(const row of existing.slice(1)){
       const phone=normalizeLawPhone(row?.[0]);
       const firm=clean(row?.[1]).toLowerCase();
-      if(phone||firm)existingKeys.add(phone+"|"+firm);
+      if(phone||firm)existingKeys.add(phone?("phone:"+phone):("firm:"+firm));
     }
     if(!existing.length){
       await request(`/values/${encodeURIComponent(`'${archiveTabName}'!A1:R1`)}?valueInputOption=RAW`,{
@@ -353,7 +381,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       const row=[...(lead.row||[])];
       const phone=normalizeLawPhone(row[0]);
       const firm=clean(row[1]).toLowerCase();
-      const key=phone+"|"+firm;
+      const key=phone?("phone:"+phone):("firm:"+firm);
       if(existingKeys.has(key))continue;
       existingKeys.add(key);
       rows.push(row);
@@ -398,53 +426,46 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
   }
 
   async function writeMetricsSnapshot(snapshot){
-    const metricsSheetId=await ensureAdditionalSheet(metricsTabName,100,8);
-    const historySheetId=await ensureAdditionalSheet(metricsHistoryTabName,50000,12);
-
+    const metricsSheetId=await ensureAdditionalSheet(metricsTabName,40,4);
     const liveValues=[
-      ["Pipeline stage","Count","What it means","What happens next"],
-      ["Eligible leads",snapshot.eligible,"Law firm + no owned website + verified 2–10 attorneys + usable phone","Ready to call"],
-      ["Email-ready bonus",snapshot.emailReady,"Eligible leads that also have a source-verified usable email","Can call + email"],
-      ["Waiting on email",snapshot.pendingSizeReady,"Eligible firms still missing source-verified email","Bonus enrichment lane"],
-      ["Unresolved firm size",snapshot.headcountTotal,"Callable no-site law records still needing verified 2–10 attorney proof","Primary bottleneck"],
-      ["Verified emails",snapshot.verifiedEmails,"Source-verified email evidence across law records","Evidence inventory"],
-      ["Verified headcounts",snapshot.verifiedHeadcounts,"Current-method source-verified attorney counts across law records","Evidence inventory"],
-      ["Target",10000,"Eligible lead goal: callable + no-site + verified 2–10","Grow verified headcount coverage"],
-      ["Remaining",Math.max(0,10000-snapshot.eligible),"Eligible leads still needed to reach target","Pipeline gap"],
-      ["Email-ready rate",snapshot.emailReadyRate,"Email-ready bonus / eligible leads","Diagnostic"],
+      ["Pipeline","Count","Meaning","Action"],
+      ["Call-ready firms",snapshot.eligible,"Canonical firms: usable phone + verified 2-10 attorneys + current no-owned-site audit","Primary calling KPI"],
+      ["Strict eligible",snapshot.emailReady,"Call-ready firms that also have a source-verified usable email","Email bonus subset"],
+      ["Pending website audit",snapshot.pendingCallReadyAudit||0,"Verified 2-10 callable firms waiting for final owned-site verification","Finish these next"],
+      ["Unresolved callable",snapshot.unresolvedCallable||0,"Callable law firms still missing verified 2-10 attorney evidence","Primary research inventory"],
+      ["Headcount work queued",(snapshot.headcountPriority||0)+(snapshot.headcountGeneral||0),"Currently queued phone-first qualification work","Should converge, not recycle"],
       ["Last update",snapshot.timestamp,"Production snapshot","Automatic"]
     ];
-    await request(`/values/${encodeURIComponent(`'${metricsTabName}'!A1:D11`)}?valueInputOption=RAW`,{
-      method:"PUT",body:{range:`'${metricsTabName}'!A1:D11`,majorDimension:"ROWS",values:liveValues}
+    await request(`/values/${encodeURIComponent(`'${metricsTabName}'!A1:D20`)}:clear`,{method:"POST",body:{}});
+    await request(`/values/${encodeURIComponent(`'${metricsTabName}'!A1:D${liveValues.length}`)}?valueInputOption=RAW`,{
+      method:"PUT",body:{range:`'${metricsTabName}'!A1:D${liveValues.length}`,majorDimension:"ROWS",values:liveValues}
     });
-
-    const historyHeaders=["Timestamp UTC","Eligible Leads","Email-Ready Bonus","Verified Emails","Verified Headcounts","Pending Size-Ready Email","Headcount Priority","Headcount General","Headcount Total","Email Priority","Email Recoverable"];
-    await request(`/values/${encodeURIComponent(`'${metricsHistoryTabName}'!A1:K1`)}?valueInputOption=RAW`,{
-      method:"PUT",body:{range:`'${metricsHistoryTabName}'!A1:K1`,majorDimension:"ROWS",values:[historyHeaders]}
-    });
-    const historyRow=[
-      snapshot.timestamp,snapshot.eligible,snapshot.emailReady,snapshot.verifiedEmails,
-      snapshot.verifiedHeadcounts,snapshot.pendingSizeReady,snapshot.headcountPriority,
-      snapshot.headcountGeneral,snapshot.headcountTotal,snapshot.emailPriority,snapshot.emailRecoverable
-    ];
-    await request(`/values/${encodeURIComponent(`'${metricsHistoryTabName}'!A:K`)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,{
-      method:"POST",body:{majorDimension:"ROWS",values:[historyRow]}
-    });
-
-    const lightHeader={red:0.90,green:0.91,blue:0.93};
-    const formatRequests=[
-      {updateSheetProperties:{properties:{sheetId:metricsSheetId,gridProperties:{frozenRowCount:0}},fields:"gridProperties.frozenRowCount"}},
-      {updateSheetProperties:{properties:{sheetId:historySheetId,gridProperties:{frozenRowCount:0}},fields:"gridProperties.frozenRowCount"}},
-      {repeatCell:{range:{sheetId:metricsSheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:4},cell:{userEnteredFormat:{backgroundColor:lightHeader,textFormat:{bold:true}}},fields:"userEnteredFormat(backgroundColor,textFormat.bold)"}},
-      {repeatCell:{range:{sheetId:historySheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:11},cell:{userEnteredFormat:{backgroundColor:lightHeader,textFormat:{bold:true}}},fields:"userEnteredFormat(backgroundColor,textFormat.bold)"}},
+    const requests=[
+      {updateSheetProperties:{properties:{sheetId:metricsSheetId,hidden:false,gridProperties:{rowCount:40,columnCount:4,frozenRowCount:0}},fields:"hidden,gridProperties(rowCount,columnCount,frozenRowCount)"}},
+      {repeatCell:{range:{sheetId:metricsSheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:4},cell:{userEnteredFormat:{backgroundColor:{red:0.90,green:0.91,blue:0.93},textFormat:{bold:true}}},fields:"userEnteredFormat(backgroundColor,textFormat.bold)"}},
+      {repeatCell:{range:{sheetId:metricsSheetId,startRowIndex:1,endRowIndex:liveValues.length,startColumnIndex:0,endColumnIndex:1},cell:{userEnteredFormat:{textFormat:{bold:true}}},fields:"userEnteredFormat.textFormat.bold"}},
       {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:0,endIndex:1},properties:{pixelSize:210},fields:"pixelSize"}},
-      {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:1,endIndex:2},properties:{pixelSize:180},fields:"pixelSize"}},
-      {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:2,endIndex:3},properties:{pixelSize:420},fields:"pixelSize"}},
-      {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:3,endIndex:4},properties:{pixelSize:210},fields:"pixelSize"}},
-      {repeatCell:{range:{sheetId:metricsSheetId,startRowIndex:1,endRowIndex:11,startColumnIndex:0,endColumnIndex:1},cell:{userEnteredFormat:{textFormat:{bold:true}}},fields:"userEnteredFormat.textFormat.bold"}},
-      {repeatCell:{range:{sheetId:metricsSheetId,startRowIndex:0,endRowIndex:11,startColumnIndex:0,endColumnIndex:4},cell:{userEnteredFormat:{wrapStrategy:"WRAP",verticalAlignment:"MIDDLE"}},fields:"userEnteredFormat(wrapStrategy,verticalAlignment)"}}
+      {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:1,endIndex:2},properties:{pixelSize:110},fields:"pixelSize"}},
+      {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:2,endIndex:3},properties:{pixelSize:430},fields:"pixelSize"}},
+      {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:3,endIndex:4},properties:{pixelSize:210},fields:"pixelSize"}}
     ];
-    await request(":batchUpdate",{method:"POST",body:{requests:formatRequests}});
+    await request(":batchUpdate",{method:"POST",body:{requests}});
+  }
+
+  async function setVisibleTabs(){
+    const meta=await request("?fields=sheets.properties");
+    const visible=new Set([tabName,strictTabName,metricsTabName]);
+    const requests=[];
+    for(const sheet of meta.sheets||[]){
+      const title=sheet?.properties?.title;
+      const id=sheet?.properties?.sheetId;
+      if(title==null||id==null)continue;
+      const shouldHide=!visible.has(title);
+      if(Boolean(sheet?.properties?.hidden)!==shouldHide){
+        requests.push({updateSheetProperties:{properties:{sheetId:id,hidden:shouldHide},fields:"hidden"}});
+      }
+    }
+    if(requests.length)await request(":batchUpdate",{method:"POST",body:{requests}});
   }
 
   async function previousStatuses(){
@@ -478,7 +499,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
 
       // Email is a bonus outreach channel. Keep the email-ready subset separate
       // from the primary eligible call list.
-      const candidateTitle="Email Ready Bonus";
+      const candidateTitle=strictTabName;
       const candidateSheetId=await ensureAdditionalSheet(candidateTitle);
       const candidateStatuses=await previousStatusesFor(candidateTitle);
       const emailCandidates=await collectVerifiedEmailCandidateRows(redis);
@@ -518,11 +539,12 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       await request(":batchUpdate",{method:"POST",body:{requests}});
       const archive=await appendLeadArchive(leads);
       await writeMetricsSnapshot(metrics);
+      await setVisibleTabs();
       console.log(JSON.stringify({
         event:"law_sheet_sync",rows:leads.length,emailReadyRows:emailCandidates.length,
         eligible:metrics.eligible,emailReady:metrics.emailReady,verifiedEmails:metrics.verifiedEmails,
         pendingSizeReady:metrics.pendingSizeReady,headcountTotal:metrics.headcountTotal,
-        spreadsheetId,tabName,candidateTitle,archiveTabName,archiveAdded:archive.added,metricsTabName,metricsHistoryTabName
+        spreadsheetId,tabName,candidateTitle,archiveTabName,archiveAdded:archive.added,metricsTabName
       }));
 
       // Website-refresh inventory is intentionally excluded from this campaign.
