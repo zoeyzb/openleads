@@ -4622,16 +4622,17 @@ async function enrichLead(key,lead){
   const emailCandidate=!effectiveWebsite&&emailSourceVerified&&emails.length>0&&(!attorneyCountVerified||(attorneyCount>=2&&attorneyCount<=10));
   if(emailCandidate)await redis.sAdd(EMAIL_CANDIDATE_SET,key);
   else await redis.sRem(EMAIL_CANDIDATE_SET,key);
-  const qualified=qualifiesEmailReadyNoWebsiteLawLead({
+  const qualificationLead={
+    ...lead,
     website:effectiveWebsite,
-    phone:lead.phone,
     emails,
     practice_keys:practiceKeys,
     attorney_count_estimate:attorneyCount,
     attorney_count_evidence_verified:attorneyCountVerified,
     email_source_verified:emailSourceVerified
-  });
-  const callReady=!effectiveWebsite&&isUsableLawPhone(lead.phone)&&attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10;
+  };
+  const callReady=qualifiesCallReadyNoWebsiteLawLead(qualificationLead);
+  const qualified=qualifiesEmailReadyNoWebsiteLawLead(qualificationLead);
   if(callReady){
     const wasCallReady=await redis.sIsMember(CALL_READY_SET,key);
     await redis.sAdd(CALL_READY_SET,key);
@@ -6149,31 +6150,21 @@ async function lawAreaSaturated(area={}){
 }
 
 async function seed(cities){
-  const [queue,pendingPriority,pendingSource,pendingSizeReady,pendingRegular,pendingRecoverable,phonePriority,phonePending]=await Promise.all([
+  const [queue,phonePriority,phonePending,callReadyAuditPending]=await Promise.all([
     redis.lLen(ACTIVE_QUEUE),
-    redis.sCard(PRIORITY_PENDING_SET),
-    redis.sCard(SOURCE_PENDING_SET),
-    redis.sCard(SIZE_READY_PENDING_SET),
-    redis.sCard(PENDING_SET),
-    redis.sCard(RECOVERABLE_PENDING_SET),
     redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),
-    redis.sCard(CHICAGO_PENDING_SET)
+    redis.sCard(CHICAGO_PENDING_SET),
+    redis.sCard(CALL_READY_AUDIT_PENDING_SET)
   ]);
   if(queue>=QUEUE_HIGH_WATER)return 0;
-  const phoneBacklog=phonePriority+phonePending;
-  // Generic Maps acquisition already has far more raw work than the strict
-  // funnel can convert. Stop creating low-information records while thousands
-  // still need headcount proof or while a meaningful 2-10 cohort is waiting on
-  // the mandatory email gate. Directory-first discovery continues separately.
-  if(phoneBacklog>=5000||pendingSizeReady>=100){
-    await redis.hIncrBy(STATS,"generic_discovery_paused_for_strict_backlog",1);
+  const callingBacklog=phonePriority+phonePending+callReadyAuditPending;
+  // Directory-first discovery remains active separately. Generic Maps is only
+  // allowed to refill inventory after the useful calling backlog is depleted.
+  if(callingBacklog>=CALLING_DISCOVERY_PAUSE_THRESHOLD){
+    await redis.hIncrBy(STATS,"generic_discovery_paused_for_calling_backlog",1);
     return 0;
   }
-  // Raw discovery is not the bottleneck anymore. Count recoverable work too so
-  // a 35K-record inventory cannot keep growing while thousands of email/headcount
-  // candidates wait for enrichment.
-  const activeEnrichmentBacklog=pendingPriority+pendingSource+pendingSizeReady+pendingRegular+pendingRecoverable;
-  if(shouldPauseLawDiscovery({pendingEnrichment:activeEnrichmentBacklog,limit:DISCOVERY_BACKLOG_LIMIT})){
+  if(shouldPauseLawDiscovery({pendingEnrichment:callingBacklog,limit:DISCOVERY_BACKLOG_LIMIT})){
     await redis.hIncrBy(STATS,"discovery_paused_for_enrichment",1);
     return 0;
   }
@@ -6644,12 +6635,13 @@ async function enrichmentLoop(){
 async function statusLoop(){
   while(true){
     try{
-      const [qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,phoneHeadcountPriority,phoneHeadcountPending]=await Promise.all([
+      const [qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,phoneHeadcountPriority,phoneHeadcountPending,callReadyAuditPending]=await Promise.all([
         redis.sCard(READY_SET),redis.sCard(UNIQUE_ELIGIBLE_SET),redis.sCard(CALL_READY_SET),
         redis.sCard(UNIQUE_VERIFIED_EMAIL_SET),redis.sCard(UNIQUE_VERIFIED_HEADCOUNT_SET),
         redis.sCard(EMAIL_CANDIDATE_SET),redis.sCard(PENDING_SET),
         redis.sCard(PRIORITY_PENDING_SET),redis.sCard(RECOVERABLE_PENDING_SET),
-        redis.sCard(SIZE_READY_PENDING_SET),redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),redis.sCard(CHICAGO_PENDING_SET)
+        redis.sCard(SIZE_READY_PENDING_SET),redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),redis.sCard(CHICAGO_PENDING_SET),
+        redis.sCard(CALL_READY_AUDIT_PENDING_SET)
       ]);
       const enrichSilenceMs=Math.max(0,Date.now()-LAST_ENRICH_CYCLE_AT);
       const sizeReadySilenceMs=Math.max(0,Date.now()-LAST_SIZE_READY_CYCLE_AT);
@@ -6659,7 +6651,7 @@ async function statusLoop(){
         eligible:callReady,
         emailReady:uniqueEligible,
         qualified,uniqueEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
-        phoneHeadcountPriority,phoneHeadcountPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,
+        phoneHeadcountPriority,phoneHeadcountPending,callReadyAuditPending,pendingRegular,pendingPriority,pendingRecoverable,pendingSizeReady,
         lastEnrichCycleMs:LAST_ENRICH_CYCLE_MS,enrichSilenceMs,
         lastSizeReadyCycleMs:LAST_SIZE_READY_CYCLE_MS,sizeReadySilenceMs,
         enrichmentStalled:enrichSilenceMs>Math.max(180000,LOOP_MS*6),
@@ -6688,4 +6680,6 @@ async function websiteAuditLoop(){
   }
 }
 
-await Promise.all([seedLoop(),directorySeedLoop(),sizeReadyConversionLoop(),enrichmentLoop(),statusLoop()]);
+const loops=[seedLoop(),directorySeedLoop(),enrichmentLoop(),callReadyAuditLoop(),statusLoop()];
+if(shouldRunEmailConversionWorker({callingMode:CALLING_MODE}))loops.push(sizeReadyConversionLoop());
+await Promise.all(loops);
