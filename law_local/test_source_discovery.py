@@ -35,5 +35,27 @@ class DirectSourceTests(unittest.TestCase):
             self.assertEqual(second["candidates_added"],0)
             db.close()
 
+
+    def test_discovered_firm_urls_are_persisted_and_processed_next_run(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"resume.sqlite3")
+            target="https://www.lawyer.com/firm/new-law-firm.html"
+            visited=[]
+            big="<p>Public directory context. " + ("word " * 40) + "</p>"
+            def fetch(url,timeout=9):
+                visited.append(url)
+                if url.endswith("/florida-lawyer.htm"):
+                    return '<a href="/alachua-county-lawyer-fl.htm">Alachua county</a>'+big
+                if url.endswith("/alachua-county-lawyer-fl.htm"):
+                    return '<a href="/firm/new-law-firm.html">New Law Firm</a>'+big
+                return PROFILE+big
+            first=crawl_direct(db,fetch_fn=fetch,seconds=30,max_pages=18,delay=0)
+            self.assertGreaterEqual(first["firm_links"],1)
+            self.assertNotIn(target,visited)
+            second=crawl_direct(db,fetch_fn=fetch,seconds=30,max_pages=1,delay=0)
+            self.assertIn(target,visited)
+            self.assertEqual(second["profiles_fetched"],1)
+            db.close()
+
 if __name__=="__main__":
     unittest.main()
