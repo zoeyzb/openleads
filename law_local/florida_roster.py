@@ -32,27 +32,26 @@ NON_PRIVATE=re.compile(
     r"department of|county government|circuit court|judicial circuit|"
     r"courthouse|legal aid society|university|law school|"
     r"department of justice|bank|mortgage|insurance company)\b",re.I)
-H1=re.compile(r"<h1\\b[^>]*>(.*?)</h1>",re.I|re.S)
+H1=re.compile(r"<h1\b[^>]*>(.*?)</h1>",re.I|re.S)
 # Roster includes in-house counsel at businesses. A size count by itself
-# NEVER proves the organization is a private law firm.
+# NEVER proves an organization is a private law firm.
 NON_LAW_BUSINESS=re.compile(
-    r"\\b(?:realty|realtors?|properties|property management|"
+    r"\b(?:realty|realtors?|properties|property management|"
     r"construction|builders?|development|holdings|investments?|"
     r"manufacturing|foodservice|hospital|healthcare|medical center|"
     r"electric|utility|power company|university|insurance|"
     r"engineering|logistics|transport|financial services|"
     r"mortgage|automotive|restaurant|resort|hotel|retail|"
-    r"supermarket|communications|telecom|pharmaceutical)\\b",re.I)
+    r"supermarket|communications|telecom|pharmaceutical)\b",re.I)
 LAW_PRACTICE_SIGNAL=re.compile(
-    r"\\b(?:law(?:\\s+(?:firm|office|offices|group|practice))?|"
-    r"attorneys?|lawyers?|legal(?:\\s+(?:group|services|counsel))?|"
-    r"counsel|litigation|esq)\\b",re.I)
+    r"\b(?:law(?:\s+(?:firm|office|offices|group|practice))?|"
+    r"attorneys?|lawyers?|legal(?:\s+(?:group|services|counsel))?|"
+    r"counsel|litigation|esq)\b",re.I)
 def clearly_non_law_employer(firm):
     raw=str(firm or "")
     if NON_LAW_BUSINESS.search(raw):
         return True
-    if re.search(r"\\b(?:inc|corp|corporation|company|co)\\.?\\b",raw,re.I) \\
-            and not LAW_PRACTICE_SIGNAL.search(raw):
+    if re.search(r"\b(?:inc|corp|corporation|company|co)\.?\b",raw,re.I) and not LAW_PRACTICE_SIGNAL.search(raw):
         return True
     return False
 
