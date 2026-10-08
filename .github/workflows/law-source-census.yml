@@ -25,7 +25,7 @@ jobs:
           [ -n "$last" ]
           gh run download "$last" --repo "$GITHUB_REPOSITORY" --name law-phone-state --dir state
           test -s state/law-leads.sqlite3
-      - name: Source census of every persisted candidate with firm, phone, exact size, and website-link diagnostics
+      - name: Deep live census of all saved law firm source records (not just recent Maps candidates)
         run: python3 -m law_local.source_census --db state/law-leads.sqlite3 --out state/audit --max 400 --workers 8
       - name: Save immutable private diagnostic CSV and summary
         if: always()
