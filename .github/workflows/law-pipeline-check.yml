@@ -8,6 +8,7 @@ on:
       - "recover-mcp/lawyercom-firm-size*.mjs"
       - "recover-mcp/enrich-deadline*.mjs"
       - "recover-mcp/law-lane-pressure*.mjs"
+      - "recover-mcp/law-cli-policy*.mjs"
       - "recover-mcp/law-directory-runner*.mjs"
       - "recover-mcp/law-http-headers*.mjs"
       - "recover-mcp/indexed-target-headcount*.mjs"
@@ -101,3 +102,38 @@ jobs:
           node --check recover-mcp/acquisition-worker-runtime.mjs
           node --check recover-mcp/acquisition-persistence.mjs
           node --check recover-mcp/acquisition-coverage.mjs
+
+  portable-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install standalone runtime dependencies
+        run: npm install --omit=dev --no-audit --no-fund
+      - name: Portable worker does one batch and releases its Redis lease
+        env:
+          REDIS_URL: redis://127.0.0.1:6379
+        run: |
+          timeout 120s npm run law:once
+          test "$(redis-cli EXISTS recover:law-firm:portable-run:lease:v1)" = "0"
+      - name: Bootstrap preserves existing acquisition queue entries
+        env:
+          REDIS_URL: redis://127.0.0.1:6379
+        run: |
+          redis-cli LPUSH recover:acquisition:queue "integration-sentinel"
+          timeout 120s npm run law:once -- --bootstrap
+          test "$(redis-cli LLEN recover:acquisition:queue)" = "1"
+          test "$(redis-cli EXISTS recover:law-firm:portable-run:lease:v1)" = "0"
