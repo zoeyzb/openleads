@@ -98,7 +98,7 @@ class QualityTests(unittest.TestCase):
         result=evaluate_candidate(LEAD, PROFILE.replace("intake@keystoneparker.testing-law.org",""),
                                   [{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
                                   mx_check=lambda domain:True)
-        self.assertEqual(result["status"],"strict_eligible")
+        self.assertEqual(result["status"],"call_qualified_no_email")
         self.assertEqual(result["email"],"")
 
     def test_strict_gate_requires_mx_and_two_no_site_checks(self):
@@ -107,7 +107,7 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(good["status"],"strict_eligible")
         bad=evaluate_candidate(LEAD,PROFILE,[{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
                                mx_check=lambda domain:False)
-        self.assertEqual(bad["status"],"strict_eligible")
+        self.assertEqual(bad["status"],"call_qualified_no_email")
         self.assertEqual(bad["email"],"")
 
     def test_queue_persists_and_deduplicates(self):
@@ -122,6 +122,17 @@ class QualityTests(unittest.TestCase):
             db=SqliteQueue(path)
             self.assertEqual(len(db.pending(10)),0)
             self.assertEqual(db.counts()["strict_eligible"],1)
+            db.close()
+
+    def test_calling_target_counts_both_optional_email_cases(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"law.sqlite3")
+            self.assertTrue(db.add(LEAD))
+            db.record(LEAD,{"status":"call_qualified_no_email","attorneys":4})
+            self.assertEqual(db.counts()["calling_qualified"],1)
+            self.assertEqual(db.counts().get("strict_eligible",0),0)
+            export_path=Path(folder)/"call.csv"
+            self.assertEqual(db.export("calling_qualified",export_path),1)
             db.close()
 
     def test_legacy_no_email_records_are_requeued(self):
