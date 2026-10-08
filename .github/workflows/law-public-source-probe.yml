@@ -1,0 +1,44 @@
+name: Law public source connectivity probe
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/law-public-source-probe.yml"
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check independent public evidence sources without bypassing access controls
+        run: |
+          python3 - <<'PY'
+          from urllib.request import Request,urlopen
+          from urllib.error import HTTPError,URLError
+          from urllib.parse import urlencode
+          import json,re,ssl
+          samples=[
+            ("lawyers_com_real_firm","https://www.lawyers.com/storm-lake/iowa/dan-connell-p-c-1002047-f/"),
+            ("lawyer_com_real_firm","https://www.lawyer.com/firm/harold-weissman-p-a-fl.html"),
+            ("florida_bar_public","https://www.floridabar.org/directories/find-mbr/profile/?num=366780"),
+            ("lawyers_com_robots","https://www.lawyers.com/robots.txt"),
+            ("lawyers_com_sitemap","https://www.lawyers.com/sitemap.xml"),
+            ("findthelawfirms_search","https://findthelawfirms.com/law-firms/search"),
+            ("bing_rss","https://www.bing.com/search?"+urlencode({"format":"rss","q":'"Dan Connell P.C." lawyers.com'})),
+            ("duckduckgo_html","https://html.duckduckgo.com/html/?"+urlencode({"q":'"Dan Connell P.C." lawyers.com'})),
+            ("google_search","https://www.google.com/search?"+urlencode({"q":'"Dan Connell P.C." lawyers.com'})),
+          ]
+          for name,url in samples:
+            try:
+              req=Request(url,headers={"User-Agent":"Mozilla/5.0 (compatible; law-public-evidence-check/1.0)","Accept":"text/html,*/*"})
+              with urlopen(req,timeout=7) as f:
+                body=f.read(140000).decode("utf-8","replace")
+                result={"source":name,"http_status":f.status,"final_host":f.url.split("/")[2],
+                        "bytes":len(body),"firm_name":bool(re.search(r"Dan Connell|Harold H Weisman|Culmer",body,re.I)),
+                        "size_marker":bool(re.search(r"there (?:is|are)\s+\d+\s+lawyers?|Firm\s+Size",body,re.I)),
+                        "search_results":bool(re.search(r"result__a|<item>|lawyers\.com/storm-lake/iowa/",body,re.I))}
+            except Exception as e:
+              result={"source":name,"error":str(e)[:200]}
+            print(json.dumps(result),flush=True)
+          PY
