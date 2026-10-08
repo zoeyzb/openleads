@@ -1,9 +1,11 @@
 import unittest
 from law_local.worker import (
     normalize_phone, evaluate_published_source, classify_search_results,
-    evaluate_candidate, firm_identity_matches, SqliteQueue
+    evaluate_candidate, firm_identity_matches, SqliteQueue, import_csv, run_batch
 )
 import tempfile
+from unittest.mock import patch
+import csv
 from pathlib import Path
 
 PROFILE = """
@@ -91,6 +93,33 @@ class QualityTests(unittest.TestCase):
             db.close()
             db=SqliteQueue(path)
             self.assertEqual(len(db.pending(10)),0)
+            self.assertEqual(db.counts()["strict_eligible"],1)
+            db.close()
+
+class EndToEndTests(unittest.TestCase):
+    def test_import_process_export_source_provenance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"law.sqlite3")
+            path=Path(folder)/"seeds.csv"
+            with path.open("w",newline="",encoding="utf-8") as file:
+                w=csv.DictWriter(file,fieldnames=["firm","phone","city","state","source_url"])
+                w.writeheader()
+                w.writerow(LEAD)
+            self.assertEqual(import_csv(db,path),1)
+            with patch("law_local.worker.fetch_public",return_value=PROFILE), \
+                 patch("law_local.worker.search_for_firm",return_value=[
+                     {"responded":True,"urls":[]},{"responded":True,"urls":[]}
+                 ]), \
+                 patch("law_local.worker.domain_has_mail",return_value=True):
+                result=run_batch(db,max_rows=1,workers=1,seconds=10)
+            self.assertEqual(result,{"strict_eligible":1})
+            output=Path(folder)/"strict.csv"
+            self.assertEqual(db.export("strict_eligible",output),1)
+            with output.open(newline="",encoding="utf-8") as file:
+                rows=list(csv.DictReader(file))
+            self.assertEqual(rows[0]["Headcount source"],LEAD["source_url"])
+            self.assertEqual(rows[0]["Email source"],LEAD["source_url"])
+            self.assertEqual(rows[0]["Website audit"],"screened_no_site")
             self.assertEqual(db.counts()["strict_eligible"],1)
             db.close()
 
