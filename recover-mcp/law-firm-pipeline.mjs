@@ -4,15 +4,15 @@ import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { resolveMx } from "node:dns/promises";
 import { orchestrate as enrichProfessionalEmail } from "email-enrich";
-import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesEmailReadyNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
+import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesEmailReadyNoWebsiteLawLead, qualifiesCallReadyNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
 import { buildLawEmailSearchQueries } from "./law-email-search-plan.mjs";
 import { decodePublishedRot13Emails } from "./published-email-obfuscation.mjs";
 import { alignEligibleToReady } from "./law-eligible-set-align.mjs";
 import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml, trustedLawyerComHeadcount } from "./lawyercom-firm-size.mjs";
 import { isFirmSpecificDirectoryHeadcountUrl } from "./headcount-source-policy.mjs";
-import { needsStrictOwnedWebsiteAudit } from "./strict-owned-website-gate.mjs";
+import { needsStrictOwnedWebsiteAudit, needsCallReadyOwnedWebsiteAudit } from "./strict-owned-website-gate.mjs";
 import { withOperationDeadline } from "./enrich-deadline.mjs";
-import { shouldThrottleGeneralForSizeReady, sizeReadyFailureDisposition } from "./law-lane-pressure.mjs";
+import { shouldThrottleGeneralForSizeReady, sizeReadyFailureDisposition, shouldScheduleLegacyRecoverable, shouldRunEmailConversionWorker, shouldCircuitBreakSource } from "./law-lane-pressure.mjs";
 import { runBoundedDirectoryCandidates } from "./law-directory-runner.mjs";
 import { researchRequestHeaders } from "./law-http-headers.mjs";
 import { trustedIndexedTargetHeadcount } from "./indexed-target-headcount.mjs";
@@ -294,6 +294,8 @@ const JINA_READER_ENABLED=String(process.env.JINA_READER_ENABLED||"true").toLowe
 const JINA_READER_RPM=Math.max(1,Math.min(30,Number(process.env.JINA_READER_RPM||24)));
 const JINA_READER_MAX_INFLIGHT=Math.max(1,Math.min(5,Number(process.env.JINA_READER_MAX_INFLIGHT||4)));
 const JINA_READER_CACHE=new Map();
+const JINA_READER_CACHE_MAX=Math.max(25,Math.min(200,Number(process.env.JINA_READER_CACHE_MAX||100)));
+const JINA_READER_MAX_CHARS=Math.max(50000,Math.min(500000,Number(process.env.JINA_READER_MAX_CHARS||250000)));
 let JINA_READER_WINDOW=[],JINA_READER_INFLIGHT=0;
 const LOOP_MS=Math.max(1500,Number(process.env.LAW_FIRM_LOOP_MS||5000));
 const FETCH_TIMEOUT_MS=Math.max(3000,Math.min(15000,Number(process.env.LAW_FIRM_FETCH_TIMEOUT_MS||7000)));
@@ -329,6 +331,13 @@ const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1"
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
 const UNIQUE_VERIFIED_HEADCOUNT_SET="recover:law-firm:unique-verified-headcount:v1";
 const CALL_READY_SET="recover:law-firm:call-ready:v1";
+const CALL_READY_AUDIT_PENDING_SET="recover:law-firm:call-ready-audit-pending:v1";
+const CALL_READY_AUDIT_VERSION="call-ready-no-site-v1";
+const CALL_READY_AUDIT_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_CALL_READY_AUDIT_BATCH||24)));
+const CALL_READY_AUDIT_CONCURRENCY=Math.max(1,Math.min(12,Number(process.env.LAW_CALL_READY_AUDIT_CONCURRENCY||6)));
+const CALLING_MODE=true;
+const CALLING_DISCOVERY_PAUSE_THRESHOLD=Math.max(100,Number(process.env.LAW_CALLING_DISCOVERY_PAUSE_THRESHOLD||500));
+const SOURCE_CIRCUIT_STATE_HASH="recover:law-firm:source-circuit-state:v1";
 const UNIQUE_ELIGIBLE_SET="recover:law-firm:unique-eligible:v1";
 const WEBSITE_CANDIDATE_HASH="recover:law-firm:website-candidates:v1";
 const WEBSITE_AUDIT_PENDING_SET="recover:law-firm:website-audit-pending:v1";
@@ -705,11 +714,11 @@ async function callJinaReader(url,lead={}){
       signal:AbortSignal.timeout(15000)
     });
     if(!response.ok)throw new Error("http "+response.status);
-    const text=(await response.text()).slice(0,1000000);
+    const text=(await response.text()).slice(0,JINA_READER_MAX_CHARS);
     if(!text.trim())return null;
     const value={html:text,elapsed_ms:0,final_url:String(url),status:200,via:"jina"};
     JINA_READER_CACHE.set(url,{at:Date.now(),value});
-    if(JINA_READER_CACHE.size>500){
+    if(JINA_READER_CACHE.size>JINA_READER_CACHE_MAX){
       const first=JINA_READER_CACHE.keys().next().value;
       if(first)JINA_READER_CACHE.delete(first);
     }
@@ -3289,6 +3298,43 @@ function calBarPublishedNameMatchesLead(publishedName="",lead={}){
   return false;
 }
 
+const DIRECT_BAR_ADAPTER_VERSION={
+  TX:"tx-v18",IL:"il-v1",GA:"ga-v1",NC:"nc-v1",WA:"wa-v1",FL:"fl-v4"
+};
+async function directBarSourceCircuitOpen(state=""){
+  const currentVersion=DIRECT_BAR_ADAPTER_VERSION[state]||"";
+  if(!currentVersion)return false;
+  const key=state.toLowerCase()+"bar";
+  const attemptsKey="direct_"+key+"_search_attempt";
+  const hitsKey="direct_"+key+"_profile_links";
+  const [attemptsRaw,hitsRaw,stateRaw]=await Promise.all([
+    redis.hGet(STATS,attemptsKey),
+    redis.hGet(STATS,hitsKey),
+    redis.hGet(SOURCE_CIRCUIT_STATE_HASH,key)
+  ]);
+  const attempts=Number(attemptsRaw||0),hits=Number(hitsRaw||0);
+  let stateInfo=null;
+  try{if(stateRaw)stateInfo=JSON.parse(stateRaw);}catch{}
+  if(!stateInfo){
+    stateInfo={version:currentVersion,baselineAttempts:0,baselineHits:0};
+    await redis.hSet(SOURCE_CIRCUIT_STATE_HASH,key,JSON.stringify(stateInfo));
+  }else if(String(stateInfo.version||"")!==currentVersion){
+    stateInfo={version:currentVersion,baselineAttempts:attempts,baselineHits:hits};
+    await redis.hSet(SOURCE_CIRCUIT_STATE_HASH,key,JSON.stringify(stateInfo));
+    return false;
+  }
+  const open=shouldCircuitBreakSource({
+    attempts:Math.max(0,attempts-Number(stateInfo.baselineAttempts||0)),
+    hits:Math.max(0,hits-Number(stateInfo.baselineHits||0)),
+    adapterVersion:String(stateInfo.version||""),
+    currentVersion,
+    minAttempts:1000,
+    minYield:0.01
+  });
+  if(open)await redis.hIncrBy(STATS,"direct_"+key+"_circuit_skip",1);
+  return open;
+}
+
 async function directOfficialProfileLinks(lead={},people=[]){
   const state=normalizedStateCode(lead);
   if(state==="AK"){
@@ -3372,6 +3418,7 @@ async function directOfficialProfileLinks(lead={},people=[]){
     FL:"floridabar.org"
   };
   if(officialHosts[state]){
+    if(await directBarSourceCircuitOpen(state))return [];
     const host=officialHosts[state];
     const out=[];
     const names=[...new Set((people||[]).filter(Boolean).slice(0,2))];
