@@ -27,6 +27,7 @@ import xml.etree.ElementTree as ET
 USER_AGENT = "OpenLeads-Law-Evidence/1.0 (+https://github.com/zoeyzb/openleads)"
 DIRECTORY_DOMAINS = (
     "lawyers.com", "lawyer.com", "avvo.com", "justia.com", "inbar.org",
+    "findthelawfirms.com", "findthelawyers.com",
     "findlaw.com", "martindale.com", "superlawyers.com",
     "floridabar.org", "americanbar.org", "lawinfo.com",
     "facebook.com", "linkedin.com", "instagram.com", "youtube.com",

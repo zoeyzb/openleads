@@ -40,12 +40,26 @@ EMPTY_WEB={"", "null", "none", "n/a", "na", "-", "no website"}
 
 def state_from_address(address):
     address=str(address or "").strip()
-    m=re.search(r",\s*([A-Z]{2})\s*(?:\d{5}(?:-\d{4})?)?\s*(?:,?\s*USA)?\s*$",address)
-    if m and m.group(1) in STATE_CODES:
-        return m.group(1)
+    # Live Maps addresses frequently end with ", United States", not "USA".
+    # Search the locality section rather than anchoring to the final byte.
+    for m in re.finditer(r",\s*([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?(?=\s*(?:,|$))",address):
+        if m.group(1) in STATE_CODES:
+            return m.group(1)
     for name,code in COUNTRY_STATE.items():
         if re.search(r"\b"+re.escape(name)+r"\b",address,re.I):
             return code
+    return ""
+
+def city_from_address(address):
+    address=str(address or "").strip()
+    # Exact city segment before the US state, not a guess from the firm name.
+    m=re.search(r",\s*([^,]{2,80}?),\s*[A-Z]{2}(?:\s+\d{5})?(?=\s*(?:,|$))",address)
+    if m:
+        return m.group(1).strip()
+    for name in COUNTRY_STATE:
+        m=re.search(r",\s*([^,]{2,80}?),\s*"+re.escape(name)+r"(?=\s*(?:,|$))",address,re.I)
+        if m:
+            return m.group(1).strip()
     return ""
 
 def maps_candidate(row):
@@ -65,7 +79,7 @@ def maps_candidate(row):
     if not LAW_SIGNAL.search(name+" "+category) or NON_FIRM.search(name+" "+category):
         return None,"not_private_law_firm"
     return {
-        "firm":name,"phone":phone,"city":"","state":state_from_address(address),
+        "firm":name,"phone":phone,"city":city_from_address(address),"state":state_from_address(address),
         "maps_source":link,"website_status":"no_maps_website_field_only",
         "headcount_status":"unverified","email_status":"unverified",
         "original_address":address,

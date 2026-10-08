@@ -33,7 +33,7 @@ class MapsFirstTests(unittest.TestCase):
                 return HTML if url==URL else "<html>no match</html>"+" -"*80
             stats=verify_map_headcounts(db,fetch_fn=fetch,seconds=15,max_profiles=10)
             self.assertEqual(stats["identity_phone_size_matches"],1)
-            self.assertEqual(stats["new_qualified_candidates"],1)
+            self.assertEqual(stats["added_to_final_audit"],1)
             self.assertEqual(db.counts()["pending"],1)
             self.assertEqual(db.counts()["calling_qualified"],0)
             self.assertEqual(ingest_maps_candidates(db,file),0)
@@ -51,8 +51,44 @@ class MapsFirstTests(unittest.TestCase):
             db=SqliteQueue(Path(d)/"db.sqlite")
             ingest_maps_candidates(db,file)
             stats=verify_map_headcounts(db,fetch_fn=lambda url,timeout=8:HTML,seconds=15,max_profiles=10)
-            self.assertEqual(stats["new_qualified_candidates"],0)
+            self.assertEqual(stats["added_to_final_audit"],0)
             self.assertEqual(db.counts()["calling_qualified"],0)
+            db.close()
+
+
+    def test_location_aware_firm_size_directory_source(self):
+        urls=profile_urls("Riverbank & Grove Law","IL","Rockford")
+        page="https://findthelawfirms.com/law-firms/illinois/rockford/riverbank-and-grove-law/"
+        self.assertIn(page,urls)
+        html="""<html><h1>Riverbank &amp; Grove Law</h1>
+        <p>Firm Size: 2-5 Attorneys</p>
+        <p>815-456-1820</p><a href="https://ownedexample.test">Official Website</a>
+        </html>"""
+        with tempfile.TemporaryDirectory() as d:
+            file=Path(d)/"maps.csv"
+            with file.open("w",newline="") as fp:
+                w=csv.DictWriter(fp,fieldnames=["firm","phone","city","state","maps_source","website_status"])
+                w.writeheader()
+                w.writerow({"firm":"Riverbank & Grove Law","phone":"8154561820",
+                            "city":"Rockford","state":"IL",
+                            "maps_source":"https://www.google.com/maps/place/Riverbank-Grove-Law",
+                            "website_status":"no_maps_website_field_only"})
+            db=SqliteQueue(Path(d)/"db.sqlite")
+            ingest_maps_candidates(db,file)
+            def fetch(url,timeout=8):
+                return html if url==page else ("<html>no match</html>"+"word "*50)
+            stats=verify_map_headcounts(db,fetch_fn=fetch,seconds=25,max_profiles=10)
+            self.assertEqual(stats["identity_phone_size_matches"],1)
+            self.assertEqual(stats["added_to_final_audit"],1)
+            self.assertEqual(db.counts()["calling_qualified"],0)
+            # Identifying a likely owned website must block promotion; an absent
+            # Maps field alone does not overrule source-published website links.
+            from law_local.worker import evaluate_candidate
+            result=evaluate_candidate(
+                {"firm":"Riverbank & Grove Law","phone":"8154561820","source_url":page},
+                html,[{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
+                lambda domain:True)
+            self.assertEqual(result["status"],"review_website")
             db.close()
 
 if __name__=="__main__":
