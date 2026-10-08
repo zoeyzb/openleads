@@ -16,7 +16,7 @@ concurrency:
 jobs:
   acquire:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 14
     steps:
       - uses: actions/checkout@v4
         with:
@@ -71,6 +71,9 @@ jobs:
           else
             echo "MAPS_CANDIDATE_FILE_PRESENT=0"
           fi
+      - name: Acquire FL bar-derived firm rosters with 2–10 active licensed attorneys and real published phone
+        run: |
+          python3 -m law_local.florida_roster --db state/law-leads.sqlite3 --max-pages 156 --max-profiles 320 --seconds 460
       - name: Verify source-bound attorney count; cool down empty real URL searches for 7 days
         run: |
           if [ -f state/maps/no-site-phone-candidates.csv ]; then
@@ -95,7 +98,38 @@ jobs:
       - name: Reverify public directory evidence and owned websites
         run: |
           python3 law_local/worker.py --db state/law-leads.sqlite3 run \
-            --max 340 --workers 8 --seconds 210
+            --max 220 --workers 8 --seconds 150
+      - name: Preserve sourced 2–10 firm-size and business-phone candidates separately from email/no-site qualification
+        if: always()
+        run: |
+          if [ -f state/law-leads.sqlite3 ]; then
+            python3 - <<'PY'
+          import sqlite3,csv,json
+          from pathlib import Path
+          db=sqlite3.connect("state/law-leads.sqlite3")
+          db.row_factory=sqlite3.Row
+          records=db.execute("""SELECT firm,phone,state,city,source_url,status,result_json
+             FROM candidates WHERE source_url LIKE 'https://www.floridalawdirectory.com/firm/%'
+             ORDER BY firm""").fetchall()
+          path=Path("state/roster-sourced-size-phone.csv")
+          path.parent.mkdir(parents=True,exist_ok=True)
+          with path.open("w",newline="",encoding="utf-8") as f:
+              w=csv.DictWriter(f,fieldnames=["Firm","Attorneys verified from roster","Phone",
+                 "Email","City","State","Headcount source","Website/email status"])
+              w.writeheader()
+              for r in records:
+                  ref=db.execute("SELECT listed_attorneys FROM fl_roster_frontier WHERE url=?",
+                                 (r["source_url"],)).fetchone()
+                  ev=json.loads(r["result_json"] or "{}")
+                  w.writerow({"Firm":r["firm"],"Attorneys verified from roster":ref[0] if ref else "",
+                    "Phone":r["phone"],"Email":ev.get("email",""),"City":r["city"],
+                    "State":r["state"],"Headcount source":r["source_url"],
+                    "Website/email status":r["status"] if r["status"]!="pending" else "pending_no_owned_site_email_audit"})
+          print("BAR_ROSTER_SIZE_PHONE_CANDIDATES="+str(len(records)))
+          print("FULL_STRICT_VERIFIED_IN_ROSTER="+str(sum(r["status"]=="strict_eligible" for r in records)))
+          db.close()
+          PY
+          fi
       - name: Export verified phone-first firms
         if: always()
         run: |
@@ -133,8 +167,9 @@ jobs:
             state/law-leads.sqlite3
             state/call-qualified-law.csv
             state/email-eligible-law.csv
+            state/roster-sourced-size-phone.csv
             state/maps/no-site-phone-candidates.csv
             state/maps/extraction-summary.json
             state/stats.json
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 90
