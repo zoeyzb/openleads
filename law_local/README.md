@@ -50,11 +50,9 @@ An export row requires all of the following:
 3. An explicit firm-attorney count from 2–10 on that source page.
 4. A bounded two-provider negative owned-website search, with **both providers
    responding successfully**. Owned-site hints trigger review, not acceptance.
-5. An email visibly published on the identity-matched source page, plus a DNS
-   MX response for its domain. Guessed email formats are never accepted.
-
-The separate `call_ready_no_email` export satisfies steps 1–4 but has no
-source-backed MX-checked email. A published phone's syntax is screened, but
+Email is OPTIONAL. A source-published email with a positive MX check is exported
+as a bonus. Missing email or MX failure never blocks calling eligibility.
+Historical `call_ready_no_email` rows are automatically requeued for screening. A published phone's syntax is screened, but
 this process does **not** place a call to verify that it actually rings.
 
 A no-website search is an *evidence-based screening*, not logical proof that
