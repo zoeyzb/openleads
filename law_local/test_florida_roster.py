@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from law_local.florida_roster import (
     ROOT,listing_firms,parse_roster_profile,robots_permits,
-    run,add_or_upgrade,ensure_tables,clearly_non_law_employer
+    run,add_or_upgrade,ensure_tables,clearly_non_law_employer,ambiguous_employer_identity
 )
 from law_local.worker import SqliteQueue,evaluate_published_source
 
@@ -60,6 +60,19 @@ class FloridaRosterTests(unittest.TestCase):
             self.assertEqual(status,"not_private_firm")
         for name in ("Johnson & Smith, P.A.","Baker Law Group PLLC","Avery & Co., Attorneys"):
             self.assertFalse(clearly_non_law_employer(name),name)
+
+    def test_email_redaction_and_service_address_are_not_firm_names(self):
+        for name in (
+           "[email protected]",
+           "Robertson, Anschutz, Schneid, Crane Service Address - [email protected]",
+           "Robertson, Anschutz, Schneid, Crane Service Address - Flmail@Raslg Com",
+           "Aero Law Center Ft. Lauderdale-hollywood Int'l Airport [fll]"
+        ):
+            self.assertTrue(ambiguous_employer_identity(name),name)
+            lead,status=parse_roster_profile(PROFILE.replace("Sample Baker Law, PLLC",name),URL)
+            self.assertIsNone(lead)
+            self.assertEqual(status,"ambiguous_placeholder_identity")
+        self.assertFalse(ambiguous_employer_identity("Anderson, Myers & Co. Law Firm"))
 
     def test_public_robots_and_source_first_one_page(self):
         with tempfile.TemporaryDirectory() as path:
