@@ -12,12 +12,14 @@ import json
 import re
 import time
 from pathlib import Path
+from law_local.maps_extract import COUNTRY_STATE
 from law_local.worker import (
     SqliteQueue, _extract_directory_profile, normalize_phone, norm,
-    fetch_public, utc_now,
+    fetch_public, utc_now, evaluate_published_source,
 )
 
-def profile_urls(firm,state):
+def profile_urls(firm,state,city=""):
+    """Try firm-size-forward profiles ahead of low-yield generic Lawyer.com slugs."""
     slug="-".join(re.findall(r"[a-z0-9]+",firm.lower().replace("&"," and ")))
     if len(slug)<8:
         return []
@@ -25,33 +27,47 @@ def profile_urls(firm,state):
     short=re.sub(r"-(?:llc|pllc|pc|p-c|p-a|pa|llp)$","",slug)
     if short!=slug:
         names.append(short)
+    city_slug="-".join(re.findall(r"[a-z0-9]+",str(city or "").lower()))
+    state_name=next((name for name,code in COUNTRY_STATE.items()
+                     if code==str(state or "").upper()),"")
+    urls=[]
+    # Firm-specific size directories expose both published business phone
+    # and an explicitly named firm-size range. They still frequently link
+    # an OWNED WEBSITE, which the existing final audit must block.
+    if city_slug and state_name:
+        state_slug=state_name.replace(" ","-")
+        for name in names:
+            for host in ("findthelawfirms.com","findthelawyers.com"):
+                urls.append(f"https://{host}/law-firms/{state_slug}/{city_slug}/{name}/")
     if state and re.fullmatch(r"[A-Za-z]{2}",state):
         names.append(short+"-"+state.lower())
-    urls=[]
     for name in names:
         for prefix in ("/firm/","/firms/"):
-            url="https://www.lawyer.com"+prefix+name+".html"
-            if url not in urls:
-                urls.append(url)
-    return urls[:6]
+            urls.append("https://www.lawyer.com"+prefix+name+".html")
+    return list(dict.fromkeys(urls))[:12]
 
 def ingest_maps_candidates(db,path):
     db.conn.execute("""CREATE TABLE IF NOT EXISTS maps_raw_candidates (
         map_id TEXT PRIMARY KEY, firm TEXT NOT NULL, phone TEXT NOT NULL,
         state TEXT NOT NULL, maps_url TEXT NOT NULL, added_at TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'unverified_headcount'
+        status TEXT NOT NULL DEFAULT 'unverified_headcount',
+        city TEXT NOT NULL DEFAULT ''
     )""")
     db.conn.execute("""CREATE TABLE IF NOT EXISTS maps_profile_checks (
         map_id TEXT NOT NULL, url TEXT NOT NULL,
         checked_at TEXT NOT NULL, status TEXT NOT NULL,
         PRIMARY KEY(map_id,url)
     )""")
+    existing={r[1] for r in db.conn.execute("PRAGMA table_info(maps_raw_candidates)")}
+    if "city" not in existing:
+        db.conn.execute("ALTER TABLE maps_raw_candidates ADD COLUMN city TEXT NOT NULL DEFAULT ''")
     inserted=0
     with Path(path).open(newline="",encoding="utf-8-sig") as fd:
         for row in csv.DictReader(fd):
             firm=(row.get("firm") or "").strip()
             phone=normalize_phone(row.get("phone") or "")
             state=(row.get("state") or "").strip()
+            city=(row.get("city") or "").strip()
             # Must come from a public Maps record whose site field was blank;
             # never infer website absence from missing or malformed metadata.
             if not firm or not phone or row.get("website_status")!="no_maps_website_field_only":
@@ -59,9 +75,16 @@ def ingest_maps_candidates(db,path):
             key=norm(firm)+"|"+phone
             inserted+=int(db.conn.execute(
                 """INSERT OR IGNORE INTO maps_raw_candidates
-                    VALUES (?,?,?,?,?,?,?)""",
+                    (map_id,firm,phone,state,maps_url,added_at,status,city)
+                    VALUES (?,?,?,?,?,?,?,?)""",
                 (key,firm,phone,state,row.get("maps_source",""),utc_now(),
-                 "unverified_headcount")).rowcount>0)
+                 "unverified_headcount",city)).rowcount>0)
+            # Earlier Maps runs lost city/state when addresses ended in "United States".
+            # Improve their provenance without resetting any research checkpoint.
+            db.conn.execute("""UPDATE maps_raw_candidates SET
+                 city=CASE WHEN city='' THEN ? ELSE city END,
+                 state=CASE WHEN state='' THEN ? ELSE state END
+                 WHERE map_id=?""",(city,state,key))
     db.conn.commit()
     return inserted
 
@@ -69,14 +92,14 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30):
     fetch_fn=fetch_fn or fetch_public
     deadline=time.monotonic()+max(1,int(seconds))
     counts={"maps_checked":0,"profile_requests":0,"identity_phone_size_matches":0,
-            "new_qualified_candidates":0,"fetch_failures":0}
+            "added_to_final_audit":0,"fetch_failures":0,"directory_hits":0}
     raw=db.conn.execute("""SELECT * FROM maps_raw_candidates
         WHERE status='unverified_headcount' ORDER BY added_at LIMIT 100""").fetchall()
     for record in raw:
         if time.monotonic()>=deadline or counts["profile_requests"]>=max_profiles:
             break
         had_match=False
-        for url in profile_urls(record["firm"],record["state"]):
+        for url in profile_urls(record["firm"],record["state"],record["city"]):
             if time.monotonic()>=deadline or counts["profile_requests"]>=max_profiles:
                 break
             prev=db.conn.execute("SELECT 1 FROM maps_profile_checks WHERE map_id=? AND url=?",
@@ -93,12 +116,26 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30):
                 # HTML 404 / unavailable are retryable, bounded by caller,
                 # never proof this company has no attorney-size evidence.
                 continue
-            candidate=_extract_directory_profile(url,html)
+            counts["directory_hits"]+=1
+            candidate=None
+            if "lawyer.com/" in url:
+                candidate=_extract_directory_profile(url,html)
+                if candidate and (candidate["phone"]!=record["phone"] or
+                                  norm(candidate["firm"])!=norm(record["firm"])):
+                    candidate=None
+            else:
+                lead={"firm":record["firm"],"phone":record["phone"],
+                      "city":record["city"],"state":record["state"],
+                      "source_url":url}
+                evidence=evaluate_published_source(html,lead)
+                if 2<=evidence["attorneys"]<=10:
+                    candidate=lead
             status="not_matching_sourced_size_phone"
-            if candidate and candidate["phone"]==record["phone"] and norm(candidate["firm"])==norm(record["firm"]):
+            if candidate:
                 candidate["state"]=record["state"]
+                candidate["city"]=record["city"]
                 counts["identity_phone_size_matches"]+=1
-                counts["new_qualified_candidates"]+=int(db.add(candidate))
+                counts["added_to_final_audit"]+=int(db.add(candidate))
                 status="candidate_for_independent_website_and_email_check"
                 had_match=True
             db.conn.execute("""INSERT OR IGNORE INTO maps_profile_checks
