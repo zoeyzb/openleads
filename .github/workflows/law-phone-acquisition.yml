@@ -50,6 +50,20 @@ jobs:
       - name: Acquire bar-source firm-size-first candidates with published business phone
         run: |
           python3 -m law_local.bar_sources --db state/law-leads.sqlite3 --seconds 100 --max-pages 25
+      - name: Diagnose website-review rejects from saved source evidence
+        run: |
+          python3 - <<'PY'
+          import json
+          from law_local.worker import SqliteQueue
+          db=SqliteQueue("state/law-leads.sqlite3")
+          rows=db.conn.execute("SELECT firm,source_url,result_json FROM candidates WHERE status='review_website' ORDER BY updated DESC LIMIT 15").fetchall()
+          for row in rows:
+              data=json.loads(row["result_json"] or "{}")
+              print(json.dumps({"website_review": {"firm":row["firm"],"source_url":row["source_url"],
+                                "website_candidates":data.get("website_candidates",[]),
+                                "site_evidence":data.get("site_evidence",{})}}))
+          db.close()
+          PY
       - name: Discover firm profiles and diagnose missing attorney-size or phone proof
         run: |
           python3 -m law_local.source_discovery --db state/law-leads.sqlite3 --seconds 65 --max-pages 35
