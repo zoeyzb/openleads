@@ -19,12 +19,12 @@ jobs:
         with:
           ref: recover-scrape-mcp
           persist-credentials: false
-      - name: Restore preceding verified job state
+      - name: Restore most recent completed checkpoint, including failed zero-yield runs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p state
-          previous="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow law-phone-acquisition.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+          previous="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow law-phone-acquisition.yml --status completed --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
           if [ -n "$previous" ]; then
             gh run download "$previous" --repo "$GITHUB_REPOSITORY" --name law-phone-state --dir state || true
           fi
@@ -47,15 +47,18 @@ jobs:
               db.conn.commit()
           db.close()
           PY
+      - name: Direct directory discovery without search-engine dependency
+        run: |
+          python3 -m law_local.source_discovery --db state/law-leads.sqlite3 --seconds 90 --max-pages 40
       - name: Discover fresh published law firm directory profiles
         run: |
           python3 law_local/worker.py --db state/law-leads.sqlite3 discover \
             --states FL,TX,CA,NY,IL,GA,PA,OH,NC,MI \
-            --max-queries 12 --max-pages 40 --seconds 120 --delay 0.8
+            --max-queries 12 --max-pages 40 --seconds 80 --delay 0.8
       - name: Reverify public directory evidence and owned websites
         run: |
           python3 law_local/worker.py --db state/law-leads.sqlite3 run \
-            --max 340 --workers 8 --seconds 250
+            --max 340 --workers 8 --seconds 210
       - name: Export verified phone-first firms
         if: always()
         run: |
