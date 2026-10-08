@@ -5567,35 +5567,45 @@ async function processEnrichKeys(keys=[],lane="general",concurrency=ENRICH_CONCU
         const retryCount=Number(retryLead.attorney_count_estimate||retryLead.attorney_count||0);
         const retrySizeReady=retryLead.attorney_count_evidence_verified===true&&retryCount>=2&&retryCount<=10&&!/^https?:\/\//i.test(retryWebsite);
         const needsPhoneHeadcount=!/^https?:\/\//i.test(retryWebsite)&&isUsableLawPhone(retryLead.phone)&&retryLead.attorney_count_evidence_verified!==true;
-        if(retrySizeReady){
-          const disposition=sizeReadyFailureDisposition(retryLead.email_recovery_attempts,{maxAttempts:4});
-          const timedOutLead={...retryLead,
-            email_recovery_attempts:disposition.nextAttempt,
-            email_recovery_last_at:new Date().toISOString(),
-            law_email_validation:disposition.shouldRetry?"recovery_pending":"rejected",
-            qualified_lead:false
-          };
-          await redis.hSet(LEAD_HASH,key,JSON.stringify(timedOutLead));
-          await Promise.all([
-            redis.sRem(SIZE_READY_PENDING_SET,key),
-            redis.sRem(READY_SET,key),
-            redis.sRem(UNIQUE_ELIGIBLE_SET,key)
-          ]);
-          if(disposition.shouldRetry){
-            await redis.sAdd(SIZE_READY_PENDING_SET,key);
-            await redis.hIncrBy(STATS,"size_ready_timeout_requeued",1);
-          }else{
-            await redis.sAdd(ENRICHED_SET,key);
-            await redis.sRem(REJECTED_SET,key);
-            await redis.hIncrBy(STATS,"size_ready_timeout_exhausted",1);
-          }
+        // Calling-mode errors may retry headcount at most twice per adapter
+        // version. Legacy email flags cannot enqueue a failed law record.
+        await Promise.all([
+          redis.sRem(PHONE_HEADCOUNT_PRIORITY_SET,key),
+          redis.sRem(CHICAGO_PENDING_SET,key),
+          redis.sRem(SIZE_READY_PENDING_SET,key),
+          redis.sRem(RECOVERABLE_PENDING_SET,key),
+          redis.sRem(PRIORITY_PENDING_SET,key),
+          redis.sRem(SOURCE_PENDING_SET,key),
+          redis.sRem(PENDING_SET,key)
+        ]);
+        if(retrySizeReady&&hasValidStoredHeadcount(retryLead)){
+          await redis.sAdd(CALL_READY_AUDIT_PENDING_SET,key);
+          await redis.hIncrBy(STATS,"headcount_timeout_recovered_to_site_audit",1);
         }else if(needsPhoneHeadcount){
-          const shape=lawFirmNameShape(retryLead);
-          await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
+          const disposition=headcountTimeoutDisposition({
+            attempts:retryLead.phone_headcount_attempts,
+            attemptVersion:retryLead.phone_headcount_attempts_version,
+            currentVersion:PHONE_HEADCOUNT_METHOD_VERSION,
+            maxAttempts:2
+          });
+          const updated={...retryLead,
+            phone_headcount_attempts:disposition.nextAttempt,
+            phone_headcount_attempts_version:disposition.attemptVersion,
+            phone_headcount_method_version:PHONE_HEADCOUNT_METHOD_VERSION,
+            phone_headcount_status:"unverified",
+            phone_headcount_last_at:new Date().toISOString(),
+            phone_headcount_last_error:String(error?.message||error).slice(0,250),
+            call_ready_lead:false
+          };
+          await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
+          if(disposition.retry){
+            const shape=lawFirmNameShape(updated);
+            await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
+          }else{
+            await redis.hIncrBy(STATS,"headcount_timeout_exhausted",1);
+          }
         }else{
-          const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(isUsableLawEmail);
-          const retrySet=retryEmails.length?PENDING_SET:(emailRecoveryPriority(retryLead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET);
-          await moveToEmailQueue(key,retrySet);
+          await redis.hIncrBy(STATS,"calling_lane_timeout_skipped_irrelevant",1);
         }
         console.warn(JSON.stringify({event:"law_firm_enrich_retry",lane,key,error:String(error?.message||error)}));
       }
