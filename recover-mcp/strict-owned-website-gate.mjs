@@ -27,3 +27,15 @@ export function needsCallReadyOwnedWebsiteAudit({
   const targetSize=attorneyCountVerified===true&&n>=2&&n<=10;
   return !hasWebsite&&usablePhone&&targetSize&&noOwnedWebsiteVerified!==true;
 }
+
+// Distinguish a completed negative site audit from a failed or skipped check.
+// An outage is neither proof of an owned website nor proof of no website.
+export function noOwnedWebsiteAuditOutcome({
+  ownedWebsite="",
+  checksSucceeded=0,
+  checksFailed=0
+}={}){
+  if(/^https?:\/\//i.test(String(ownedWebsite||"").trim()))return "owned_site";
+  if(Number(checksFailed)>0||Number(checksSucceeded)<1)return "inconclusive";
+  return "no_site_audited";
+}
