@@ -228,7 +228,7 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
             break
     # The calling list requires published phone, size and no owned site.
     # Preserve separate stricter eligibility for source-published usable email.
-    return {**evidence,"status":"call_qualified_no_email"}
+    return {**evidence,"status":"strict_eligible" if evidence["email"] else "call_qualified_no_email"}
 
 class SqliteQueue:
     def __init__(self,path):
