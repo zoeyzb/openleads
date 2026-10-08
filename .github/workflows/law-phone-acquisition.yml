@@ -73,7 +73,22 @@ jobs:
           fi
       - name: Acquire FL bar-derived firm rosters with 2–10 active licensed attorneys and real published phone
         run: |
-          python3 -m law_local.florida_roster --db state/law-leads.sqlite3 --max-pages 156 --max-profiles 320 --seconds 460
+          python3 -m law_local.florida_roster --db state/law-leads.sqlite3 --max-pages 156 --max-profiles 850 --seconds 560
+      - name: Audit private-law-practice identity and source-backed contact counts
+        run: |
+          python3 - <<'PY'
+          import sqlite3,json
+          from law_local.florida_roster import clearly_non_law_employer
+          db=sqlite3.connect('state/law-leads.sqlite3')
+          rows=db.execute("SELECT firm,status,source_url FROM candidates WHERE source_url LIKE 'https://www.floridalawdirectory.com/firm/%'").fetchall()
+          business=[x for x in rows if clearly_non_law_employer(x[0])]
+          for firm,status,url in business:
+              if status in ('pending','inconclusive','unverified_identity','unverified_size'):
+                  db.execute("UPDATE candidates SET status='review_nonlaw_employer' WHERE source_url=?",(url,))
+          db.commit()
+          print(json.dumps({'source_backed_roster_records':len(rows),'nonlaw_employers_flagged':len(business),'remaining_roster_profiles':db.execute("SELECT COUNT(*) FROM fl_roster_frontier WHERE status='pending'").fetchone()[0]}))
+          db.close()
+          PY
       - name: Verify source-bound attorney count; cool down empty real URL searches for 7 days
         run: |
           if [ -f state/maps/no-site-phone-candidates.csv ]; then
