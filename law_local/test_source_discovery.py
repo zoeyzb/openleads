@@ -26,7 +26,7 @@ class DirectSourceTests(unittest.TestCase):
             calls=[]
             def fetch(url,timeout=9):
                 calls.append(url)
-                return PROFILE if url.endswith("/firm/cox-stauffer.html") else "<html>no listings</html>"
+                return ("<html>"+PROFILE+"<div>Published law directory contact and firm size</div></html>") if url.endswith("/firm/cox-stauffer.html") else "<html><body>no directory listings, no profile links</body></html>"
             stats=crawl_direct(db,fetch_fn=fetch,seconds=30,max_pages=17,delay=0)
             self.assertGreaterEqual(stats["profiles_parsed"],1)
             self.assertGreaterEqual(stats["candidates_added"],1)
