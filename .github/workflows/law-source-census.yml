@@ -1,0 +1,37 @@
+name: Law source quality census
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/law-source-census.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: recover-scrape-mcp
+          persist-credentials: false
+      - name: Restore most recent complete prospect ledger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p state state/audit
+          last="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow law-phone-acquisition.yml --status completed --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          [ -n "$last" ]
+          gh run download "$last" --repo "$GITHUB_REPOSITORY" --name law-phone-state --dir state
+          test -s state/law-leads.sqlite3
+      - name: Source census of every persisted candidate with firm, phone, exact size, and website-link diagnostics
+        run: python3 -m law_local.source_census --db state/law-leads.sqlite3 --out state/audit --max 400 --workers 8
+      - name: Save immutable private diagnostic CSV and summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: law-source-census
+          path: state/audit/
+          retention-days: 14
+          if-no-files-found: warn
