@@ -116,9 +116,23 @@ def evaluate_published_source(html,lead):
     # Third-party firm profiles commonly use an explicit "Firm Size: N"
     # field rather than a prose sentence. Require an identity/phone match
     # first and do not interpret client counts or generic search snippets.
+    attorney_range=None
     if not m:
-        m=re.search(r"\b(?:firm size|number of attorneys|attorneys at this firm)\s*:?\s*(\d{1,2})\b",text)
-    attorneys=int(m.group(1)) if m else 0
+        # Interpret an explicit firm-size *range* as a range; do not claim its
+        # lower bound is the exact number or accept "1-5" as 2+.
+        range_match=re.search(r"\b(?:firm size|office size)\s*:?\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\b",text)
+        if range_match:
+            lo,hi=map(int,range_match.groups())
+            if 2<=lo<=hi<=10:
+                attorney_range=(lo,hi)
+                attorneys=lo
+            else:
+                attorneys=0
+        else:
+            m=re.search(r"\b(?:firm size|number of attorneys|attorneys at this firm)\s*:?\s*(\d{1,2})\s*(?:attorneys?|lawyers?)?\b",text)
+            attorneys=int(m.group(1)) if m else 0
+    else:
+        attorneys=int(m.group(1))
     # Emails must be literally published in this identity-matched page.
     emails=sorted(set(v.lower() for v in EMAIL_RE.findall(unescape(html))))
     emails=[v for v in emails if not v.startswith(NON_EMAIL_PREFIXES)
@@ -139,7 +153,7 @@ def evaluate_published_source(html,lead):
                 external.append(href)
         except ValueError:
             continue
-    return {"attorneys":attorneys,"emails":emails,"website_candidates":sorted(set(external))}
+    return {"attorneys":attorneys,"attorney_range":attorney_range,"emails":emails,"website_candidates":sorted(set(external))}
 
 def search_target(url):
     """Unwrap DuckDuckGo result redirects before deciding site ownership."""
@@ -174,7 +188,7 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
     source=evaluate_published_source(source_html,lead)
     evidence={"firm":lead.get("firm",""),"phone":normalize_phone(lead.get("phone","")),
               "source_url":lead.get("source_url",""),"headcount_source":lead.get("source_url",""),
-              "attorneys":source["attorneys"],"email":"","email_source":"",
+              "attorneys":source["attorneys"],"attorney_range":source.get("attorney_range"),"email":"","email_source":"",
               "checked_at":utc_now(),"site_status":""}
     # A firm-controlled source URL is itself proof of an owned website,
     # even if both search engines mistakenly return no results.
@@ -468,16 +482,24 @@ def _extract_directory_profile(url,html):
     """Produce a candidate ONLY when the profile itself binds firm/phone/size."""
     if not _public_http_url(url):
         return None
-    m=re.search(r"(?is)<h1\b[^>]*>(.*?)</h1>",html)
-    if not m:
+    # Lawyer.com often has a phone-number H1 and a Resources H1 before
+    # the actual firm H1. Use the heading immediately preceding the target
+    # firm's explicitly published Firm Size field, not the first H1.
+    size_pos=re.search(r"(?is)firm\s*size\s*:?",html)
+    preceding=html[:size_pos.start()] if size_pos else html
+    headings=re.findall(r"(?is)<h1\b[^>]*>(.*?)</h1>",preceding)
+    headings=[" ".join(unescape(re.sub(r"(?is)<[^>]+>"," ",heading)).split()) for heading in headings]
+    headings=[h for h in headings if len(norm(h))>=8 and not re.fullmatch(r"[\d()+.\s-]+",h)
+              and norm(h) not in {"resources","need legal help quickly","find a lawyer"}]
+    if not headings:
         return None
-    firm=unescape(re.sub(r"(?is)<[^>]+>"," ",m.group(1)))
-    firm=" ".join(firm.split())[:150]
-    if len(norm(firm))<8:
-        return None
+    firm=headings[-1][:150]
     text=" ".join(reader(html).parts)
-    phones=list(dict.fromkeys(normalize_phone(m.group()) for m in PHONE_RE.finditer(text)))
-    for phone in phones[:8]:
+    # Only accept the firm's 'Call NNN-NNN-NNNN' contact number. Do not
+    # mistake the directory's 800-620-0900 banner/footer for the firm.
+    call_number_re=re.compile(r"\bCall\s+((?:\+?1[\s.()\-]*)?[2-9]\d{2}[\s.()\-]*[2-9]\d{2}[\s.\-]*\d{4})",re.I)
+    phones=list(dict.fromkeys(normalize_phone(m.group(1)) for m in call_number_re.finditer(text)))
+    for phone in phones[:3]:
         if not phone:
             continue
         candidate={"firm":firm,"phone":phone,"city":"","state":"","source_url":url}
