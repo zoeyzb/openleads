@@ -1,0 +1,44 @@
+name: Law contact evidence targeted diagnostic
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/law-contact-evidence-probe.yml"
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check cited Delaware firm public contact and MX, no false mailbox or website assumptions
+        run: |
+          python3 - <<'PY'
+          import json,socket,subprocess,re
+          from urllib.request import urlopen,Request
+          from urllib.error import HTTPError,URLError
+          domain="lmylaw.com"
+          mx=subprocess.run(["nslookup","-type=mx",domain],capture_output=True,text=True,timeout=10)
+          print(json.dumps({"event":"mx_for_published_firm_email","domain":domain,
+            "passed":mx.returncode==0 and bool(re.search(r"mail exchanger|exchanger\s*=|MX preference",mx.stdout,re.I)),
+            "mx_output_excerpt":mx.stdout[-1000:]}),flush=True)
+          urls=[
+             "https://lmylaw.com","https://www.lmylaw.com",
+             "http://lmylaw.com","http://www.lmylaw.com",
+             "https://plea.net/attorneys/de/",
+             "https://www.lawyers.com/dover/delaware/liguori-morris-and-yiengst-340680-f/",
+          ]
+          for url in urls:
+            try:
+              req=Request(url,headers={"User-Agent":"OpenLeads-Law-Evidence/1.0"})
+              with urlopen(req,timeout=8) as f:
+                body=f.read(100000).decode("utf-8","replace")
+                print(json.dumps({"event":"contact_source_http","url":url,
+                  "status":f.status,"final_url":f.url,
+                  "firm_name":bool(re.search("Liguori|Morris",body,re.I)),
+                  "business_phone":bool(re.search("302.?678.?9900",body)),
+                  "email_published":bool(re.search("gmorris@lmylaw\\.com",body,re.I)),
+                  "site_looks_parked":bool(re.search("domain (is )?for sale|parked (free|domain)|godaddy|coming soon",body,re.I))}),flush=True)
+            except Exception as e:
+              print(json.dumps({"event":"contact_source_http","url":url,"error":str(e)[:180]}),flush=True)
+          PY
