@@ -47,9 +47,27 @@ jobs:
               db.conn.commit()
           db.close()
           PY
-      - name: Acquire bar-source firm-size-first candidates with published business phone
+      - name: Restore last real Google Maps no-site-field candidate artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 -m law_local.bar_sources --db state/law-leads.sqlite3 --seconds 100 --max-pages 25
+          mkdir -p state/maps
+          maps_run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow law-maps-pilot.yml --status completed --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+          if [ -n "$maps_run" ]; then
+            gh run download "$maps_run" --repo "$GITHUB_REPOSITORY" --name law-maps-discovery-pilot --dir state/maps || true
+          fi
+          if [ -f state/maps/no-site-phone-candidates.csv ]; then
+            echo "MAPS_CANDIDATE_FILE_PRESENT=1"
+          else
+            echo "MAPS_CANDIDATE_FILE_PRESENT=0"
+          fi
+      - name: Verify Maps-sourced firms against independently published headcounts and phones
+        run: |
+          if [ -f state/maps/no-site-phone-candidates.csv ]; then
+            python3 -m law_local.maps_first --db state/law-leads.sqlite3 --csv state/maps/no-site-phone-candidates.csv --seconds 75 --max-profiles 30
+          else
+            echo "No Maps artifact available. No Maps candidates may be inferred."
+          fi
       - name: Diagnose website-review rejects from saved source evidence
         run: |
           python3 - <<'PY'
