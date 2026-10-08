@@ -129,6 +129,16 @@ jobs:
         run: |
           timeout 120s npm run law:once
           test "$(docker exec "${{ job.services.redis.id }}" redis-cli EXISTS recover:law-firm:portable-run:lease:v1)" = "0"
+      - name: Snapshot must never promote unaudited size-only firms
+        env:
+          REDIS_URL: redis://127.0.0.1:6379
+        run: |
+          docker exec "${{ job.services.redis.id }}" redis-cli HSET recover:leadstore:qualified "fixture:unaudited" '{"name":"Fixture Law Group","phone":"3125551212","website":"","industry":"LAW_FIRM","search_profile":"law-firm","attorney_count_estimate":3,"attorney_count_evidence_verified":true,"no_owned_website_verified":false}'
+          docker exec "${{ job.services.redis.id }}" redis-cli SADD recover:law-firm:unique-verified-headcount:v1 "fixture:unaudited"
+          timeout 120s npm run law:once
+          test "$(docker exec "${{ job.services.redis.id }}" redis-cli SISMEMBER recover:law-firm:call-ready:v1 fixture:unaudited)" = "0"
+          docker exec "${{ job.services.redis.id }}" redis-cli SREM recover:law-firm:unique-verified-headcount:v1 fixture:unaudited
+          docker exec "${{ job.services.redis.id }}" redis-cli HDEL recover:leadstore:qualified fixture:unaudited
       - name: Bootstrap preserves existing acquisition queue entries
         env:
           REDIS_URL: redis://127.0.0.1:6379
