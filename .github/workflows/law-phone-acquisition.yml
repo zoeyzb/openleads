@@ -78,14 +78,19 @@ jobs:
         run: |
           python3 - <<'PY'
           import sqlite3,json
-          from law_local.florida_roster import clearly_non_law_employer
+          from law_local.florida_roster import clearly_non_law_employer,ambiguous_employer_identity
           db=sqlite3.connect('state/law-leads.sqlite3')
           rows=db.execute("SELECT firm,status,source_url FROM candidates WHERE source_url LIKE 'https://www.floridalawdirectory.com/firm/%'").fetchall()
           business=[x for x in rows if clearly_non_law_employer(x[0])]
+          bad_identities=[x for x in rows if ambiguous_employer_identity(x[0])]
           for firm,status,url in business:
               if status in ('pending','inconclusive','unverified_identity','unverified_size'):
                   db.execute("UPDATE candidates SET status='review_nonlaw_employer' WHERE source_url=?",(url,))
+          for firm,status,url in bad_identities:
+              if status in ('pending','inconclusive','unverified_identity','unverified_size'):
+                  db.execute("UPDATE candidates SET status='review_ambiguous_identity' WHERE source_url=?",(url,))
           db.commit()
+          print(json.dumps({'source_backed_roster_records':len(rows),'nonlaw_employers_flagged':len(business),'ambiguous_identities_flagged':len(bad_identities)}))
           print(json.dumps({'source_backed_roster_records':len(rows),'nonlaw_employers_flagged':len(business),'remaining_roster_profiles':db.execute("SELECT COUNT(*) FROM fl_roster_frontier WHERE status='pending'").fetchone()[0]}))
           db.close()
           PY
@@ -131,7 +136,7 @@ jobs:
           db.row_factory=sqlite3.Row
           records=db.execute("""SELECT firm,phone,state,city,source_url,status,result_json
              FROM candidates WHERE source_url LIKE 'https://www.floridalawdirectory.com/firm/%'
-               AND status NOT IN ('review_nonlaw_employer')
+               AND status NOT IN ('review_nonlaw_employer','review_ambiguous_identity')
              ORDER BY firm""").fetchall()
           path=Path("state/roster-sourced-size-phone.csv")
           path.parent.mkdir(parents=True,exist_ok=True)
