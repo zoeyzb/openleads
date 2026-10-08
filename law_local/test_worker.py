@@ -52,6 +52,20 @@ class QualityTests(unittest.TestCase):
         found=classify_search_results([{"responded":True,"urls":["https://keystoneparker.testing-law.org"]},{"responded":True,"urls":[]}])
         self.assertEqual(found["status"],"review_website")
 
+    def test_ddg_redirect_cannot_hide_possible_owned_website(self):
+        found=classify_search_results([
+            {"responded":True,"urls":["https://duckduckgo.com/l/?uddg=https%3A%2F%2Fkeystoneparker.testing-law.org"]},
+            {"responded":True,"urls":[]}
+        ])
+        self.assertEqual(found["status"],"review_website")
+
+    def test_missing_bing_source_does_not_make_verified(self):
+        found=classify_search_results([
+            {"responded":False,"urls":[]},
+            {"responded":True,"urls":[]}
+        ])
+        self.assertNotEqual(found["status"],"screened_no_site")
+
     def test_strict_gate_never_guesses_an_email(self):
         result=evaluate_candidate(LEAD, PROFILE.replace("intake@keystoneparker.testing-law.org",""),
                                   [{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
