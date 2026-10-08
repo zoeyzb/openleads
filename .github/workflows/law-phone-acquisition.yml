@@ -33,10 +33,29 @@ jobs:
       - name: Import public firm-and-phone candidates from the tracker and archive
         run: |
           python3 law_local/worker.py --db state/law-leads.sqlite3 import law_local/private_seed_firms_20261008.csv
+      - name: Recheck previously rejected profiles after parser regression fixes
+        run: |
+          python3 - <<'PY'
+          from law_local.worker import SqliteQueue
+          db=SqliteQueue("state/law-leads.sqlite3")
+          # Once-only migration marker: don't waste minutes rechecking on every run.
+          db.conn.execute("CREATE TABLE IF NOT EXISTS verifier_migrations (name TEXT PRIMARY KEY)")
+          name="20261008-directory-parse-and-site-redirect"
+          if not db.conn.execute("SELECT 1 FROM verifier_migrations WHERE name=?",(name,)).fetchone():
+              db.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status IN ('unverified_identity','unverified_size','inconclusive')")
+              db.conn.execute("INSERT INTO verifier_migrations VALUES (?)",(name,))
+              db.conn.commit()
+          db.close()
+          PY
+      - name: Discover fresh published law firm directory profiles
+        run: |
+          python3 law_local/worker.py --db state/law-leads.sqlite3 discover \
+            --states FL,TX,CA,NY,IL,GA,PA,OH,NC,MI \
+            --max-queries 12 --max-pages 40 --seconds 120 --delay 0.8
       - name: Reverify public directory evidence and owned websites
         run: |
           python3 law_local/worker.py --db state/law-leads.sqlite3 run \
-            --max 300 --workers 8 --seconds 280
+            --max 340 --workers 8 --seconds 250
       - name: Export verified phone-first firms
         if: always()
         run: |
