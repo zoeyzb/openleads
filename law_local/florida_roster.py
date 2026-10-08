@@ -204,20 +204,30 @@ def verify_profiles(db,fetch_fn=fetch_public,max_profiles=300,seconds=260,
         finally:
             if polite_wait:time.sleep(polite_wait)
     stats=Counter()
-    with ThreadPoolExecutor(max_workers=max(1,min(8,workers))) as pool:
-        futures=[pool.submit(one,x) for x in rows]
-        for future in as_completed(futures):
-            url,lead,status=future.result()
-            stats["profiles_attempted"]+=1
-            stats[status]+=1
-            if lead:
-                stats["published_firm_size_phone"]+=1
-                outcome=add_or_upgrade(db,lead)
-                stats[outcome]+=1
-            db.conn.execute("""UPDATE fl_roster_frontier
-                SET checked_at=?,status=? WHERE url=?""",
-                (utc_now(),status,url))
-            db.conn.commit()
+    deadline=start+max(1,int(seconds))
+    concurrency=max(1,min(8,workers))
+    # Never enqueue all 850 at once: the old seconds argument was unused,
+    # risking GitHub job timeout before the durable SQLite artifact step.
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        for offset in range(0,len(rows),concurrency*3):
+            if time.monotonic()>=deadline:
+                stats["deadline_reached"]+=1
+                break
+            wave=rows[offset:offset+concurrency*3]
+            futures=[pool.submit(one,x) for x in wave]
+            for future in as_completed(futures):
+                url,lead,status=future.result()
+                stats["profiles_attempted"]+=1
+                stats[status]+=1
+                if lead:
+                    stats["published_firm_size_phone"]+=1
+                    outcome=add_or_upgrade(db,lead)
+                    stats[outcome]+=1
+                db.conn.execute("""UPDATE fl_roster_frontier
+                    SET checked_at=?,status=? WHERE url=?""",
+                    (utc_now(),status,url))
+                db.conn.commit()
+    stats["time_elapsed_seconds"]=round(time.monotonic()-start,1)
     return dict(stats)
 
 def run(db_path,max_pages=156,max_profiles=300,seconds=440,fetch_fn=fetch_public):

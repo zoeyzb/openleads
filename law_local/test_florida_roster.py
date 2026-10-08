@@ -78,6 +78,26 @@ class FloridaRosterTests(unittest.TestCase):
             self.assertGreaterEqual(report["fl_roster_profiles"]["published_firm_size_phone"],1)
             self.assertEqual(report["counts"].get("pending"),1)
             self.assertEqual(report["counts"].get("calling_qualified"),0)
+    def test_profile_fetch_respects_bounded_time_and_keeps_frontier_pending(self):
+        import time
+        from law_local.florida_roster import verify_profiles
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"db.sqlite")
+            ensure_tables(db)
+            for i in range(60):
+                db.conn.execute("INSERT INTO fl_roster_frontier(url,listed_attorneys,discovered_at) VALUES(?,?,?)",
+                    (ROOT+"/firm/source-"+str(i),3,"2026-10-08"))
+            db.conn.commit()
+            def slow_fetch(url,timeout=10):
+                time.sleep(0.18)
+                return PROFILE
+            result=verify_profiles(db,fetch_fn=slow_fetch,max_profiles=60,
+                   seconds=1,workers=3,polite_wait=0)
+            self.assertLess(result["profiles_attempted"],60)
+            self.assertGreater(db.conn.execute(
+                "SELECT COUNT(*) FROM fl_roster_frontier WHERE status='pending'").fetchone()[0],0)
+            db.close()
+
     def test_versioned_better_public_source_replaces_only_old_failed_proof(self):
         with tempfile.TemporaryDirectory() as path:
             db=SqliteQueue(Path(path)/"db.sqlite")
