@@ -26,7 +26,7 @@ import xml.etree.ElementTree as ET
 
 USER_AGENT = "OpenLeads-Law-Evidence/1.0 (+https://github.com/zoeyzb/openleads)"
 DIRECTORY_DOMAINS = (
-    "lawyers.com", "lawyer.com", "avvo.com", "justia.com",
+    "lawyers.com", "lawyer.com", "avvo.com", "justia.com", "inbar.org",
     "findlaw.com", "martindale.com", "superlawyers.com",
     "floridabar.org", "americanbar.org", "lawinfo.com",
     "facebook.com", "linkedin.com", "instagram.com", "youtube.com",
@@ -121,7 +121,7 @@ def evaluate_published_source(html,lead):
     if not m:
         # Interpret an explicit firm-size *range* as a range; do not claim its
         # lower bound is the exact number or accept "1-5" as 2+.
-        range_match=re.search(r"\b(?:firm size|office size)\s*:?\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\b",raw_text,re.I)
+        range_match=re.search(r"\b(?:firm size|office size|firm/organization size)\s*:?\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\b",raw_text,re.I)
         if range_match:
             lo,hi=map(int,range_match.groups())
             if 2<=lo<=hi<=10:
@@ -130,7 +130,7 @@ def evaluate_published_source(html,lead):
             else:
                 attorneys=0
         else:
-            m=re.search(r"\b(?:firm size|number of attorneys|attorneys at this firm)\s*:?\s*(\d{1,2})(?!\s*(?:\+|[-–]|to\b|employees?\b|staff\b))\s*(?:attorneys?|lawyers?)?\b",raw_text,re.I)
+            m=re.search(r"\b(?:firm size|firm/organization size|number of attorneys|attorneys at this firm)\s*:?\s*(\d{1,2})(?!\s*(?:\+|[-–]|to\b|employees?\b|staff\b))\s*(?:attorneys?|lawyers?)?\b",raw_text,re.I)
             attorneys=int(m.group(1)) if m else 0
     else:
         attorneys=int(m.group(1))
