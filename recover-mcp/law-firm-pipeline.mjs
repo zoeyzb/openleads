@@ -15,7 +15,7 @@ import { decodePublishedRot13Emails } from "./published-email-obfuscation.mjs";
 import { alignEligibleToReady } from "./law-eligible-set-align.mjs";
 import { targetScopedLawyerComFirmSize, targetScopedLawyerComHtml, trustedLawyerComHeadcount } from "./lawyercom-firm-size.mjs";
 import { isFirmSpecificDirectoryHeadcountUrl } from "./headcount-source-policy.mjs";
-import { needsStrictOwnedWebsiteAudit, needsCallReadyOwnedWebsiteAudit, noOwnedWebsiteAuditOutcome } from "./strict-owned-website-gate.mjs";
+import { needsStrictOwnedWebsiteAudit, needsCallReadyOwnedWebsiteAudit, noOwnedWebsiteAuditOutcome, hasCompletedSiteSearch } from "./strict-owned-website-gate.mjs";
 import { withOperationDeadline } from "./enrich-deadline.mjs";
 import { shouldThrottleGeneralForSizeReady, sizeReadyFailureDisposition, shouldScheduleLegacyRecoverable, shouldRunEmailConversionWorker, shouldCircuitBreakSource } from "./law-lane-pressure.mjs";
 import { runBoundedDirectoryCandidates } from "./law-directory-runner.mjs";
@@ -2348,7 +2348,7 @@ function yahooResultLinks(html=""){
   }
   return [...new Set(out)].slice(0,12);
 }
-async function findOwnedWebsitePreflight(lead,key="",force=false){
+async function findOwnedWebsitePreflight(lead,key="",force=false,requireSearchResponse=false){
   if(!force&&(!highValueLawResearchLead(lead)||lead.conversion_headcount_priority===true))return "";
   const name=String(lead.name||lead.title||"").replace(/"/g,"").trim();
   if(!name)return "";
@@ -2372,17 +2372,23 @@ async function findOwnedWebsitePreflight(lead,key="",force=false){
     const html=htmlResult.status==="fulfilled"?htmlResult.value?.html||"":"";
     const rss=rssResult.status==="fulfilled"?rssResult.value?.html||"":"";
     const duck=duckResult.status==="fulfilled"?duckResult.value?.html||"":"";
-    return [...new Set([
-      ...bingResultLinks(html),
-      ...bingRssResultLinks(rss),
-      ...duckResultLinks(duck),
-      ...markdownResultLinks(duck)
-    ])];
+    return {
+      responded:Boolean(html||rss||duck),
+      links:[...new Set([
+        ...bingResultLinks(html),
+        ...bingRssResultLinks(rss),
+        ...duckResultLinks(duck),
+        ...markdownResultLinks(duck)
+      ])]
+    };
   }));
+  if(requireSearchResponse&&!hasCompletedSiteSearch(searchResults)){
+    throw new Error("owned-site exact-name search providers returned no usable response");
+  }
   const links=[];
   for(const result of searchResults){
     if(result.status!=="fulfilled")continue;
-    for(const url of result.value||[]){
+    for(const url of result.value?.links||[]){
       // Exact-name/phone search results can reveal an owned site whose domain
       // is a brand alias unrelated to the firm's Maps name (for example an
       // initials/advocates domain). Fetch unknown first-party candidates and
@@ -6469,7 +6475,7 @@ async function auditCallReadyCandidate(key){
   }
   if(!ownedWebsite){
     try{
-      ownedWebsite=await findOwnedWebsitePreflight({...lead,emails:existingEmails},key,true);
+      ownedWebsite=await findOwnedWebsitePreflight({...lead,emails:existingEmails},key,true,true);
       siteChecksSucceeded++;
       if(ownedWebsite)method="exact_firm_preflight";
     }catch(error){
