@@ -139,6 +139,18 @@ jobs:
           test "$(docker exec "${{ job.services.redis.id }}" redis-cli SISMEMBER recover:law-firm:call-ready:v1 fixture:unaudited)" = "0"
           docker exec "${{ job.services.redis.id }}" redis-cli SREM recover:law-firm:unique-verified-headcount:v1 fixture:unaudited
           docker exec "${{ job.services.redis.id }}" redis-cli HDEL recover:leadstore:qualified fixture:unaudited
+      - name: Configured Sheet sync must fail clearly when credentials are missing
+        env:
+          REDIS_URL: redis://127.0.0.1:6379
+          LAW_LEADS_SHEET_SYNC_ENABLED: "true"
+          LAW_LEADS_SPREADSHEET_ID: "integration-placeholder"
+          GOOGLE_SERVICE_ACCOUNT_JSON: "{}"
+        run: |
+          if timeout 120s npm run law:once; then
+            echo "Expected a nonzero exit for missing Sheet credentials"
+            exit 1
+          fi
+          test "$(docker exec "${{ job.services.redis.id }}" redis-cli EXISTS recover:law-firm:portable-run:lease:v1)" = "0"
       - name: Bootstrap preserves existing acquisition queue entries
         env:
           REDIS_URL: redis://127.0.0.1:6379
