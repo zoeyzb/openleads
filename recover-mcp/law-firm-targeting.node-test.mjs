@@ -34,6 +34,8 @@ const qualifiedBase={
   practice_keys:["personal_injury"],
   attorney_count_estimate:4,
   attorney_count_evidence_verified:true,
+  call_ready_website_audit_status:"no_owned_site",
+  call_ready_website_audit_version:"call-ready-site-v1",
   email_source_verified:true
 };
 assert.equal(qualifiesCallReadyNoWebsiteLawLead({
@@ -43,6 +45,11 @@ assert.equal(qualifiesCallReadyNoWebsiteLawLead({
   email_source_verified:false,
   phone:"3125551212"
 }),true,"call-ready target means callable + no owned website + verified 2-10");
+assert.equal(qualifiesCallReadyNoWebsiteLawLead({
+  ...qualifiedBase,
+  call_ready_website_audit_status:"",
+  call_ready_website_audit_version:""
+}),false,"missing website field is not enough; current no-owned-site audit is required");
 assert.equal(qualifiesNoWebsiteLawLead({
   ...qualifiedBase,
   emails:[],
