@@ -27,7 +27,7 @@ import xml.etree.ElementTree as ET
 USER_AGENT = "OpenLeads-Law-Evidence/1.0 (+https://github.com/zoeyzb/openleads)"
 DIRECTORY_DOMAINS = (
     "lawyers.com", "lawyer.com", "avvo.com", "justia.com", "inbar.org",
-    "findthelawfirms.com", "findthelawyers.com",
+    "findthelawfirms.com", "findthelawyers.com", "floridalawdirectory.com",
     "findlaw.com", "martindale.com", "superlawyers.com",
     "floridabar.org", "americanbar.org", "lawinfo.com",
     "facebook.com", "linkedin.com", "instagram.com", "youtube.com",
@@ -135,6 +135,16 @@ def evaluate_published_source(html,lead):
             attorneys=int(m.group(1)) if m else 0
     else:
         attorneys=int(m.group(1))
+    # The Florida Bar-derived firm roster publishes a firm-specific count of
+    # ACTIVE licensed attorneys, not the "Firm Size" marketing label.
+    # Accept it only on the attributed /firm/ profile after exact firm AND
+    # published business-phone identity matching above.
+    parsed=urlparse(str(lead.get("source_url","")))
+    if (parsed.hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com" and parsed.path.startswith("/firm/"):
+        roster_match=re.search(r"\bAttorneys\s+(\d{1,4})\s+active\b",raw_text,re.I)
+        if roster_match:
+            attorneys=int(roster_match.group(1))
+            attorney_range=(attorneys,attorneys)
     # Emails must be literally published in this identity-matched page.
     emails=sorted(set(v.lower() for v in EMAIL_RE.findall(unescape(html))))
     # Provider footer addresses are not prospect contact evidence.
