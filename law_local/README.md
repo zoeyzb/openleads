@@ -16,6 +16,7 @@ From the repository root on a Mac or Linux computer:
 
 ```bash
 python3 -m unittest discover -s law_local -v
+python3 law_local/worker.py --db "$HOME/law-leads.sqlite3" discover --states FL,TX,CA,NY,IL --max-queries 20 --max-pages 100 --seconds 480
 python3 law_local/worker.py --db "$HOME/law-leads.sqlite3" import /path/to/candidates.csv
 python3 law_local/worker.py --db "$HOME/law-leads.sqlite3" run --max 1000 --workers 4 --seconds 7200
 python3 law_local/worker.py --db "$HOME/law-leads.sqlite3" export --status strict_eligible --out "$HOME/strict-law-leads.csv"
@@ -36,9 +37,13 @@ firm,phone,city,state,source_url
 ```
 
 Do not put made-up rows or guessed emails into the input. Existing CSVs may
-need their column names adapted. **The tool currently validates imported
-candidates; it does not yet autonomously discover thousands of new law firms.**
-A no-input run legitimately reports zero processed. This is a portable evidence
+need their column names adapted. The `discover` subcommand searches a bounded set of public legal-directory pages,
+retains only profiles with a matching published firm, usable-format phone,
+and explicit 2–10 attorney evidence, and persists its query checkpoints in SQLite.
+It is a **new, unproven public-search discovery adapter**, not a guarantee of
+1,000 or 10,000 qualified leads. Run the `run` command afterward to verify
+absence of an owned website. Search provider errors cause retries, not invented leads.
+A no-input or unavailable-provider run can legitimately report zero processed. This is a portable evidence
 gate, **not** a verified 1,000-lead acquisition system.
 
 ### Eligibility (strict)
@@ -50,11 +55,9 @@ An export row requires all of the following:
 3. An explicit firm-attorney count from 2–10 on that source page.
 4. A bounded two-provider negative owned-website search, with **both providers
    responding successfully**. Owned-site hints trigger review, not acceptance.
-5. An email visibly published on the identity-matched source page, plus a DNS
-   MX response for its domain. Guessed email formats are never accepted.
-
-The separate `call_ready_no_email` export satisfies steps 1–4 but has no
-source-backed MX-checked email. A published phone's syntax is screened, but
+Email is OPTIONAL. A source-published email with a positive MX check is exported
+as a bonus. Missing email or MX failure never blocks calling eligibility.
+Historical `call_ready_no_email` rows are automatically requeued for screening. A published phone's syntax is screened, but
 this process does **not** place a call to verify that it actually rings.
 
 A no-website search is an *evidence-based screening*, not logical proof that
@@ -78,6 +81,9 @@ Running or testing fixtures here does not produce real leads.
   public repo.
 - The local worker intentionally fails closed when it lacks source/website
   evidence. High volumes of unverified firms **do not count** toward the target.
-- For large-scale autonomous discovery, add trusted directory adapters and
-  obtain a persistent connected runtime with network access. This has **not**
-  been implemented or proven to find 1,000 new prospects in two hours.
+- The discovery adapter is intentionally conservative, rate-limited and subject
+  to provider outages, robots policy and public-directory availability. The
+  workflow has **not** been live-proven to find 1,000 or 10,000 qualified firms.
+  A hosted GitHub Actions runner is an optional limited execution path, with
+  private-repository usage deducted from account quotas; it is not unlimited
+  free compute.

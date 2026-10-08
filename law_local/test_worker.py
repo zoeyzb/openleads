@@ -10,26 +10,27 @@ from pathlib import Path
 
 PROFILE = """
 <html><h1>Keystone & Parker Law Group</h1>
-<p>Call (312) 555-0182</p>
+<p>Call (312) 422-1836</p>
 <p>Keystone & Parker Law Group has 4 attorneys at this location.</p>
 <p>Contact: intake@keystoneparker.testing-law.org</p></html>
 """
 LEAD = {
     "firm": "Keystone & Parker Law Group",
-    "phone": "(312) 555-0182",
+    "phone": "(312) 422-1836",
     "city": "Chicago", "state": "IL",
     "source_url": "https://www.lawyers.com/chicago/illinois/keystone-parker-law-group/"
 }
 
 class QualityTests(unittest.TestCase):
     def test_phone(self):
-        self.assertEqual(normalize_phone("+1 (312) 555-0182"), "3125550182")
+        self.assertEqual(normalize_phone("+1 (312) 422-1836"), "3124221836")
         self.assertEqual(normalize_phone("111-111-1111"), "")
         self.assertEqual(normalize_phone("000-000-0000"), "")
+        self.assertEqual(normalize_phone("312-555-0182"), "")
 
     def test_firm_identity_requires_name_and_phone(self):
         self.assertTrue(firm_identity_matches(PROFILE, LEAD))
-        self.assertFalse(firm_identity_matches(PROFILE.replace("555-0182","555-0111"), LEAD))
+        self.assertFalse(firm_identity_matches(PROFILE.replace("422-1836","422-1111"), LEAD))
         self.assertFalse(firm_identity_matches(PROFILE.replace("Keystone & Parker","Someone Else"), LEAD))
 
     def test_headcount_and_email_are_attested_by_same_page(self):
@@ -37,6 +38,10 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(result["attorneys"],4)
         self.assertEqual(result["emails"],["intake@keystoneparker.testing-law.org"])
         self.assertFalse(result["website_candidates"])
+
+    def test_explicit_directory_firm_size_field(self):
+        html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys at this location.","Firm Size: 4")
+        self.assertEqual(evaluate_published_source(html,LEAD)["attorneys"],4)
 
     def test_reject_unattributed_headcount(self):
         html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys at this location.","4 attorneys for defendant.")
@@ -79,7 +84,8 @@ class QualityTests(unittest.TestCase):
         result=evaluate_candidate(LEAD, PROFILE.replace("intake@keystoneparker.testing-law.org",""),
                                   [{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
                                   mx_check=lambda domain:True)
-        self.assertEqual(result["status"],"call_ready_no_email")
+        self.assertEqual(result["status"],"strict_eligible")
+        self.assertEqual(result["email"],"")
 
     def test_strict_gate_requires_mx_and_two_no_site_checks(self):
         good=evaluate_candidate(LEAD,PROFILE,[{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
@@ -87,7 +93,8 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(good["status"],"strict_eligible")
         bad=evaluate_candidate(LEAD,PROFILE,[{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
                                mx_check=lambda domain:False)
-        self.assertNotEqual(bad["status"],"strict_eligible")
+        self.assertEqual(bad["status"],"strict_eligible")
+        self.assertEqual(bad["email"],"")
 
     def test_queue_persists_and_deduplicates(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -101,6 +108,17 @@ class QualityTests(unittest.TestCase):
             db=SqliteQueue(path)
             self.assertEqual(len(db.pending(10)),0)
             self.assertEqual(db.counts()["strict_eligible"],1)
+            db.close()
+
+    def test_legacy_no_email_records_are_requeued(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"law.sqlite3"
+            db=SqliteQueue(path)
+            db.add(LEAD)
+            db.record(LEAD,{"status":"call_ready_no_email","attorneys":4})
+            db.close()
+            db=SqliteQueue(path)
+            self.assertEqual(db.counts()["pending"],1)
             db.close()
 
 class EndToEndTests(unittest.TestCase):
