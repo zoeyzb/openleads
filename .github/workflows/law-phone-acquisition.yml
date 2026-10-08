@@ -74,7 +74,7 @@ jobs:
       - name: Verify Maps-sourced firms against independently published headcounts and phones
         run: |
           if [ -f state/maps/no-site-phone-candidates.csv ]; then
-            python3 -m law_local.maps_first --db state/law-leads.sqlite3 --csv state/maps/no-site-phone-candidates.csv --seconds 75 --max-profiles 30
+            python3 -m law_local.maps_first --db state/law-leads.sqlite3 --csv state/maps/no-site-phone-candidates.csv --seconds 160 --max-profiles 120
           else
             echo "No Maps artifact available. No Maps candidates may be inferred."
           fi
@@ -133,6 +133,8 @@ jobs:
             state/law-leads.sqlite3
             state/call-qualified-law.csv
             state/email-eligible-law.csv
+            state/maps/no-site-phone-candidates.csv
+            state/maps/extraction-summary.json
             state/stats.json
           if-no-files-found: warn
           retention-days: 14
