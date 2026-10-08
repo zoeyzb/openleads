@@ -51,7 +51,7 @@ class MapsFirstTests(unittest.TestCase):
             db=SqliteQueue(Path(d)/"db.sqlite")
             ingest_maps_candidates(db,file)
             stats=verify_map_headcounts(db,fetch_fn=lambda url,timeout=8:HTML,seconds=15,max_profiles=10)
-            self.assertEqual(stats["new_qualified_candidates"],0)
+            self.assertEqual(stats["added_to_final_audit"],0)
             self.assertEqual(db.counts()["calling_qualified"],0)
             db.close()
 
