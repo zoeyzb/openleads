@@ -1,8 +1,6 @@
 name: Law phone-first acquisition (bounded)
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '17 * * * *'
   workflow_run:
     workflows: ["Law Google Maps public discovery pilot"]
     types: [completed]
@@ -75,7 +73,7 @@ jobs:
           fi
       - name: Acquire FL bar-derived firm rosters with 2–10 active licensed attorneys and real published phone
         run: |
-          python3 -m law_local.florida_roster --db state/law-leads.sqlite3 --max-pages 156 --max-profiles 3500 --seconds 560
+          python3 -m law_local.florida_roster --db state/law-leads.sqlite3 --max-pages 156 --max-profiles 1200 --seconds 560
       - name: Audit private-law-practice identity and source-backed contact counts
         run: |
           python3 - <<'PY'
