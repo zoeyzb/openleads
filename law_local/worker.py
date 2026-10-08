@@ -409,35 +409,59 @@ DISCOVERY_STATES = {
 }
 
 def discovery_queries(states):
-    """Diversified, bounded index queries; provider errors never count as hits."""
+    """Small, diverse queries covering both actual Lawyer.com firm URL forms."""
     for state in states:
         state=str(state).upper().strip()
         if state not in DISCOVERY_STATES:
             raise ValueError("Unknown US state abbreviation: "+state)
         name=DISCOVERY_STATES[state]
-        for source in ("lawyer.com/firm", "lawyers.com"):
-            for practice in ("family law", "personal injury", "criminal defense", "estate planning"):
-                yield state, f'site:{source} "{name}" "{practice}" attorneys'
+        for source in ("lawyer.com/firm", "lawyer.com/firms"):
+            for practice in ("firm size", "family law", "estate planning", "criminal law"):
+                yield state, f'site:{source} {name} {practice}'
+
+
+def _discovery_result_url(url):
+    if url.startswith("//"):
+        url="https:"+url
+    if not _public_http_url(url):
+        return ""
+    target=search_target(url)
+    host=(urlparse(target).hostname or "").lower().removeprefix("www.")
+    path=urlparse(target).path.lower()
+    if host=="lawyer.com" and (path.startswith("/firm/") or path.startswith("/firms/")):
+        return target
+    return ""
 
 
 def _search_directory_profiles(query):
-    """Bing RSS discovery only; handles failure honestly, never invents URLs."""
-    rss="https://www.bing.com/search?"+urlencode({"q":query,"format":"rss"})
-    html=fetch_public(rss,timeout=10)
-    root=ET.fromstring(html)
-    if not root.tag.lower().endswith("rss"):
-        raise ValueError("discovery RSS unavailable")
-    results=[]
-    for item in root.findall(".//item"):
-        url=(item.findtext("link") or "").strip()
-        host=(urlparse(url).hostname or "").lower().removeprefix("www.")
-        path=urlparse(url).path.lower()
-        if _public_http_url(url) and (
-            (host=="lawyer.com" and path.startswith("/firm/")) or
-            (host=="lawyers.com" and "/law-firm/" in path)
-        ):
-            results.append(url)
-    return list(dict.fromkeys(results))
+    """Try public Bing RSS and DDG HTML; never treat anti-bot as no results."""
+    attempts=0
+    raw_urls=[]
+    for provider,url in (
+        ("bing","https://www.bing.com/search?"+urlencode({"q":query,"format":"rss"})),
+        ("duck","https://html.duckduckgo.com/html/?"+urlencode({"q":query}))
+    ):
+        try:
+            html=fetch_public(url,timeout=12)
+            if provider=="bing":
+                root=ET.fromstring(html)
+                if not root.tag.lower().endswith("rss"):
+                    continue
+                urls=[(item.findtext("link") or "").strip() for item in root.findall(".//item")]
+            else:
+                low=html.lower()
+                if "result__a" not in low and "no results" not in low:
+                    continue
+                p=reader(html)
+                urls=[link for link,label in p.links]
+            attempts+=1
+            raw_urls.extend(urls)
+        except Exception:
+            continue
+    if attempts==0:
+        raise ValueError("No responsive discovery providers")
+    results=[_discovery_result_url(url) for url in raw_urls]
+    return list(dict.fromkeys(url for url in results if url))
 
 
 def _extract_directory_profile(url,html):
