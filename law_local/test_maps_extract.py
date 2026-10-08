@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from law_local.maps_extract import extract,maps_candidate,state_from_address
+from law_local.maps_extract import extract,maps_candidate,state_from_address,city_from_address
 
 GOOD={
     "title":"Potter & Finch Law Group",
@@ -65,3 +65,5 @@ class MapsExtractTests(unittest.TestCase):
 
     def test_full_state_names(self):
         self.assertEqual(state_from_address("Altoona, Pennsylvania, USA"),"PA")
+        self.assertEqual(state_from_address("123 Main St, Waco, TX 76701, United States"),"TX")
+        self.assertEqual(city_from_address("123 Main St, Waco, TX 76701, United States"),"Waco")
