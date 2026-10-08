@@ -1,6 +1,6 @@
 import { createSign } from "node:crypto";
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, qualifiesCallReadyNoWebsiteLawLead, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
-import { reconcileExportMetrics } from "./law-sheet-metrics.mjs";
+import { reconcileExportMetrics, dedupeCallReadyRowsByPhone } from "./law-sheet-metrics.mjs";
 
 // Law sheet sync deploy rev: strict-live-metrics-v2
 const TOKEN_URL="https://oauth2.googleapis.com/token";
@@ -149,7 +149,7 @@ async function collectRows(redis){
     }
   }
   out.sort((a,b)=>b.priority-a.priority||Number(b.eligible)-Number(a.eligible)||Number(b.emailReadyBonus)-Number(a.emailReadyBonus)||String(a.row[1]).localeCompare(String(b.row[1])));
-  return out;
+  return dedupeCallReadyRowsByPhone(out);
 }
 
 async function collectVerifiedEmailCandidateRows(redis){
@@ -246,7 +246,7 @@ async function collectWebsiteRefreshRows(redis){
 async function collectMetricsSnapshot(redis){
   const [
     strictEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
-    pendingSizeReady,headcountPriority,headcountGeneral,emailPriority,emailRecoverable
+    pendingSizeReady,headcountPriority,headcountGeneral,emailPriority,emailRecoverable,callReadyAuditPending
   ]=await Promise.all([
     redis.sCard("recover:law-firm:unique-eligible:v1"),
     redis.sCard("recover:law-firm:call-ready:v1"),
@@ -257,14 +257,15 @@ async function collectMetricsSnapshot(redis){
     redis.sCard("recover:law-firm:phone-headcount-priority:v1"),
     redis.sCard("recover:law-firm:chicago-priority:v1"),
     redis.sCard("recover:law-firm:enrich-priority:v3"),
-    redis.sCard("recover:law-firm:enrich-recoverable:v1")
+    redis.sCard("recover:law-firm:enrich-recoverable:v1"),
+    redis.sCard("recover:law-firm:call-ready-audit-pending:v1")
   ]);
   return {
     timestamp:new Date().toISOString(),
     strictEligible,callReady,verifiedEmails,verifiedHeadcounts,emailCandidates,
     pendingSizeReady,headcountPriority,headcountGeneral,
     headcountTotal:headcountPriority+headcountGeneral,
-    emailPriority,emailRecoverable,
+    emailPriority,emailRecoverable,callReadyAuditPending,
     strictConversion:callReady>0?strictEligible/callReady:0
   };
 }
@@ -275,7 +276,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
   if(!sa){console.error("law_sheet_sync_not_configured");return;}
   let token="",tokenAt=0,running=false,sheetId=null,tabName="Call Ready Leads";
   const archiveTabName="Lead Archive";
-  const metricsTabName="Overview";
+  const metricsTabName="Diagnostics";
   const metricsHistoryTabName="Metrics History";
 
   async function auth(){
@@ -311,6 +312,24 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
     const made=await request(":batchUpdate",{method:"POST",body:{requests:[{addSheet:{properties:{title,gridProperties:{rowCount,columnCount,frozenRowCount:0}}}}]}});
     return made.replies?.[0]?.addSheet?.properties?.sheetId;
   }
+  async function setWorkbookVisibility(visibleTitles=[]){
+    const meta=await request("?fields=sheets.properties");
+    const visible=new Set(visibleTitles);
+    const legacyHide=new Set(["Verified Email Candidates","Live Metrics","Overview","Email Ready Bonus","Metrics History","Lead Archive"]);
+    const requests=[];
+    for(const sheet of (meta.sheets||[])){
+      const title=clean(sheet?.properties?.title);
+      const id=sheet?.properties?.sheetId;
+      if(id===undefined||id===null)continue;
+      if(visible.has(title)){
+        requests.push({updateSheetProperties:{properties:{sheetId:id,hidden:false},fields:"hidden"}});
+      }else if(legacyHide.has(title)){
+        requests.push({updateSheetProperties:{properties:{sheetId:id,hidden:true},fields:"hidden"}});
+      }
+    }
+    if(requests.length)await request(":batchUpdate",{method:"POST",body:{requests}});
+  }
+
   async function previousStatusesFor(title){
     try{
       const range=encodeURIComponent(`'${title}'!A1:R5000`);
@@ -403,19 +422,17 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
 
     const liveValues=[
       ["Pipeline stage","Count","What it means","What happens next"],
-      ["Eligible leads",snapshot.eligible,"Law firm + no owned website + verified 2–10 attorneys + usable phone","Ready to call"],
-      ["Email-ready bonus",snapshot.emailReady,"Eligible leads that also have a source-verified usable email","Can call + email"],
-      ["Waiting on email",snapshot.pendingSizeReady,"Eligible firms still missing source-verified email","Bonus enrichment lane"],
-      ["Unresolved firm size",snapshot.headcountTotal,"Callable no-site law records still needing verified 2–10 attorney proof","Primary bottleneck"],
-      ["Verified emails",snapshot.verifiedEmails,"Source-verified email evidence across law records","Evidence inventory"],
-      ["Verified headcounts",snapshot.verifiedHeadcounts,"Current-method source-verified attorney counts across law records","Evidence inventory"],
-      ["Target",10000,"Eligible lead goal: callable + no-site + verified 2–10","Grow verified headcount coverage"],
-      ["Remaining",Math.max(0,10000-snapshot.eligible),"Eligible leads still needed to reach target","Pipeline gap"],
-      ["Email-ready rate",snapshot.emailReadyRate,"Email-ready bonus / eligible leads","Diagnostic"],
+      ["CALL READY",snapshot.eligible,"Verified 2–10 attorneys + verified no owned website + usable phone","Ready to call"],
+      ["STRICT EMAIL BONUS",snapshot.emailReady,"Call-ready firms that also have source-verified usable email","Optional email outreach"],
+      ["Awaiting no-site audit",snapshot.callReadyAuditPending||0,"Verified 2–10 callable firms still proving no owned website","Audit worker"],
+      ["Unresolved firm size",snapshot.headcountTotal,"Callable law records still needing verified 2–10 attorney proof","Headcount worker"],
+      ["Target",10000,"Call-ready business target","Grow verified call-ready inventory"],
+      ["Remaining",Math.max(0,10000-snapshot.eligible),"Call-ready firms still needed","Pipeline gap"],
       ["Last update",snapshot.timestamp,"Production snapshot","Automatic"]
     ];
-    await request(`/values/${encodeURIComponent(`'${metricsTabName}'!A1:D11`)}?valueInputOption=RAW`,{
-      method:"PUT",body:{range:`'${metricsTabName}'!A1:D11`,majorDimension:"ROWS",values:liveValues}
+    await request(`/values/${encodeURIComponent(`'${metricsTabName}'!A1:D100`)}:clear`,{method:"POST",body:{}});
+    await request(`/values/${encodeURIComponent(`'${metricsTabName}'!A1:D${liveValues.length}`)}?valueInputOption=RAW`,{
+      method:"PUT",body:{range:`'${metricsTabName}'!A1:D${liveValues.length}`,majorDimension:"ROWS",values:liveValues}
     });
 
     const historyHeaders=["Timestamp UTC","Eligible Leads","Email-Ready Bonus","Verified Emails","Verified Headcounts","Pending Size-Ready Email","Headcount Priority","Headcount General","Headcount Total","Email Priority","Email Recoverable"];
@@ -478,7 +495,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
 
       // Email is a bonus outreach channel. Keep the email-ready subset separate
       // from the primary eligible call list.
-      const candidateTitle="Email Ready Bonus";
+      const candidateTitle="Strict Eligible";
       const candidateSheetId=await ensureAdditionalSheet(candidateTitle);
       const candidateStatuses=await previousStatusesFor(candidateTitle);
       const emailCandidates=await collectVerifiedEmailCandidateRows(redis);
@@ -518,6 +535,7 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       await request(":batchUpdate",{method:"POST",body:{requests}});
       const archive=await appendLeadArchive(leads);
       await writeMetricsSnapshot(metrics);
+      await setWorkbookVisibility([tabName,candidateTitle,metricsTabName]);
       console.log(JSON.stringify({
         event:"law_sheet_sync",rows:leads.length,emailReadyRows:emailCandidates.length,
         eligible:metrics.eligible,emailReady:metrics.emailReady,verifiedEmails:metrics.verifiedEmails,
