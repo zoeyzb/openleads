@@ -53,6 +53,9 @@ def normalize_phone(value):
         return ""
     if len(set(digits))==1 or digits in {"1234567890","0000000000"}:
         return ""
+    # NANP 555-0100...0199 numbers are reserved for fiction.
+    if digits[3:6]=="555" and 100<=int(digits[6:])<=199:
+        return ""
     return digits
 
 class TextReader(HTMLParser):
@@ -84,10 +87,11 @@ def reader(html):
 def firm_identity_matches(html,lead):
     p=reader(html)
     text=norm(" ".join(p.parts))
-    digits=re.sub(r"\D", "", " ".join(p.parts))
     firm=norm(lead.get("firm",""))
     phone=normalize_phone(lead.get("phone",""))
-    return bool(firm and len(firm)>=8 and firm in text and phone and phone in digits)
+    published={normalize_phone(m.group()) for m in PHONE_RE.finditer(" ".join(p.parts))}
+    # Never match a phone by concatenating unrelated page digits.
+    return bool(firm and len(firm)>=8 and firm in text and phone and phone in published)
 
 def _third_party(host):
     host=host.lower().removeprefix("www.")
@@ -109,6 +113,11 @@ def evaluate_published_source(html,lead):
     # Only accept explicit firm-size wording, not "attorneys for plaintiff".
     size_pattern=rf"\b{re.escape(firm)}\s+(?:has|employs|includes|comprises)\s+(\d{{1,2}})\s+attorneys?\b"
     m=re.search(size_pattern,text)
+    # Third-party firm profiles commonly use an explicit "Firm Size: N"
+    # field rather than a prose sentence. Require an identity/phone match
+    # first and do not interpret client counts or generic search snippets.
+    if not m:
+        m=re.search(r"\b(?:firm size|number of attorneys|attorneys at this firm)\s*:?\s*(\d{1,2})\b",text)
     attorneys=int(m.group(1)) if m else 0
     # Emails must be literally published in this identity-matched page.
     emails=sorted(set(v.lower() for v in EMAIL_RE.findall(unescape(html))))
@@ -124,7 +133,10 @@ def evaluate_published_source(html,lead):
                 continue
             # An outbound 'website' link on the source is evidence of a
             # possible owned site and must NOT be dismissed as a no-site lead.
-            external.append(href)
+            # General outbound links can be ads, analytics, maps or social
+            # links. Only a labeled firm site is meaningful owned-site evidence.
+            if re.search(r"(?i)\b(?:website|official site|visit site|firm site)\b",label or ""):
+                external.append(href)
         except ValueError:
             continue
     return {"attorneys":attorneys,"emails":emails,"website_candidates":sorted(set(external))}
@@ -179,6 +191,9 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
     evidence["site_status"]=site["status"]
     if site["status"]!="screened_no_site":
         return {**evidence,"status":site["status"],"site_evidence":site}
+    # PHONE-FIRST CONTRACT: email is an optional, source-published bonus.
+    # Missing/invalid email never disqualifies an independently verified
+    # law firm with 2-10 attorneys, a published phone, and no owned site.
     for email in source["emails"]:
         domain=email.rsplit("@",1)[-1]
         try:
@@ -186,9 +201,10 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
         except Exception:
             ok=False
         if ok:
-            return {**evidence,"status":"strict_eligible",
-                    "email":email,"email_source":lead.get("source_url","")}
-    return {**evidence,"status":"call_ready_no_email"}
+            evidence["email"]=email
+            evidence["email_source"]=lead.get("source_url","")
+            break
+    return {**evidence,"status":"strict_eligible"}
 
 class SqliteQueue:
     def __init__(self,path):
@@ -212,6 +228,8 @@ class SqliteQueue:
             );
             CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status);
         """)
+        # Re-evaluate old records previously rejected solely for no email.
+        self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status='call_ready_no_email'")
         self.conn.commit()
     @staticmethod
     def _id(lead):
@@ -383,7 +401,7 @@ def main(argv=None):
     p.add_argument("--workers",type=int,default=4)
     p.add_argument("--seconds",type=int,default=600)
     p=sub.add_parser("export",help="Export screened verified leads only")
-    p.add_argument("--status",choices=["strict_eligible","call_ready_no_email"],default="strict_eligible")
+    p.add_argument("--status",choices=["strict_eligible"],default="strict_eligible")
     p.add_argument("--out",default="./strict-law-leads.csv")
     sub.add_parser("stats")
     args=parser.parse_args(argv)
