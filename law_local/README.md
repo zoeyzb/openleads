@@ -19,7 +19,7 @@ python3 -m unittest discover -s law_local -v
 python3 law_local/worker.py --db "$HOME/law-leads.sqlite3" discover --states FL,TX,CA,NY,IL --max-queries 20 --max-pages 100 --seconds 480
 python3 law_local/worker.py --db "$HOME/law-leads.sqlite3" import /path/to/candidates.csv
 python3 law_local/worker.py --db "$HOME/law-leads.sqlite3" run --max 1000 --workers 4 --seconds 7200
-python3 law_local/worker.py --db "$HOME/law-leads.sqlite3" export --status strict_eligible --out "$HOME/strict-law-leads.csv"
+python3 law_local/worker.py --db "$HOME/law-leads.sqlite3" export --status calling_qualified --out "$HOME/call-qualified-law.csv"
 python3 law_local/worker.py --db "$HOME/law-leads.sqlite3" stats
 ```
 
@@ -55,8 +55,7 @@ An export row requires all of the following:
 3. An explicit firm-attorney count from 2–10 on that source page.
 4. A bounded two-provider negative owned-website search, with **both providers
    responding successfully**. Owned-site hints trigger review, not acceptance.
-Email is OPTIONAL. A source-published email with a positive MX check is exported
-as a bonus. Missing email or MX failure never blocks calling eligibility.
+Email is OPTIONAL for the **calling-qualified** pool. The export status `calling_qualified` combines verified phone-only firms (`call_qualified_no_email`) with the smaller `strict_eligible` subset that also has a source-published MX-checked email. Missing email never blocks the calling pool.
 Historical `call_ready_no_email` rows are automatically requeued for screening. A published phone's syntax is screened, but
 this process does **not** place a call to verify that it actually rings.
 

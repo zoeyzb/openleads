@@ -226,7 +226,9 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
             evidence["email"]=email
             evidence["email_source"]=lead.get("source_url","")
             break
-    return {**evidence,"status":"strict_eligible"}
+    # The calling list requires published phone, size and no owned site.
+    # Preserve separate stricter eligibility for source-published usable email.
+    return {**evidence,"status":"strict_eligible" if evidence["email"] else "call_qualified_no_email"}
 
 class SqliteQueue:
     def __init__(self,path):
@@ -280,10 +282,14 @@ class SqliteQueue:
              (result["status"],json.dumps(result,sort_keys=True),utc_now(),self._id(lead)))
         self.conn.commit()
     def counts(self):
-        return dict(self.conn.execute("SELECT status,COUNT(*) FROM candidates GROUP BY status").fetchall())
+        totals=dict(self.conn.execute("SELECT status,COUNT(*) FROM candidates GROUP BY status").fetchall())
+        totals["calling_qualified"]=totals.get("strict_eligible",0)+totals.get("call_qualified_no_email",0)
+        return totals
     def export(self,status,path):
-        rows=self.conn.execute("""SELECT firm,phone,city,state,source_url,result_json
-             FROM candidates WHERE status=? ORDER BY state,firm""",(status,)).fetchall()
+        statuses=("strict_eligible","call_qualified_no_email") if status=="calling_qualified" else (status,)
+        placeholders=",".join("?" for _ in statuses)
+        rows=self.conn.execute(f"""SELECT firm,phone,city,state,source_url,result_json
+             FROM candidates WHERE status IN ({placeholders}) ORDER BY state,firm""",statuses).fetchall()
         path=Path(path).expanduser()
         path.parent.mkdir(parents=True,exist_ok=True)
         cols=["Firm","Phone","City","State","Attorneys","Email","Headcount source","Email source","Website audit","Checked at"]
@@ -587,7 +593,7 @@ def main(argv=None):
     p.add_argument("--seconds",type=int,default=480)
     p.add_argument("--delay",type=float,default=1.2)
     p=sub.add_parser("export",help="Export screened verified leads only")
-    p.add_argument("--status",choices=["strict_eligible"],default="strict_eligible")
+    p.add_argument("--status",choices=["calling_qualified","strict_eligible","call_qualified_no_email"],default="calling_qualified")
     p.add_argument("--out",default="./strict-law-leads.csv")
     sub.add_parser("stats")
     args=parser.parse_args(argv)
