@@ -30,15 +30,13 @@ jobs:
           fi
       - name: Check local Python regression suite
         run: python3 -m unittest discover -s law_local -v
-      - name: Discover published firm phone and size records
+      - name: Import 161 existing unique calling candidates (not pre-qualified)
         run: |
-          python3 law_local/worker.py --db state/law-leads.sqlite3 discover \
-            --states FL,TX,CA,NY,IL,GA,PA,OH,NC,MI,AZ,WA \
-            --max-queries 18 --max-pages 45 --seconds 120 --delay 1.2
-      - name: Verify headcount, owned website and published phone
+          python3 law_local/worker.py --db state/law-leads.sqlite3 import law_local/private_seed_firms_20261008.csv
+      - name: Reverify public directory evidence and owned websites
         run: |
           python3 law_local/worker.py --db state/law-leads.sqlite3 run \
-            --max 18 --workers 3 --seconds 150
+            --max 90 --workers 6 --seconds 280
       - name: Export verified phone-first firms
         if: always()
         run: |
