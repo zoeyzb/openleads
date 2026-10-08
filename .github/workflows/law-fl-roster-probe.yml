@@ -68,6 +68,25 @@ jobs:
                    "phone":(re.search(r"Phone.{0,40}\d{3}[- .)]{1,4}\d{3}[- .]\d{4}",txt,re.I) or [None])[0]}),flush=True)
           except Exception as ex:
             print(json.dumps({"ca_error":str(ex)[:220]}),flush=True)
+          county="https://www.leebar.org"
+          try:
+            with urlopen(Request(county+"/robots.txt",headers={"User-Agent":ua}),timeout=10) as cr:
+              print(json.dumps({"county_robots_http":cr.status,
+                "county_robots_excerpt":cr.read(1200).decode("utf-8","replace")[:1100]}),flush=True)
+            with urlopen(Request(county+"/membership/member-directory/",headers={"User-Agent":ua}),timeout=12) as cr:
+              body=cr.read(280000).decode("utf-8","replace")
+              from html import unescape
+              parsed=reader(body)
+              clean=" ".join(parsed.parts)
+              print(json.dumps({"county_directory_status":cr.status,
+                "county_html_bytes":len(body),
+                "county_visible_firm":bool(re.search(r"ATLAS Defense Law|BLS Law",clean,re.I)),
+                "county_phone":bool(re.search(r"239.?208.?1500",clean)),
+                "county_emails_found":len(set(re.findall(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}",body,re.I))),
+                "county_website_field":bool(re.search("https://atlasdefenselaw.com",body)),
+                "county_table_excerpt":clean[:650]}),flush=True)
+          except Exception as ex:
+            print(json.dumps({"county_error":str(ex)[:160]}),flush=True)
           for rp in ("/firms","/firms?page=2","/firms?size=2-10","/firms?sort=name"):
             try:
               with urlopen(Request(root+rp,headers={"User-Agent":ua}),timeout=12) as rr:
