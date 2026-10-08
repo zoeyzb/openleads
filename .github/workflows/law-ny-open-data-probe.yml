@@ -18,13 +18,17 @@ jobs:
           urls=[
             ("schema","https://data.ny.gov/api/views/eqw2-r5nb/columns.json"),
             ("public_sample","https://data.ny.gov/resource/eqw2-r5nb.json?$limit=3"),
+            ("registration_status_counts","https://data.ny.gov/resource/eqw2-r5nb.json?"+urllib.parse.urlencode({"$select":"status,count(*) as n","$group":"status","$limit":30})),
+            ("company_group_sample","https://data.ny.gov/resource/eqw2-r5nb.json?"+urllib.parse.urlencode({"$select":"company_name,phone_number,city,state,count(*) as ny_attorneys","$where":"company_name is not null AND phone_number is not null AND state='NY'","$group":"company_name,phone_number,city,state","$having":"count(*) between 2 and 10","$limit":5})),
           ]
           for label,url in urls:
             try:
               req=urllib.request.Request(url,headers={"User-Agent":"OpenLeads-PublicSchemaCheck/1.0","Accept":"application/json"})
               with urllib.request.urlopen(req,timeout=15) as f:
                 data=json.load(f)
-              if label=="schema":
+              if label.startswith("registration_status") or label.startswith("company_group"):
+                print(json.dumps({"label":label,"count":len(data),"sample":data[:12]},ensure_ascii=False))
+              elif label=="schema":
                 fields=[{"fieldName":x.get("fieldName"),"name":x.get("name"),"dataTypeName":x.get("dataTypeName")} for x in data]
                 print(json.dumps({"label":label,"columns":fields},ensure_ascii=False))
               else:
