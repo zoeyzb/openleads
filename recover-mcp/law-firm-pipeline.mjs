@@ -402,7 +402,7 @@ await connectRedis();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"redis_connected"}));
 function normalize(v=""){return String(v||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
 async function emitCallReadySnapshot(){
-  const keys=await redis.sMembers(UNIQUE_VERIFIED_HEADCOUNT_SET);
+  const keys=await redis.sMembers(CALL_READY_SET);
   let matches=0,withEmail=0;
   for(let offset=0;offset<keys.length;offset+=250){
     const chunk=keys.slice(offset,offset+250);
@@ -415,8 +415,7 @@ async function emitCallReadySnapshot(){
       const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
       const sizeReady=lead.attorney_count_evidence_verified===true&&attorneyCount>=2&&attorneyCount<=10;
       const phone=String(lead.phone||"").trim();
-      if(!isLaw||/^https?:\/\//i.test(website)||!sizeReady||!isUsableLawPhone(phone)){await redis.sRem(CALL_READY_SET,chunk[i]);continue;}
-      await redis.sAdd(CALL_READY_SET,chunk[i]);
+      if(!isLaw||!qualifiesCallReadyNoWebsiteLawLead(lead))continue;
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>String(x||"").trim().toLowerCase())
         .filter(x=>isUsableLawEmail(x));
@@ -445,7 +444,7 @@ async function emitCallReadySnapshot(){
       }));
     }
   }
-  console.log(JSON.stringify({event:"law_call_ready_export_summary",verifiedHeadcountSet:keys.length,matches,withEmail}));
+  console.log(JSON.stringify({event:"law_call_ready_export_summary",callReadySetKeys:keys.length,matches,withEmail}));
 }
 await emitCallReadySnapshot().catch(error=>console.error("law_call_ready_export_error",error?.message||error));
 function lawFirmNameShape(lead={}){
