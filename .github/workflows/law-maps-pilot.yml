@@ -1,0 +1,89 @@
+name: Law Google Maps public discovery pilot
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/law-maps-pilot.yml"
+permissions:
+  contents: read
+jobs:
+  map-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: recover-scrape-mcp
+          persist-credentials: false
+      - name: Run 8 targeted public Maps queries (no hosted infrastructure)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p law-maps-out
+          cat > law-maps-queries.txt <<'EOF'
+          law firm in Amarillo Texas
+          law office in Waco Texas
+          attorney office in Tyler Texas
+          law firm in Ocala Florida
+          law office in Gainesville Florida
+          law firm in Springfield Illinois
+          law office in Macon Georgia
+          law firm in Akron Ohio
+          EOF
+          # One pilot only. The upstream image is the existing MIT-licensed
+          # gosom scraper; bound container execution to protect CI usage.
+          timeout --signal=TERM 510s docker run --rm \
+            -v "$PWD/law-maps-queries.txt:/queries.txt:ro" \
+            -v "$PWD/law-maps-out:/out" \
+            gosom/google-maps-scraper \
+            -input /queries.txt -results /out/results.csv \
+            -depth 1 -c 2 -exit-on-inactivity 2m || code=$?
+          if [ "${code:-0}" != "0" ]; then
+            echo "Maps collector stopped with status ${code}; inspecting any partial output"
+          fi
+      - name: Independently classify phone-first Maps *candidates* only
+        run: |
+          python3 - <<'PY'
+          import csv, json, re
+          from pathlib import Path
+          from law_local.worker import normalize_phone
+          f=Path("law-maps-out/results.csv")
+          out=Path("law-maps-out/no-site-phone-candidates.csv")
+          fields=["firm","phone","city","state","maps_source","website_status","headcount_status"]
+          seen=set()
+          scan=0; matches=[]; headers=[]
+          if f.exists():
+              with f.open(newline="",encoding="utf-8-sig") as fd:
+                  reader=csv.DictReader(fd)
+                  headers=reader.fieldnames or []
+                  for item in reader:
+                      scan+=1
+                      name=(item.get("title") or item.get("name") or "").strip()
+                      phone=normalize_phone(item.get("phone") or "")
+                      website=(item.get("website") or "").strip()
+                      category=(item.get("category") or "").lower()
+                      address=(item.get("address") or "")
+                      if not name or not phone or website or not any(k in (name+" "+category).lower() for k in ("law","attorney","legal")):
+                          continue
+                      key=(phone,re.sub(r"\W+","",name.lower()))
+                      if key in seen:continue
+                      seen.add(key)
+                      state=next((s for s in ("TX","FL","IL","GA","OH") if re.search(r"\b"+s+r"\b",address)), "")
+                      matches.append({"firm":name,"phone":phone,"city":"","state":state,
+                        "maps_source":item.get("link") or "", "website_status":"no_maps_website_field_only",
+                        "headcount_status":"unverified"})
+          with out.open("w",newline="",encoding="utf-8") as fd:
+              writer=csv.DictWriter(fd,fieldnames=fields)
+              writer.writeheader();writer.writerows(matches)
+          result={"maps_rows":scan,"candidate_rows":len(matches),"qualified_rows":0,"headers":headers,
+                  "note":"Absent Maps website field is not proof of no owned site. No source-verified attorney counts yet."}
+          Path("law-maps-out/summary.json").write_text(json.dumps(result,indent=2))
+          print(json.dumps(result))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: law-maps-discovery-pilot
+          path: law-maps-out/
+          retention-days: 14
+          if-no-files-found: warn
