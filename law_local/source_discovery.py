@@ -60,34 +60,54 @@ def crawl_direct(db, fetch_fn=None, seconds=80, max_pages=36, delay=0.65):
     classified as evidence of 'no owned website' here.
     """
     fetch_fn=fetch_fn or fetch_public
-    db.conn.execute("""CREATE TABLE IF NOT EXISTS direct_pages (
+    db.conn.executescript("""CREATE TABLE IF NOT EXISTS direct_pages (
         url TEXT PRIMARY KEY, fetched_at TEXT NOT NULL,
         page_kind TEXT NOT NULL, links_found INTEGER NOT NULL,
         candidates_added INTEGER NOT NULL
-    )""")
+    );
+    CREATE TABLE IF NOT EXISTS direct_frontier (
+        url TEXT PRIMARY KEY, kind TEXT NOT NULL,
+        state TEXT NOT NULL, discovered_at TEXT NOT NULL
+    );""")
+    # V1 saved visited city pages but discarded their discovered firm links.
+    # One-time checkpoint migration reopens ONLY those directory indexes.
+    # Previously verified/pending firms are not touched.
+    if not db.conn.execute("SELECT 1 FROM direct_frontier LIMIT 1").fetchone():
+        db.conn.execute("DELETE FROM direct_pages WHERE page_kind IN ('state','city')")
+    seeds=[(url,"firm",state) for url,state in DIRECT_PROFILE_SEEDS]
+    seeds += [(f"https://www.lawyer.com/{name}-lawyer.htm","state",state)
+              for name,state in STATES]
+    for url,kind,state in seeds:
+        db.conn.execute("INSERT OR IGNORE INTO direct_frontier VALUES (?,?,?,?)",
+                        (url,kind,state,utc_now()))
     db.conn.commit()
     results={"fetched":0,"failed":0,"profiles_fetched":0,
              "profiles_parsed":0,"candidates_added":0,"city_links":0,"firm_links":0}
     deadline=time.monotonic()+max(1,int(seconds))
-    queue=[(url,"firm",state) for url,state in DIRECT_PROFILE_SEEDS]
-    queue += [(f"https://www.lawyer.com/{name}-lawyer.htm","state",code)
-              for name,code in STATES]
-    visited=set()
-    while queue and results["fetched"]+results["failed"]<max_pages and time.monotonic()<deadline:
-        url,kind,state=queue.pop(0)
-        if url in visited:
-            continue
-        visited.add(url)
-        if db.conn.execute("SELECT 1 FROM direct_pages WHERE url=?",(url,)).fetchone():
-            continue
+    failed_this_run=set()
+    while (results["fetched"]+results["failed"]<max_pages
+           and time.monotonic()<deadline):
+        # Firm URLs are the scarce, highest-value work. State indexes come
+        # next, county/city indexes last; the persisted frontier resumes
+        # across ALL runs, including failure-status acquisition runs.
+        pending=db.conn.execute("""SELECT f.url,f.kind,f.state FROM direct_frontier f
+            LEFT JOIN direct_pages p ON p.url=f.url WHERE p.url IS NULL
+            ORDER BY CASE f.kind WHEN 'firm' THEN 0 WHEN 'state' THEN 1 ELSE 2 END,
+                     f.rowid ASC LIMIT 600""").fetchall()
+        record=next((row for row in pending if row["url"] not in failed_this_run),None)
+        if record is None:
+            break
+        url,kind,state=record["url"],record["kind"],record["state"]
         try:
             html=fetch_fn(url,timeout=9)
             if len(html)<150:
                 raise ValueError("short/invalid page")
             results["fetched"]+=1
         except Exception as exc:
+            failed_this_run.add(url)
             results["failed"]+=1
-            print(json.dumps({"event":"direct_source_unavailable","url":url,"reason":str(exc)[:150]}),flush=True)
+            print(json.dumps({"event":"direct_source_unavailable","url":url,
+                              "reason":str(exc)[:150]}),flush=True)
             continue
         added=0
         discovered=0
@@ -101,18 +121,24 @@ def crawl_direct(db, fetch_fn=None, seconds=80, max_pages=36, delay=0.65):
                     added=1
                     results["candidates_added"]+=1
         else:
+            # Bound directory breadth without exhausting budget in one state.
+            city_count=db.conn.execute(
+                "SELECT COUNT(*) FROM direct_frontier WHERE kind='city' AND state=?",
+                (state,)).fetchone()[0]
             for href,label in reader(html).links:
                 child,ctype=source_url(href,url,state)
-                if not child:
+                if not child or (kind=="city" and ctype=="city"):
                     continue
-                if kind=="city" and ctype=="city":
+                if ctype=="city" and city_count>=10:
                     continue
-                if ctype=="city" and results["city_links"]>=35:
-                    continue
-                if child not in visited:
-                    queue.append((child,ctype,state))
+                inserted=db.conn.execute(
+                    "INSERT OR IGNORE INTO direct_frontier VALUES (?,?,?,?)",
+                    (child,ctype,state,utc_now())).rowcount
+                if inserted:
                     discovered+=1
                     results["firm_links" if ctype=="firm" else "city_links"]+=1
+                    if ctype=="city":
+                        city_count+=1
         db.conn.execute(
             "INSERT OR IGNORE INTO direct_pages VALUES (?,?,?,?,?)",
             (url,utc_now(),kind,discovered,added))
@@ -121,7 +147,10 @@ def crawl_direct(db, fetch_fn=None, seconds=80, max_pages=36, delay=0.65):
                           "links_found":discovered,"added":added}),flush=True)
         if delay:
             time.sleep(delay)
-    results["queued_remaining"]=len(queue)
+    results["queued_remaining"]=db.conn.execute(
+        """SELECT COUNT(*) FROM direct_frontier f
+           LEFT JOIN direct_pages p ON p.url=f.url WHERE p.url IS NULL"""
+    ).fetchone()[0]
     return results
 
 def main():
