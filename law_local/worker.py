@@ -164,6 +164,11 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
               "source_url":lead.get("source_url",""),"headcount_source":lead.get("source_url",""),
               "attorneys":source["attorneys"],"email":"","email_source":"",
               "checked_at":utc_now(),"site_status":""}
+    # A firm-controlled source URL is itself proof of an owned website,
+    # even if both search engines mistakenly return no results.
+    host=urlparse(str(lead.get("source_url",""))).hostname or ""
+    if not _third_party(host):
+        return {**evidence,"status":"owned_site_or_untrusted_source"}
     if not firm_identity_matches(source_html,lead):
         return {**evidence,"status":"unverified_identity"}
     if source["attorneys"]<2 or source["attorneys"]>10:
