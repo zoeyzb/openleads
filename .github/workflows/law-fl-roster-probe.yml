@@ -111,6 +111,20 @@ jobs:
                 "roster_bar_context":" ".join(pp.parts[max(idx,0):max(idx,0)+30])[:850]}),flush=True)
           except Exception as ex:
             print(json.dumps({"roster_detail_error":str(ex)[:160]}),flush=True)
+          fb_url="https://www.floridabar.org/directories/find-mbr/profile/?num=494674"
+          try:
+            with urlopen(Request(fb_url,headers={"User-Agent":ua}),timeout=12) as rr:
+              h=rr.read(200000).decode("utf-8","replace")
+              tx=" ".join(reader(h).parts)
+              emails=sorted(set(re.findall(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",h)))
+              print(json.dumps({"flbar_haas_http":rr.status,"bar_id":494674,
+                "david_haas":bool(re.search("David.{0,15}Haas",tx,re.I)),
+                "firm_match":bool(re.search("Haas Law",tx,re.I)),
+                "published_email_count":len(emails),"emails":emails[:4],
+                "office_phone":(re.search(r"\(?407\)?.{0,4}755.{0,4}7675",tx) or [None])[0],
+                "source_excerpt":tx[:550]}),flush=True)
+          except Exception as ex:
+            print(json.dumps({"flbar_haas_error":str(ex)[:190]}),flush=True)
           for slug in ["haas-law-pllc","stearns-weaver-miller","office-of-regional-counsel","culmer-davidson","dubiner-wilensky-llc","harold-h-weisman-pa"]:
             url=root+"/firm/"+slug
             if robots.mtime() and not robots.can_fetch(ua,url):
