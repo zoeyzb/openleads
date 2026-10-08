@@ -6558,6 +6558,79 @@ async function callReadyAuditLoop(){
   }
 }
 
+// Portable mode makes one bounded attempt against existing Redis state and
+// then exits. In particular it does not erase any queue or repeat bootstrap
+// unless explicitly invoked with --bootstrap.
+async function runPortableOnce(){
+  const lockKey="recover:law-firm:portable-run:lease:v1";
+  const token=randomUUID();
+  const acquired=await redis.set(lockKey,token,{NX:true,EX:1800});
+  if(acquired!=="OK")throw new Error("Another portable law batch is running; exit without duplicating work");
+  let stage="start";
+  try{
+    if(LAW_WORKER_OPTIONS.bootstrap){
+      stage="bootstrap";
+      await bootstrapPhoneFirstInventory();
+    }
+    stage="audit_before";
+    const before=await callReadyAuditBatch();
+    stage="headcount";
+    const headcount=await enrichBatch();
+    stage="audit_after";
+    const after=await callReadyAuditBatch();
+    let directory={cities:0,candidates:0,verified:0,added:0};
+    if(LAW_WORKER_OPTIONS.discover){
+      stage="directory";
+      directory=await seedLawyersComDirectory(await loadCities());
+    }
+    stage="sheet";
+    await startLawLeadSheetSync({
+      getRedis:async()=>redis,
+      serviceAccountJson:GOOGLE_SERVICE_ACCOUNT_JSON,
+      spreadsheetId:LAW_LEADS_SPREADSHEET_ID,
+      enabled:LAW_LEADS_SHEET_SYNC_ENABLED,
+      intervalMs:LAW_LEADS_SHEET_SYNC_INTERVAL_MS,
+      continuous:false
+    });
+    const [pendingHeadcountPriority,pendingHeadcountGeneral,pendingSiteAudit,callReady,strictEligible]=await Promise.all([
+      redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),
+      redis.sCard(CHICAGO_PENDING_SET),
+      redis.sCard(CALL_READY_AUDIT_PENDING_SET),
+      redis.sCard(CALL_READY_SET),
+      redis.sCard(UNIQUE_ELIGIBLE_SET)
+    ]);
+    console.log(JSON.stringify({
+      event:"law_portable_batch_complete",
+      runMode:"once",
+      bootstrap:LAW_WORKER_OPTIONS.bootstrap,
+      before,headcount,after,directory,
+      pendingHeadcount:pendingHeadcountPriority+pendingHeadcountGeneral,
+      pendingSiteAudit,
+      rawCallReadyKeys:callReady,
+      rawStrictEligibleKeys:strictEligible,
+      note:"Raw Redis key counts are not deduplicated callable businesses; use the Sheet export for that KPI."
+    }));
+  }catch(error){
+    console.error(JSON.stringify({
+      event:"law_portable_batch_failure",stage,error:String(error?.message||error)
+    }));
+    throw error;
+  }finally{
+    // Compare-and-delete: a timed-out process must not erase a newer lease.
+    try{
+      await redis.eval(
+        'if redis.call("GET",KEYS[1])==ARGV[1] then return redis.call("DEL",KEYS[1]) else return 0 end',
+        {keys:[lockKey],arguments:[token]}
+      );
+    }catch(error){console.error("law_cli_lease_release_error",error?.message||error);}
+    try{await redis.quit();}catch{}
+  }
+}
+
+let cities=[];
+if(LAW_WORKER_OPTIONS.mode==="once"){
+  await runPortableOnce();
+}else{
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"phone_first_fast_bootstrap"}));
 await bootstrapPhoneFirstInventory();
 
@@ -6576,7 +6649,7 @@ startLawLeadSheetSync({
   intervalMs:LAW_LEADS_SHEET_SYNC_INTERVAL_MS
 });
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_load"}));
-const cities=await loadCities();
+cities=await loadCities();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_loaded",cities:cities.length}));
 
 console.log(JSON.stringify({event:"law_firm_pipeline_started",cities:cities.length,practices:PRACTICE_FOCI.map(x=>x.key),target:TARGET_TOTAL,queueHighWater:QUEUE_HIGH_WATER,seedBatch:SEED_BATCH,enrichBatch:ENRICH_BATCH,enrichConcurrency:ENRICH_CONCURRENCY,discoveryBacklogLimit:DISCOVERY_BACKLOG_LIMIT}));
@@ -6700,3 +6773,4 @@ async function websiteAuditLoop(){
 const loops=[seedLoop(),directorySeedLoop(),enrichmentLoop(),callReadyAuditLoop(),statusLoop()];
 if(shouldRunEmailConversionWorker({callingMode:CALLING_MODE}))loops.push(sizeReadyConversionLoop());
 await Promise.all(loops);
+}
