@@ -9,9 +9,11 @@ import * as z from "zod/v4";
 import { orchestrate as enrichEmail } from "email-enrich";
 import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
-import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, qualifiesCallReadyNoWebsiteLawLead, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone } from "./law-firm-targeting.mjs";
+import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, qualifiesCallReadyNoWebsiteLawLead, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
 import { startQualifiedGoogleSheetSync } from "./google-sheet-direct-sync.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
+import { canonicalLawFirmKey } from "./law-firm-identity.mjs";
+import { CALL_READY_WEBSITE_AUDIT_VERSION, callReadyQualificationState } from "./law-call-ready-policy.mjs";
 import { createSmsSheetBridge } from "./sms-sheet-bridge.mjs";
 import {
   bulkSmsBlockReason,
@@ -359,12 +361,21 @@ async function collectCallReadyLawRows(){
       if(!entry?.value)continue;
       let lead;try{lead=JSON.parse(entry.value)||{};}catch{continue;}
       const isLaw=String(lead.search_profile||"")==="law-firm"||String(lead.industry||"").toUpperCase()==="LAW_FIRM";
-      if(!isLaw||!qualifiesCallReadyNoWebsiteLawLead(lead))continue;
+      if(!isLaw||!isLawFirmLead(lead))continue;
       const phone=String(lead.phone||"").trim();
-      if(!isUsableLawPhone(phone))continue;
+      const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+      const state=callReadyQualificationState({
+        usablePhone:isUsableLawPhone(phone),
+        attorneyCount,
+        attorneyCountVerified:lead.attorney_count_evidence_verified===true,
+        website:String(lead.website||lead.website_url||"").trim(),
+        websiteAuditStatus:String(lead.call_ready_website_audit_status||""),
+        websiteAuditVersion:String(lead.call_ready_website_audit_version||"")
+      },{auditVersion:CALL_READY_WEBSITE_AUDIT_VERSION});
+      if(!state.callReady)continue;
       const name=String(lead.name||lead.title||"").trim();
-      const dedupeKey=(normalizeLawPhone(phone)||phone)+"|"+name.toLowerCase();
-      if(seen.has(dedupeKey))continue;
+      const dedupeKey=canonicalLawFirmKey(lead);
+      if(!dedupeKey||seen.has(dedupeKey))continue;
       seen.add(dedupeKey);
 
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
@@ -393,7 +404,7 @@ async function collectCallReadyLawRows(){
         emailStatus:emailEligible?"Verified":"Missing",
         city,
         state,
-        attorneys:Number(lead.attorney_count_estimate||lead.attorney_count||0),
+        attorneys:attorneyCount,
         headcountSource:String(lead.attorney_count_source||"").trim(),
         address:String(lead.address||"").trim(),
         maps:String(lead.google_maps_url||lead.maps_url||"").trim(),

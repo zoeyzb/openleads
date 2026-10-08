@@ -16,6 +16,11 @@ on:
       - "recover-mcp/headcount-source-policy*.mjs"
       - "recover-mcp/strict-owned-website-gate*.mjs"
       - "recover-mcp/law-eligible-set-align*.mjs"
+      - "recover-mcp/law-call-ready-policy*.mjs"
+      - "recover-mcp/law-source-circuit*.mjs"
+      - "recover-mcp/law-discovery-policy*.mjs"
+      - "recover-mcp/law-firm-identity*.mjs"
+      - "recover-mcp/law-set-claim*.mjs"
       - "recover-mcp/published-email-obfuscation*.mjs"
       - "recover-mcp/law-firm-targeting.mjs"
       - "recover-mcp/law-sheet-sync.mjs"
@@ -83,6 +88,16 @@ jobs:
         run: node recover-mcp/google-serp-records.node-test.mjs
       - name: Run Texas Bar profile URL regression test
         run: node recover-mcp/texas-bar-profile.node-test.mjs
+      - name: Run call-ready policy regression test
+        run: node recover-mcp/law-call-ready-policy.node-test.mjs
+      - name: Run source circuit regression test
+        run: node recover-mcp/law-source-circuit.node-test.mjs
+      - name: Run discovery policy regression test
+        run: node recover-mcp/law-discovery-policy.node-test.mjs
+      - name: Run canonical firm identity regression test
+        run: node recover-mcp/law-firm-identity.node-test.mjs
+      - name: Run destructive set claim regression test
+        run: node recover-mcp/law-set-claim.node-test.mjs
       - name: Check law pipeline syntax
         run: node --check recover-mcp/law-firm-pipeline.mjs
       - name: Run law targeting regression test
@@ -91,6 +106,8 @@ jobs:
         run: node recover-mcp/law-sheet-metrics.node-test.mjs
       - name: Check law sheet sync syntax
         run: node --check recover-mcp/law-sheet-sync.mjs
+      - name: Check MCP server syntax
+        run: node --check recover-mcp/server.mjs
       - name: Check acquisition worker syntax
         run: |
           node --check recover-mcp/acquisition-worker.mjs
