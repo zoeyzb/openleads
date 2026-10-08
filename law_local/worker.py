@@ -108,7 +108,8 @@ def evaluate_published_source(html,lead):
     if not firm_identity_matches(html,lead):
         return {"attorneys":0,"emails":[],"website_candidates":[]}
     p=reader(html)
-    text=norm(" ".join(p.parts))
+    raw_text=" ".join(p.parts)
+    text=norm(raw_text)
     firm=norm(lead["firm"])
     # Only accept explicit firm-size wording, not "attorneys for plaintiff".
     size_pattern=rf"\b{re.escape(firm)}\s+(?:has|employs|includes|comprises)\s+(\d{{1,2}})\s+attorneys?\b"
@@ -120,7 +121,7 @@ def evaluate_published_source(html,lead):
     if not m:
         # Interpret an explicit firm-size *range* as a range; do not claim its
         # lower bound is the exact number or accept "1-5" as 2+.
-        range_match=re.search(r"\b(?:firm size|office size)\s*:?\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\b",text)
+        range_match=re.search(r"\b(?:firm size|office size)\s*:?\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\b",raw_text,re.I)
         if range_match:
             lo,hi=map(int,range_match.groups())
             if 2<=lo<=hi<=10:
@@ -129,7 +130,7 @@ def evaluate_published_source(html,lead):
             else:
                 attorneys=0
         else:
-            m=re.search(r"\b(?:firm size|number of attorneys|attorneys at this firm)\s*:?\s*(\d{1,2})\s*(?:attorneys?|lawyers?)?\b",text)
+            m=re.search(r"\b(?:firm size|number of attorneys|attorneys at this firm)\s*:?\s*(\d{1,2})(?!\s*(?:\+|[-–]|to\b|employees?\b|staff\b))\s*(?:attorneys?|lawyers?)?\b",raw_text,re.I)
             attorneys=int(m.group(1)) if m else 0
     else:
         attorneys=int(m.group(1))
@@ -497,7 +498,7 @@ def _extract_directory_profile(url,html):
     text=" ".join(reader(html).parts)
     # Only accept the firm's 'Call NNN-NNN-NNNN' contact number. Do not
     # mistake the directory's 800-620-0900 banner/footer for the firm.
-    call_number_re=re.compile(r"\bCall\s+((?:\+?1[\s.()\-]*)?[2-9]\d{2}[\s.()\-]*[2-9]\d{2}[\s.\-]*\d{4})",re.I)
+    call_number_re=re.compile(r"\bCall\s+((?:\+?1[\s.()\-]*)?\(?[2-9]\d{2}\)?[\s.()\-]*[2-9]\d{2}[\s.\-]*\d{4})",re.I)
     phones=list(dict.fromkeys(normalize_phone(m.group(1)) for m in call_number_re.finditer(text)))
     for phone in phones[:3]:
         if not phone:
