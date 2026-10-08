@@ -49,6 +49,25 @@ jobs:
                     "sitemap_urls":urls[:25]}),flush=True)
             except Exception as ex:
               print(json.dumps({"sitemap":sm,"error":str(ex)[:160]}),flush=True)
+          ca_root="https://www.californialawdirectory.com"
+          try:
+            with urlopen(Request(ca_root+"/robots.txt",headers={"User-Agent":ua}),timeout=9) as rr:
+              rt=rr.read(3000).decode("utf-8","replace")
+              print(json.dumps({"ca_robots_http":rr.status,"ca_robots_excerpt":rt[:1000]}),flush=True)
+            with urlopen(Request(ca_root+"/firms?page=2",headers={"User-Agent":ua}),timeout=12) as rr:
+              page=rr.read(130000).decode("utf-8","replace")
+              links=[(url,label) for url,label in reader(page).links if url.startswith("/firm/")]
+              print(json.dumps({"ca_firms_http":rr.status,"ca_links":len(links),
+                "ca_sample":links[:4]}),flush=True)
+              if links:
+                with urlopen(Request(ca_root+links[0][0],headers={"User-Agent":ua}),timeout=12) as pr:
+                  body=pr.read(160000).decode("utf-8","replace")
+                  txt=" ".join(reader(body).parts)
+                  print(json.dumps({"ca_firm_profile_http":pr.status,"url":pr.url,
+                   "count_text":(re.search(r"Attorneys.{0,80}?(\d+)\s+active",txt,re.I) or [None])[0],
+                   "phone":(re.search(r"Phone.{0,40}\d{3}[- .)]{1,4}\d{3}[- .]\d{4}",txt,re.I) or [None])[0]}),flush=True)
+          except Exception as ex:
+            print(json.dumps({"ca_error":str(ex)[:220]}),flush=True)
           for rp in ("/firms","/firms?page=2","/firms?size=2-10","/firms?sort=name"):
             try:
               with urlopen(Request(root+rp,headers={"User-Agent":ua}),timeout=12) as rr:
