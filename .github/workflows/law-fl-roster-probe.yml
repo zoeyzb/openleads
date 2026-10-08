@@ -98,6 +98,19 @@ jobs:
                     "sample_links":firm_links[:5],"text_excerpt":" ".join(p.parts)[-400:]}),flush=True)
             except Exception as ex:
               print(json.dumps({"browse":rp,"error":str(ex)[:180]}),flush=True)
+          try:
+            u=root+"/firm/haas-law-pllc"
+            with urlopen(Request(u,headers={"User-Agent":ua}),timeout=11) as rr:
+              raw=rr.read(120000).decode("utf-8","replace")
+              pp=reader(raw)
+              idx=next((i for i,t in enumerate(pp.parts) if "Active attorneys" in t),-1)
+              print(json.dumps({"roster_detail_url":u,
+                "official_links":[(href,label[:45]) for href,label in pp.links if "floridabar.org" in href][:8],
+                "roster_attorney_links":[(href,label[:50]) for href,label in pp.links if "/attorney/" in href][:8],
+                "roster_mailto_links":[href for href,label in pp.links if href.startswith("mailto:")][:5],
+                "roster_bar_context":" ".join(pp.parts[max(idx,0):max(idx,0)+30])[:850]}),flush=True)
+          except Exception as ex:
+            print(json.dumps({"roster_detail_error":str(ex)[:160]}),flush=True)
           for slug in ["haas-law-pllc","stearns-weaver-miller","office-of-regional-counsel","culmer-davidson","dubiner-wilensky-llc","harold-h-weisman-pa"]:
             url=root+"/firm/"+slug
             if robots.mtime() and not robots.can_fetch(ua,url):
