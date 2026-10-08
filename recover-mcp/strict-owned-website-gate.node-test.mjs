@@ -20,10 +20,10 @@ assert.equal(needsStrictOwnedWebsiteAudit({
 assert.equal(needsStrictOwnedWebsiteAudit({
   website:"",
   emailSourceVerified:false,
-  emails:["office@examplefirm.com"],
+  emails:[],
   attorneyCount:4,
   attorneyCountVerified:true
-}),false,"unverified email is not a final eligibility candidate");
+}),true,"call-ready website audit must not depend on email");
 
 assert.equal(needsStrictOwnedWebsiteAudit({
   website:"",
