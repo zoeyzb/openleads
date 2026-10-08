@@ -11,6 +11,7 @@ import csv
 import json
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from law_local.search_sources import real_profile_urls
 from law_local.maps_extract import COUNTRY_STATE
@@ -65,8 +66,19 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
     fetch_fn=fetch_fn or fetch_public
     source_resolver=source_resolver or (lambda firm,city,state: real_profile_urls(
         firm,city,state,fetch_fn=fetch_fn))
+    # Do not repeat an unproductive result every single bounded GitHub run.
+    # Empty search results are a discovery limitation, never site evidence.
+    db.conn.execute("""CREATE TABLE IF NOT EXISTS maps_source_search_checks (
+        map_id TEXT NOT NULL, method TEXT NOT NULL,
+        checked_at TEXT NOT NULL, result TEXT NOT NULL,
+        PRIMARY KEY(map_id,method)
+    )""")
+    db.conn.commit()
+    method="bing_rss_real_profiles_v1"
+    cutoff=(datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
     deadline=time.monotonic()+max(1,int(seconds))
-    counts={"maps_checked":0,"searches":0,"responsive_searches":0,
+    counts={"maps_checked":0,"source_cooldown_skips":0,
+            "searches":0,"responsive_searches":0,
             "actual_directory_links":0,"profile_requests":0,
             "identity_phone_size_matches":0,
             "added_to_final_audit":0,"fetch_failures":0,"directory_hits":0}
@@ -75,6 +87,12 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
     for record in raw:
         if time.monotonic()>=deadline or counts["profile_requests"]>=max_profiles:
             break
+        prior=db.conn.execute(
+            "SELECT checked_at,result FROM maps_source_search_checks WHERE map_id=? AND method=?",
+            (record["map_id"],method)).fetchone()
+        if prior and prior["checked_at"]>cutoff and prior["result"]=="no_relevant_indexed_firm_profiles":
+            counts["source_cooldown_skips"]+=1
+            continue
         had_match=False
         counts["searches"]+=1
         try:
@@ -90,6 +108,18 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
         counts["responsive_searches"]+=1
         candidates=source_results.get("urls",[])
         counts["actual_directory_links"]+=len(candidates)
+        if not candidates:
+            db.conn.execute("""INSERT INTO maps_source_search_checks
+                (map_id,method,checked_at,result) VALUES (?,?,?,?)
+                ON CONFLICT(map_id,method) DO UPDATE SET
+                checked_at=excluded.checked_at,result=excluded.result""",
+                (record["map_id"],method,utc_now(),"no_relevant_indexed_firm_profiles"))
+            db.conn.commit()
+            print(json.dumps({"event":"no_real_indexed_directory_source",
+                "firm":record["firm"],"reason":"RSS returned zero applicable source URLs",
+                "retry_days":7}),flush=True)
+            counts["maps_checked"]+=1
+            continue
         for url in candidates:
             if time.monotonic()>=deadline or counts["profile_requests"]>=max_profiles:
                 break
