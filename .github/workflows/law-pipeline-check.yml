@@ -29,6 +29,7 @@ on:
   push:
     branches: [recover-scrape-mcp]
     paths:
+      - "law_local/**"
       - "recover-mcp/law-firm-pipeline.mjs"
       - "recover-mcp/law-firm-targeting.mjs"
       - "recover-mcp/law-sheet-sync.mjs"
