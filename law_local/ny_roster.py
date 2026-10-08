@@ -118,6 +118,8 @@ def collect(db,fetch_fn=None,max_pages=6,page_size=500,seconds=110):
                           "valid_phones":len(groups),"stored":stats["source_groups_stored"]}),flush=True)
         if len(values)<page_size:
             break
+        # Public Socrata API: keep rate polite and avoid needless bursts.
+        time.sleep(0.2)
     stats["total_groups"]=db.conn.execute("SELECT COUNT(*) FROM ny_registration_groups").fetchone()[0]
     stats["possible_private_firm_groups"]=db.conn.execute(
         "SELECT COUNT(*) FROM ny_registration_groups WHERE status='possible_private_law_firm'").fetchone()[0]
