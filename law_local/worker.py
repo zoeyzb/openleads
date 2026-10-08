@@ -136,24 +136,31 @@ def evaluate_published_source(html,lead):
         attorneys=int(m.group(1))
     # Emails must be literally published in this identity-matched page.
     emails=sorted(set(v.lower() for v in EMAIL_RE.findall(unescape(html))))
+    # Provider footer addresses are not prospect contact evidence.
     emails=[v for v in emails if not v.startswith(NON_EMAIL_PREFIXES)
-            and not v.split("@")[-1].endswith(BLOCKED_SUFFIXES)]
+            and not v.split("@")[-1].endswith(BLOCKED_SUFFIXES)
+            and not _third_party(v.split("@")[-1])]
     external=[]
     for href,label in p.links:
+        if not re.search(r"(?i)\b(?:website|official site|visit site|firm site)\b",label or ""):
+            continue
+        if not href or href.strip() in ("#","/"):
+            continue
         try:
             parsed=urlparse(href)
-            if parsed.scheme not in ("https","http") or not parsed.hostname:
-                continue
-            if _third_party(parsed.hostname):
-                continue
-            # An outbound 'website' link on the source is evidence of a
-            # possible owned site and must NOT be dismissed as a no-site lead.
-            # General outbound links can be ads, analytics, maps or social
-            # links. Only a labeled firm site is meaningful owned-site evidence.
-            if re.search(r"(?i)\b(?:website|official site|visit site|firm site)\b",label or ""):
-                external.append(href)
+            if parsed.scheme in ("http","https") and parsed.hostname:
+                if not _third_party(parsed.hostname):
+                    external.append(href)
+                elif "redirect" in parsed.path or "url=" in (parsed.query or ""):
+                    external.append("directory_site_redirect:"+href)
+            elif href.startswith("/") or href.startswith("?"):
+                # Relative site links in directories are frequently redirects.
+                # We cannot safely label such firms 'no owned website'.
+                external.append("directory_site_link:"+href[:250])
+            elif href.lower().startswith("javascript:"):
+                external.append("directory_site_js_link")
         except ValueError:
-            continue
+            external.append("unparseable_website_link")
     return {"attorneys":attorneys,"attorney_range":attorney_range,"emails":emails,"website_candidates":sorted(set(external))}
 
 def search_target(url):
