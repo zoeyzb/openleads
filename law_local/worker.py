@@ -390,6 +390,132 @@ def import_csv(db,path):
             added+=int(db.add(lead))
     return added
 
+
+DISCOVERY_STATES = {
+    "AL":"Alabama","AK":"Alaska","AZ":"Arizona","AR":"Arkansas",
+    "CA":"California","CO":"Colorado","CT":"Connecticut","DE":"Delaware",
+    "FL":"Florida","GA":"Georgia","HI":"Hawaii","ID":"Idaho",
+    "IL":"Illinois","IN":"Indiana","IA":"Iowa","KS":"Kansas",
+    "KY":"Kentucky","LA":"Louisiana","ME":"Maine","MD":"Maryland",
+    "MA":"Massachusetts","MI":"Michigan","MN":"Minnesota","MS":"Mississippi",
+    "MO":"Missouri","MT":"Montana","NE":"Nebraska","NV":"Nevada",
+    "NH":"New Hampshire","NJ":"New Jersey","NM":"New Mexico",
+    "NY":"New York","NC":"North Carolina","ND":"North Dakota",
+    "OH":"Ohio","OK":"Oklahoma","OR":"Oregon","PA":"Pennsylvania",
+    "RI":"Rhode Island","SC":"South Carolina","SD":"South Dakota",
+    "TN":"Tennessee","TX":"Texas","UT":"Utah","VT":"Vermont",
+    "VA":"Virginia","WA":"Washington","WV":"West Virginia",
+    "WI":"Wisconsin","WY":"Wyoming"
+}
+
+def discovery_queries(states):
+    """Diversified, bounded index queries; provider errors never count as hits."""
+    for state in states:
+        state=str(state).upper().strip()
+        if state not in DISCOVERY_STATES:
+            raise ValueError("Unknown US state abbreviation: "+state)
+        name=DISCOVERY_STATES[state]
+        for source in ("lawyer.com/firm", "lawyers.com"):
+            for practice in ("family law", "personal injury", "criminal defense", "estate planning"):
+                yield state, f'site:{source} "{name}" "{practice}" attorneys'
+
+
+def _search_directory_profiles(query):
+    """Bing RSS discovery only; handles failure honestly, never invents URLs."""
+    rss="https://www.bing.com/search?"+urlencode({"q":query,"format":"rss"})
+    html=fetch_public(rss,timeout=10)
+    root=ET.fromstring(html)
+    if not root.tag.lower().endswith("rss"):
+        raise ValueError("discovery RSS unavailable")
+    results=[]
+    for item in root.findall(".//item"):
+        url=(item.findtext("link") or "").strip()
+        host=(urlparse(url).hostname or "").lower().removeprefix("www.")
+        path=urlparse(url).path.lower()
+        if _public_http_url(url) and (
+            (host=="lawyer.com" and path.startswith("/firm/")) or
+            (host=="lawyers.com" and "/law-firm/" in path)
+        ):
+            results.append(url)
+    return list(dict.fromkeys(results))
+
+
+def _extract_directory_profile(url,html):
+    """Produce a candidate ONLY when the profile itself binds firm/phone/size."""
+    if not _public_http_url(url):
+        return None
+    m=re.search(r"(?is)<h1\b[^>]*>(.*?)</h1>",html)
+    if not m:
+        return None
+    firm=unescape(re.sub(r"(?is)<[^>]+>"," ",m.group(1)))
+    firm=" ".join(firm.split())[:150]
+    if len(norm(firm))<8:
+        return None
+    text=" ".join(reader(html).parts)
+    phones=list(dict.fromkeys(normalize_phone(m.group()) for m in PHONE_RE.finditer(text)))
+    for phone in phones[:8]:
+        if not phone:
+            continue
+        candidate={"firm":firm,"phone":phone,"city":"","state":"","source_url":url}
+        if 2<=evaluate_published_source(html,candidate)["attorneys"]<=10:
+            return candidate
+    return None
+
+
+def discover_candidates(db,states,max_queries=20,max_pages=100,seconds=480,delay=1.2,
+                        search_fn=None,fetch_fn=None):
+    """Resumable local discovery; results remain candidates until live no-site audit."""
+    search_fn=search_fn or _search_directory_profiles
+    fetch_fn=fetch_fn or fetch_public
+    db.conn.execute("""CREATE TABLE IF NOT EXISTS discovery_queries (
+        query TEXT PRIMARY KEY, completed_at TEXT NOT NULL, urls INTEGER NOT NULL,
+        added INTEGER NOT NULL)""")
+    db.conn.commit()
+    deadline=time.monotonic()+max(1,seconds)
+    counts={"queries":0,"pages":0,"candidates_added":0,"provider_failures":0}
+    # Deterministic order and persisted completed queries prevent same-area loops.
+    for state,query in discovery_queries(states):
+        if counts["queries"]>=max_queries or counts["pages"]>=max_pages or time.monotonic()>=deadline:
+            break
+        done=db.conn.execute("SELECT 1 FROM discovery_queries WHERE query=?",(query,)).fetchone()
+        if done:
+            continue
+        try:
+            urls=search_fn(query)
+        except Exception as exc:
+            counts["provider_failures"]+=1
+            print(json.dumps({"event":"discovery_search_failed","query":query,"error":str(exc)[:120]}),flush=True)
+            # Leave query retryable if provider was down.
+            continue
+        counts["queries"]+=1
+        added=0
+        for url in urls:
+            if counts["pages"]>=max_pages or time.monotonic()>=deadline:
+                break
+            try:
+                html=fetch_fn(url,timeout=10)
+                counts["pages"]+=1
+                candidate=_extract_directory_profile(url,html)
+                if candidate:
+                    candidate["state"]=state
+                    if db.add(candidate):
+                        added+=1
+                        counts["candidates_added"]+=1
+            except Exception:
+                counts["pages"]+=1
+            if delay>0:
+                time.sleep(delay)
+        # Only checkpoint a fully-scanned query; interrupted queries retry.
+        if counts["pages"]<max_pages and time.monotonic()<deadline:
+            db.conn.execute("INSERT OR REPLACE INTO discovery_queries VALUES (?,?,?,?)",
+                            (query,utc_now(),len(urls),added))
+            db.conn.commit()
+        print(json.dumps({"event":"discovery_query","state":state,"query":query,
+                          "found_urls":len(urls),"added":added}),flush=True)
+        if delay>0:
+            time.sleep(delay)
+    return counts
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description="Local law-firm lead verifier: no Redis, cloud host, or paid API")
     parser.add_argument("--db",default="./law-leads.sqlite3")
@@ -400,6 +526,12 @@ def main(argv=None):
     p.add_argument("--max",type=int,default=100)
     p.add_argument("--workers",type=int,default=4)
     p.add_argument("--seconds",type=int,default=600)
+    p=sub.add_parser("discover",help="Find new public law-directory candidates, resumably")
+    p.add_argument("--states",default="FL,TX,CA,NY,IL,GA,PA,OH,NC,MI")
+    p.add_argument("--max-queries",type=int,default=20)
+    p.add_argument("--max-pages",type=int,default=100)
+    p.add_argument("--seconds",type=int,default=480)
+    p.add_argument("--delay",type=float,default=1.2)
     p=sub.add_parser("export",help="Export screened verified leads only")
     p.add_argument("--status",choices=["strict_eligible"],default="strict_eligible")
     p.add_argument("--out",default="./strict-law-leads.csv")
@@ -411,6 +543,10 @@ def main(argv=None):
             print(json.dumps({"imported":import_csv(db,args.csv),"counts":db.counts()}))
         elif args.cmd=="run":
             print(json.dumps({"batch":run_batch(db,args.max,args.workers,args.seconds),"counts":db.counts()}))
+        elif args.cmd=="discover":
+            states=[s.strip().upper() for s in args.states.split(",") if s.strip()]
+            print(json.dumps({"discovery":discover_candidates(db,states,args.max_queries,args.max_pages,
+                                     args.seconds,args.delay),"counts":db.counts()}))
         elif args.cmd=="export":
             print(json.dumps({"exported":db.export(args.status,args.out),"output":args.out,"status":args.status}))
         elif args.cmd=="stats":
