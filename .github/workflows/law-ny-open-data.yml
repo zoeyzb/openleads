@@ -32,7 +32,7 @@ jobs:
         run: python3 -m unittest law_local.test_ny_roster -v
       - name: Research NY registered attorney company-phone groups
         run: |
-          python3 -m law_local.ny_roster --db state/ny-attorney-registrations.sqlite3 --max-pages 8 --page-size 500 --seconds 160 --out state/ny-source-groups.csv
+          python3 -m law_local.ny_roster --db state/ny-attorney-registrations.sqlite3 --max-pages 60 --page-size 500 --seconds 230 --out state/ny-source-groups.csv
       - name: Save source research CSV and checkpoints
         if: always()
         uses: actions/upload-artifact@v4
