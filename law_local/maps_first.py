@@ -18,7 +18,7 @@ from law_local.worker import (
 )
 
 def profile_urls(firm,state):
-    slug="-".join(re.findall(r"[a-z0-9]+",firm.lower()))
+    slug="-".join(re.findall(r"[a-z0-9]+",firm.lower().replace("&"," and ")))
     if len(slug)<8:
         return []
     names=[slug]
