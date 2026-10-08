@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { needsStrictOwnedWebsiteAudit, needsCallReadyOwnedWebsiteAudit, noOwnedWebsiteAuditOutcome } from "./strict-owned-website-gate.mjs";
+import { needsStrictOwnedWebsiteAudit, needsCallReadyOwnedWebsiteAudit, noOwnedWebsiteAuditOutcome, hasCompletedSiteSearch } from "./strict-owned-website-gate.mjs";
 
 assert.equal(needsStrictOwnedWebsiteAudit({
   website:"",
@@ -81,4 +81,11 @@ assert.equal(noOwnedWebsiteAuditOutcome({
   ownedWebsite:"",checksSucceeded:0,checksFailed:0
 }),"inconclusive","missing audit evidence must never certify no site");
 
+assert.equal(hasCompletedSiteSearch([
+  {status:"fulfilled",value:{responded:false,links:[]}},
+  {status:"rejected",reason:new Error("timeout")}
+]),false,"failed and empty search providers cannot establish a negative site audit");
+assert.equal(hasCompletedSiteSearch([
+  {status:"fulfilled",value:{responded:true,links:[]}}
+]),true,"an actual search response without firm-owned results can support a bounded negative audit");
 console.log("strict owned-website gate tests passed");
