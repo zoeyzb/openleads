@@ -52,6 +52,28 @@ def source_url(raw, base, state=None):
         return url.split("#",1)[0], "city"
     return "", ""
 
+
+def profile_rejection_reason(html):
+    """Explain evidence gaps without inventing an attorney count.
+
+    This is acquisition telemetry, not a qualification shortcut. The strict
+    worker still independently verifies identity, firm size and owned site.
+    """
+    text=" ".join(reader(html).parts)
+    m=re.search(r"\bFirm\s+Size\s*:?\s*(\d{1,2})\s*(?:[-–]\s*(\d{1,2}))?",text,re.I)
+    if not m:
+        return "no_explicit_firm_size"
+    lo=int(m.group(1))
+    hi=int(m.group(2) or lo)
+    if lo<2:
+        return "range_includes_one" if hi>lo else "one_attorney"
+    if hi>10 or hi<lo:
+        return "range_over_ten_or_invalid"
+    # Size is firm-specific, but the firm contact number may be missing.
+    if not re.search(r"\bCall\s+(?:\+?1[ .()-]*)?\(?[2-9]\d{2}\)?[ .()-]*[2-9]\d{2}[ .-]*\d{4}",text,re.I):
+        return "eligible_size_but_no_published_call_phone"
+    return "size_and_phone_present_parser_or_scope_miss"
+
 def crawl_direct(db, fetch_fn=None, seconds=80, max_pages=36, delay=0.65):
     """Seek public profiles via state->city listings, plus explicit profile URLs.
 
@@ -82,7 +104,8 @@ def crawl_direct(db, fetch_fn=None, seconds=80, max_pages=36, delay=0.65):
                         (url,kind,state,utc_now()))
     db.conn.commit()
     results={"fetched":0,"failed":0,"profiles_fetched":0,
-             "profiles_parsed":0,"candidates_added":0,"city_links":0,"firm_links":0}
+             "profiles_parsed":0,"candidates_added":0,"city_links":0,"firm_links":0,
+             "profile_rejection_reasons":{}}
     deadline=time.monotonic()+max(1,int(seconds))
     failed_this_run=set()
     while (results["fetched"]+results["failed"]<max_pages
@@ -114,6 +137,13 @@ def crawl_direct(db, fetch_fn=None, seconds=80, max_pages=36, delay=0.65):
         if kind=="firm":
             results["profiles_fetched"]+=1
             lead=_extract_directory_profile(url,html)
+            if not lead:
+                reason=profile_rejection_reason(html)
+                reasons=results["profile_rejection_reasons"]
+                reasons[reason]=reasons.get(reason,0)+1
+                if reasons[reason]<=3:
+                    print(json.dumps({"event":"directory_profile_rejected",
+                                      "reason":reason,"source_url":url}),flush=True)
             if lead:
                 results["profiles_parsed"]+=1
                 lead["state"]=state
