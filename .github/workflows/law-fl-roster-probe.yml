@@ -25,6 +25,12 @@ jobs:
           ua="OpenLeads-Law-Evidence/1.0"
           robots=robotparser.RobotFileParser()
           try:
+            with urlopen(Request(root+"/robots.txt",headers={"User-Agent":ua}),timeout=9) as rr:
+              raw=rr.read(5500).decode("utf-8","replace")
+              print(json.dumps({"robots_http":rr.status,"robots_excerpt":raw[:1700]}),flush=True)
+          except Exception as ex:
+            print(json.dumps({"robots_http_error":str(ex)[:200]}),flush=True)
+          try:
             robots.set_url(root+"/robots.txt")
             robots.read()
             print(json.dumps({"robots_known":True,"robots_can_fetch_firm":robots.can_fetch(ua,root+"/firm/haas-law-pllc")}),flush=True)
