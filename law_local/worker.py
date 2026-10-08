@@ -337,15 +337,15 @@ def process_candidate(lead):
 def run_batch(db,max_rows=100,workers=4,seconds=600):
     deadline=time.monotonic()+max(1,int(seconds))
     total={}
-    processed=0
     concurrency=max(1,min(8,int(workers)))
+    # Freeze distinct ids at start: an inconclusive lookup gets a retry on the
+    # next run, never 3 wasted retries in a single outage window.
+    candidates=db.pending(int(max_rows))
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        # Submit only one small chunk at a time, always persist every submitted
-        # result, then honor the time limit before taking the next chunk.
-        while processed<int(max_rows) and time.monotonic()<deadline:
-            batch=db.pending(min(concurrency,int(max_rows)-processed))
-            if not batch:
+        for offset in range(0,len(candidates),concurrency):
+            if time.monotonic()>=deadline:
                 break
+            batch=candidates[offset:offset+concurrency]
             future_to_lead={pool.submit(process_candidate,row):row for row in batch}
             for future in as_completed(future_to_lead):
                 lead=future_to_lead[future]
@@ -354,7 +354,6 @@ def run_batch(db,max_rows=100,workers=4,seconds=600):
                 except Exception as exc:
                     result={"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
                 db.record(lead,result)
-                processed+=1
                 total[result["status"]]=total.get(result["status"],0)+1
                 print(json.dumps({"event":"law_local_lead_processed","firm":lead["firm"],"status":result["status"]}),flush=True)
     return total
