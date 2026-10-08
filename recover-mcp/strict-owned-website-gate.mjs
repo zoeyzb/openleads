@@ -39,3 +39,7 @@ export function noOwnedWebsiteAuditOutcome({
   if(Number(checksFailed)>0||Number(checksSucceeded)<1)return "inconclusive";
   return "no_site_audited";
 }
+
+export function hasCompletedSiteSearch(results=[]){
+  return Array.isArray(results)&&results.some(result=>result?.status==="fulfilled"&&result.value?.responded===true);
+}
