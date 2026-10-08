@@ -418,7 +418,6 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
 
   async function writeMetricsSnapshot(snapshot){
     const metricsSheetId=await ensureAdditionalSheet(metricsTabName,100,8);
-    const historySheetId=await ensureAdditionalSheet(metricsHistoryTabName,50000,12);
 
     const liveValues=[
       ["Pipeline stage","Count","What it means","What happens next"],
@@ -435,25 +434,10 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       method:"PUT",body:{range:`'${metricsTabName}'!A1:D${liveValues.length}`,majorDimension:"ROWS",values:liveValues}
     });
 
-    const historyHeaders=["Timestamp UTC","Eligible Leads","Email-Ready Bonus","Verified Emails","Verified Headcounts","Pending Size-Ready Email","Headcount Priority","Headcount General","Headcount Total","Email Priority","Email Recoverable"];
-    await request(`/values/${encodeURIComponent(`'${metricsHistoryTabName}'!A1:K1`)}?valueInputOption=RAW`,{
-      method:"PUT",body:{range:`'${metricsHistoryTabName}'!A1:K1`,majorDimension:"ROWS",values:[historyHeaders]}
-    });
-    const historyRow=[
-      snapshot.timestamp,snapshot.eligible,snapshot.emailReady,snapshot.verifiedEmails,
-      snapshot.verifiedHeadcounts,snapshot.pendingSizeReady,snapshot.headcountPriority,
-      snapshot.headcountGeneral,snapshot.headcountTotal,snapshot.emailPriority,snapshot.emailRecoverable
-    ];
-    await request(`/values/${encodeURIComponent(`'${metricsHistoryTabName}'!A:K`)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,{
-      method:"POST",body:{majorDimension:"ROWS",values:[historyRow]}
-    });
-
     const lightHeader={red:0.90,green:0.91,blue:0.93};
     const formatRequests=[
       {updateSheetProperties:{properties:{sheetId:metricsSheetId,gridProperties:{frozenRowCount:0}},fields:"gridProperties.frozenRowCount"}},
-      {updateSheetProperties:{properties:{sheetId:historySheetId,gridProperties:{frozenRowCount:0}},fields:"gridProperties.frozenRowCount"}},
       {repeatCell:{range:{sheetId:metricsSheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:4},cell:{userEnteredFormat:{backgroundColor:lightHeader,textFormat:{bold:true}}},fields:"userEnteredFormat(backgroundColor,textFormat.bold)"}},
-      {repeatCell:{range:{sheetId:historySheetId,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:11},cell:{userEnteredFormat:{backgroundColor:lightHeader,textFormat:{bold:true}}},fields:"userEnteredFormat(backgroundColor,textFormat.bold)"}},
       {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:0,endIndex:1},properties:{pixelSize:210},fields:"pixelSize"}},
       {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:1,endIndex:2},properties:{pixelSize:180},fields:"pixelSize"}},
       {updateDimensionProperties:{range:{sheetId:metricsSheetId,dimension:"COLUMNS",startIndex:2,endIndex:3},properties:{pixelSize:420},fields:"pixelSize"}},
