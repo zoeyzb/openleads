@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { needsStrictOwnedWebsiteAudit, needsCallReadyOwnedWebsiteAudit } from "./strict-owned-website-gate.mjs";
+import { needsStrictOwnedWebsiteAudit, needsCallReadyOwnedWebsiteAudit, noOwnedWebsiteAuditOutcome } from "./strict-owned-website-gate.mjs";
 
 assert.equal(needsStrictOwnedWebsiteAudit({
   website:"",
@@ -64,5 +64,21 @@ assert.equal(needsStrictOwnedWebsiteAudit({
   attorneyCount:1,
   attorneyCountVerified:true
 }),false,"wrong-size firms are not final strict candidates");
+
+assert.equal(noOwnedWebsiteAuditOutcome({
+  ownedWebsite:"https://firm.example",checksSucceeded:1,checksFailed:2
+}),"owned_site","known owned site is never eligible, even if other checks failed");
+assert.equal(noOwnedWebsiteAuditOutcome({
+  ownedWebsite:"",checksSucceeded:4,checksFailed:0
+}),"no_site_audited","all successful, negative checks permit bounded no-site audit");
+assert.equal(noOwnedWebsiteAuditOutcome({
+  ownedWebsite:"",checksSucceeded:3,checksFailed:1
+}),"inconclusive","failed site lookup must never be treated as a negative");
+assert.equal(noOwnedWebsiteAuditOutcome({
+  ownedWebsite:"",checksSucceeded:0,checksFailed:4
+}),"inconclusive","complete source outage must never certify no site");
+assert.equal(noOwnedWebsiteAuditOutcome({
+  ownedWebsite:"",checksSucceeded:0,checksFailed:0
+}),"inconclusive","missing audit evidence must never certify no site");
 
 console.log("strict owned-website gate tests passed");
