@@ -6234,10 +6234,23 @@ async function seed(cities){
 
 
 async function bootstrapPhoneFirstInventory(){
-  let scanned=0,callableNoSite=0,queuedHeadcount=0,seededCallReady=0,wrongSizeKnown=0,verifiedSolo=0,verifiedTarget=0,verifiedOversize=0;
+  let scanned=0,callableNoSite=0,queuedHeadcount=0,queuedSiteAudit=0,wrongSizeKnown=0,verifiedSolo=0,verifiedTarget=0,verifiedOversize=0;
   const callableByState=new Map(),priorityByState=new Map();
-  const pendingChunk=[],priorityChunk=[],readyChunk=[],sizeReadyEmailChunk=[];
-  await Promise.all([redis.del(CALL_READY_SET),redis.del(PHONE_HEADCOUNT_PRIORITY_SET),redis.del(CHICAGO_PENDING_SET)]);
+  const pendingChunk=[],priorityChunk=[],auditChunk=[];
+
+  // Rebuild operational queues from durable lead/evidence state. Old email-era
+  // queues are intentionally discarded; no lead or verified evidence is deleted.
+  await Promise.all([
+    redis.del(CALL_READY_SET),
+    redis.del(CALL_READY_AUDIT_PENDING_SET),
+    redis.del(PHONE_HEADCOUNT_PRIORITY_SET),
+    redis.del(CHICAGO_PENDING_SET),
+    redis.del(PENDING_SET),
+    redis.del(PRIORITY_PENDING_SET),
+    redis.del(RECOVERABLE_PENDING_SET),
+    redis.del(SOURCE_PENDING_SET),
+    redis.del(SIZE_READY_PENDING_SET)
+  ]);
 
   const flush=async()=>{
     if(priorityChunk.length){
@@ -6250,14 +6263,10 @@ async function bootstrapPhoneFirstInventory(){
       queuedHeadcount+=pendingChunk.length;
       pendingChunk.length=0;
     }
-    if(readyChunk.length){
-      await redis.sAdd(CALL_READY_SET,[...readyChunk]);
-      seededCallReady+=readyChunk.length;
-      readyChunk.length=0;
-    }
-    if(sizeReadyEmailChunk.length){
-      await redis.sAdd(SIZE_READY_PENDING_SET,[...sizeReadyEmailChunk]);
-      sizeReadyEmailChunk.length=0;
+    if(auditChunk.length){
+      await redis.sAdd(CALL_READY_AUDIT_PENDING_SET,[...auditChunk]);
+      queuedSiteAudit+=auditChunk.length;
+      auditChunk.length=0;
     }
   };
 
@@ -6285,9 +6294,6 @@ async function bootstrapPhoneFirstInventory(){
         String(lead.headcount_identity_version||"")!==HEADCOUNT_IDENTITY_VERSION;
       const verified=hasValidStoredHeadcount(lead);
       if(staleDirectoryEvidence){
-        // Re-open directory-derived counts produced before fetched-page-only
-        // verification. Preserve contact/email evidence, but force firm size
-        // through the corrected source-page identity gate.
         lead={...lead,
           attorney_count_evidence_verified:false,
           attorney_count_estimate:0,
@@ -6296,7 +6302,10 @@ async function bootstrapPhoneFirstInventory(){
           preferred_firm_size:false,
           firm_size_tier:"unknown",
           qualified_lead:false,
+          eligible_lead:false,
           call_ready_lead:false,
+          no_owned_website_verified:false,
+          no_owned_website_audit_version:"",
           phone_headcount_status:"needs_revalidation"
         };
         await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(lead));
@@ -6310,35 +6319,31 @@ async function bootstrapPhoneFirstInventory(){
         await redis.hDel(VERIFIED_HEADCOUNT_EVIDENCE_HASH,entry.field);
         await redis.hIncrBy(STATS,"legacy_directory_headcount_reopened",1);
       }
-      if(verified){
+
+      if(verified&&!staleDirectoryEvidence){
         if(n>=2&&n<=10){
           verifiedTarget++;
-          readyChunk.push(entry.field);
-          const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email].filter(isUsableLawEmail);
-          const sourceVerifiedEmail=(lead.law_email_source_verified===true||lead.email_source_verified===true)&&existingEmails.length>0;
-          if(!sourceVerifiedEmail){
-            // A new size-ready email method gets a fresh bounded retry budget.
-            // This only resets already-proven 2-10/no-site firms, not the 8k+
-            // generic recovery backlog.
-            if(String(lead.size_ready_email_method_version||"")!==SIZE_READY_EMAIL_METHOD_VERSION){
-              lead={...lead,
-                email_recovery_attempts:0,
-                law_email_validation:"recovery_pending",
-                size_ready_email_method_version:SIZE_READY_EMAIL_METHOD_VERSION
-              };
-              await redis.hSet(LEAD_HASH,entry.field,JSON.stringify(lead));
-            }
-            sizeReadyEmailChunk.push(entry.field);
+          const auditCurrent=
+            lead.no_owned_website_verified===true &&
+            String(lead.no_owned_website_audit_version||"")===CALL_READY_AUDIT_VERSION;
+          if(auditCurrent){
+            await redis.sAdd(CALL_READY_SET,entry.field);
+          }else{
+            auditChunk.push(entry.field);
           }
         }else{
           wrongSizeKnown++;
           if(n===1)verifiedSolo++; else if(n>10)verifiedOversize++;
         }
       }else{
-        const exhaustedCurrentMethod=
+        const sameVersion=
           String(lead.phone_headcount_status||"")==="unverified" &&
-          String(lead.phone_headcount_method_version||"")===PHONE_HEADCOUNT_METHOD_VERSION;
-        if(!exhaustedCurrentMethod){
+          String(lead.phone_headcount_method_version||"")===PHONE_HEADCOUNT_METHOD_VERSION &&
+          String(lead.phone_headcount_attempts_version||"")===PHONE_HEADCOUNT_METHOD_VERSION;
+        const attempts=sameVersion?Math.max(0,Number(lead.phone_headcount_attempts||0)):0;
+        // Two bounded passes are enough for one adapter version. A new adapter
+        // version automatically resets the budget without reviving email churn.
+        if(attempts<2){
           const shape=lawFirmNameShape(lead);
           if(shape==="multi"||shape==="firm"){
             priorityChunk.push(entry.field);
@@ -6347,36 +6352,29 @@ async function bootstrapPhoneFirstInventory(){
         }
       }
 
-      if(pendingChunk.length+priorityChunk.length+readyChunk.length+sizeReadyEmailChunk.length>=750)await flush();
+      if(pendingChunk.length+priorityChunk.length+auditChunk.length>=750)await flush();
     }
   }
   await flush();
   console.log(JSON.stringify({
     event:"law_phone_first_fast_bootstrap",
-    scanned,callableNoSite,queuedHeadcount,seededCallReady,wrongSizeKnown,
+    scanned,callableNoSite,queuedHeadcount,queuedSiteAudit,wrongSizeKnown,
     verifiedSolo,verifiedTarget,verifiedOversize,
     topCallableStates:[...callableByState.entries()].sort((a,b)=>b[1]-a[1]).slice(0,15),
     topPriorityStates:[...priorityByState.entries()].sort((a,b)=>b[1]-a[1]).slice(0,15),
     headcountPriorityQueue:await redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),
     headcountQueue:await redis.sCard(CHICAGO_PENDING_SET),
+    callReadyAuditQueue:await redis.sCard(CALL_READY_AUDIT_PENDING_SET),
     callReady:await redis.sCard(CALL_READY_SET)
   }));
-  return {scanned,callableNoSite,queuedHeadcount,seededCallReady,wrongSizeKnown};
+  return {scanned,callableNoSite,queuedHeadcount,queuedSiteAudit,wrongSizeKnown};
 }
 
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"phone_first_fast_bootstrap"}));
 await bootstrapPhoneFirstInventory();
 
-// The old email-first bootstrap does useful cleanup and email evidence recovery,
-// but it is too expensive to sit on the critical path. Run it in the background
-// while the phone/headcount workers start immediately.
-void (async()=>{
-  console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"background_legacy_bootstrap"}));
-  await bootstrapExistingQualified();
-  await normalizeEmailQueues();
-  console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"background_legacy_bootstrap_complete"}));
-})().catch(error=>console.error("law_background_bootstrap_error",error?.stack||error?.message||error));
-
+// Legacy email-first bootstrap is disabled in calling mode. Durable email evidence
+// remains on lead records and is preserved opportunistically during normal research.
 // Email is bonus for the calling campaign. Do not block the entire production
 // pipeline on expensive candidate cleanup before headcount workers can start.
 setTimeout(()=>{
