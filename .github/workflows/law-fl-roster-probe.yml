@@ -36,6 +36,19 @@ jobs:
             print(json.dumps({"robots_known":True,"robots_can_fetch_firm":robots.can_fetch(ua,root+"/firm/haas-law-pllc")}),flush=True)
           except Exception as e:
             print(json.dumps({"robots_error":str(e)[:120]}),flush=True)
+          for sm in ("/sitemap.xml","/sitemap_index.xml"):
+            try:
+              with urlopen(Request(root+sm,headers={"User-Agent":ua}),timeout=12) as rr:
+                body=rr.read(1000000).decode("utf-8","replace")
+                from xml.etree import ElementTree as ET
+                e=ET.fromstring(body)
+                urls=[x.text for x in e.iter() if x.tag.endswith("loc")]
+                print(json.dumps({"sitemap":sm,"status":rr.status,"bytes":len(body),
+                    "url_count_first_mb":len(urls),
+                    "firm_urls_first_mb":sum("/firm/" in (u or "") for u in urls),
+                    "first_urls":urls[:8]}),flush=True)
+            except Exception as ex:
+              print(json.dumps({"sitemap":sm,"error":str(ex)[:160]}),flush=True)
           for slug in ["haas-law-pllc","stearns-weaver-miller","office-of-regional-counsel","culmer-davidson","dubiner-wilensky-llc","harold-h-weisman-pa"]:
             url=root+"/firm/"+slug
             if robots.mtime() and not robots.can_fetch(ua,url):
