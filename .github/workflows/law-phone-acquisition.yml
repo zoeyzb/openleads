@@ -47,7 +47,7 @@ jobs:
               db.conn.commit()
           db.close()
           PY
-      - name: Direct directory discovery without search-engine dependency
+      - name: Discover firm profiles and diagnose missing attorney-size or phone proof
         run: |
           python3 -m law_local.source_discovery --db state/law-leads.sqlite3 --seconds 140 --max-pages 100
       - name: Discover fresh published law firm directory profiles
