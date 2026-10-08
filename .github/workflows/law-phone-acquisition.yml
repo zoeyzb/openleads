@@ -59,6 +59,13 @@ jobs:
           if [ -n "$maps_run" ]; then
             gh run download "$maps_run" --repo "$GITHUB_REPOSITORY" --name law-maps-discovery-pilot --dir state/maps || true
           fi
+          # Scraper may have been cancelled AFTER writing partial results but
+          # BEFORE its candidate extraction step. Recover the real raw CSV.
+          if [ -f state/maps/results.csv ]; then
+            python3 -m law_local.maps_extract --raw state/maps/results.csv \
+              --out state/maps/no-site-phone-candidates.csv \
+              --summary state/maps/extraction-summary.json
+          fi
           if [ -f state/maps/no-site-phone-candidates.csv ]; then
             echo "MAPS_CANDIDATE_FILE_PRESENT=1"
           else
