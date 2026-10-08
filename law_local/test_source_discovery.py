@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from law_local.source_discovery import crawl_direct, source_url
+from law_local.source_discovery import crawl_direct, source_url, profile_rejection_reason
 from law_local.worker import SqliteQueue
 
 PROFILE = """<h1>800-620-0900</h1><h1>Resources</h1>
@@ -34,6 +34,21 @@ class DirectSourceTests(unittest.TestCase):
             second=crawl_direct(db,fetch_fn=fetch,seconds=30,max_pages=17,delay=0)
             self.assertEqual(second["candidates_added"],0)
             db.close()
+
+
+
+    def test_profile_failures_are_diagnostic_not_false_leads(self):
+        name="<h1>Oak Creek and Partners</h1>"
+        self.assertEqual(profile_rejection_reason(name+"<p>Call 312-422-1836</p>"),
+                         "no_explicit_firm_size")
+        self.assertEqual(profile_rejection_reason(name+"<p>Firm Size: 1</p><p>Call 312-422-1836</p>"),
+                         "one_attorney")
+        self.assertEqual(profile_rejection_reason(name+"<p>Firm Size: 1-5</p><p>Call 312-422-1836</p>"),
+                         "range_includes_one")
+        self.assertEqual(profile_rejection_reason(name+"<p>Firm Size: 2-5</p>"),
+                         "eligible_size_but_no_published_call_phone")
+        self.assertEqual(profile_rejection_reason(name+"<p>Firm Size: 2-5</p><p>Call 312-422-1836</p>"),
+                         "size_and_phone_present_parser_or_scope_miss")
 
 
     def test_discovered_firm_urls_are_persisted_and_processed_next_run(self):
