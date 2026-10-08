@@ -4555,6 +4555,9 @@ async function enrichLead(key,lead){
   const evidenceOwnedWebsite="";
   const discoveredOwnedWebsite="";
   let effectiveWebsite=website||discoveredOwnedWebsite;
+  let callReadyAuditStatus=String(lead.call_ready_website_audit_status||"");
+  let callReadyAuditVersion=String(lead.call_ready_website_audit_version||"");
+  let callReadyWebsiteAuditedAt=String(lead.call_ready_website_audited_at||"");
 
   // "No owned website" is a hard eligibility requirement, not a cleanup task.
   // A candidate that has already passed the expensive email + 2-10 attorney
@@ -4575,6 +4578,9 @@ async function enrichLead(key,lead){
     }
     if(strictOwnedWebsite){
       effectiveWebsite=strictOwnedWebsite;
+      callReadyAuditStatus="owned_site";
+      callReadyAuditVersion=CALL_READY_WEBSITE_AUDIT_VERSION;
+      callReadyWebsiteAuditedAt=new Date().toISOString();
       await redis.hIncrBy(STATS,"strict_final_owned_website_hit",1);
       console.log(JSON.stringify({
         event:"law_strict_final_owned_website_reject",
@@ -4585,6 +4591,9 @@ async function enrichLead(key,lead){
         email:String(emails[0]||"")
       }));
     }else{
+      callReadyAuditStatus="no_owned_site";
+      callReadyAuditVersion=CALL_READY_WEBSITE_AUDIT_VERSION;
+      callReadyWebsiteAuditedAt=new Date().toISOString();
       await redis.hIncrBy(STATS,"strict_final_owned_website_miss",1);
     }
   }
@@ -4592,7 +4601,16 @@ async function enrichLead(key,lead){
   const emailCandidate=!effectiveWebsite&&emailSourceVerified&&emails.length>0&&(!attorneyCountVerified||(attorneyCount>=2&&attorneyCount<=10));
   if(emailCandidate)await redis.sAdd(EMAIL_CANDIDATE_SET,key);
   else await redis.sRem(EMAIL_CANDIDATE_SET,key);
-  const qualified=qualifiesEmailReadyNoWebsiteLawLead({
+  const callState=callReadyQualificationState({
+    usablePhone:isUsableLawPhone(lead.phone),
+    attorneyCount,
+    attorneyCountVerified,
+    website:effectiveWebsite,
+    websiteAuditStatus:callReadyAuditStatus,
+    websiteAuditVersion:callReadyAuditVersion
+  },{auditVersion:CALL_READY_WEBSITE_AUDIT_VERSION});
+  const callReady=callState.callReady;
+  const qualified=callReady&&qualifiesEmailReadyNoWebsiteLawLead({
     website:effectiveWebsite,
     phone:lead.phone,
     emails,
@@ -4601,7 +4619,6 @@ async function enrichLead(key,lead){
     attorney_count_evidence_verified:attorneyCountVerified,
     email_source_verified:emailSourceVerified
   });
-  const callReady=!effectiveWebsite&&isUsableLawPhone(lead.phone)&&attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10;
   if(callReady){
     const wasCallReady=await redis.sIsMember(CALL_READY_SET,key);
     await redis.sAdd(CALL_READY_SET,key);
@@ -4648,11 +4665,14 @@ async function enrichLead(key,lead){
     target_area:String(lead.acquisition_location||[lead.city,lead.region].filter(Boolean).join(", ")||"").trim(),
     email_angle:emailAngle,lead_priority_score:priority,
     eligible_lead:callReady,
+    call_ready_website_audit_status:callReadyAuditStatus,
+    call_ready_website_audit_version:callReadyAuditVersion,
+    call_ready_website_audited_at:callReadyWebsiteAuditedAt,
     email_ready_lead:qualified,
     qualified_lead:qualified,
     call_ready_lead:callReady,
     law_email_enrich_version:EMAIL_METHOD_VERSION,
-    size_ready_email_method_version:(attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10&&!effectiveWebsite)?SIZE_READY_EMAIL_METHOD_VERSION:String(lead.size_ready_email_method_version||""),
+    size_ready_email_method_version:String(lead.size_ready_email_method_version||""),
     law_email_method:emailMethod,law_email_source:source||"",
     law_email_source_verified:emailSourceVerified,
     law_email_validation:emailSourceVerified?(KEELEAD_BASE_URL?"published_exact+strict_firm_identity+mx+optional_smtp":"published_exact+strict_firm_identity+mx"):"rejected",
@@ -4660,25 +4680,7 @@ async function enrichLead(key,lead){
     law_bar_domain:stateBarDomain(lead),
     law_firm_enriched_at:new Date().toISOString()};
 
-  // Email is a hard eligibility gate. Spend materially more research on the
-  // tiny cohort that already proved 2-10 attorneys + no owned website.
-  const sizeReadyForEmail=attorneyCountVerified&&attorneyCount>=2&&attorneyCount<=10&&!effectiveWebsite;
-  const maxEmailRecoveryAttempts=sizeReadyForEmail?4:2;
-  if((!emails.length||!emailSourceVerified)&&recoveryAttempts<maxEmailRecoveryAttempts){
-    const recoverable={...enriched,email_recovery_attempts:recoveryAttempts+1,email_recovery_last_at:new Date().toISOString(),law_email_validation:"recovery_pending"};
-    await redis.hSet(LEAD_HASH,key,JSON.stringify(recoverable));
-    const retrySet=sizeReadyForEmail?SIZE_READY_PENDING_SET:RECOVERABLE_PENDING_SET;
-    await Promise.all([
-      redis.sRem(READY_SET,key),
-      redis.sRem(UNIQUE_ELIGIBLE_SET,key),
-      redis.sRem(REJECTED_SET,key),
-      redis.sRem(ENRICHED_SET,key),
-      redis.sAdd(retrySet,key)
-    ]);
-    await redis.hIncrBy(STATS,sizeReadyForEmail?"size_ready_email_requeued":"email_recovery_requeued",1);
-    console.log(JSON.stringify({event:"law_email_recovery_requeued",key,name:String(lead.name||lead.title||""),attempt:recoveryAttempts+1,sizeReady:sizeReadyForEmail}));
-    return true;
-  }
+  // Email is bonus-only. Missing email never requeues a call-ready or headcount lead.
 
   await redis.hSet(LEAD_HASH,key,JSON.stringify(enriched));
   await redis.sAdd(ENRICHED_SET,key);
@@ -4706,10 +4708,10 @@ async function enrichLead(key,lead){
       else if(!preferredSize) await redis.hIncrBy(STATS,"rejected_wrong_size",1);
       else if(effectiveWebsite) await redis.hIncrBy(STATS,"rejected_has_website",1);
       else if(!isUsableLawPhone(lead.phone)) await redis.hIncrBy(STATS,"rejected_no_usable_phone",1);
-      else if(!emails.length||!emailSourceVerified) await redis.hIncrBy(STATS,"rejected_no_verified_email",1);
+      else if(!emails.length||!emailSourceVerified) await redis.hIncrBy(STATS,"call_ready_email_bonus_missing",1);
     }
   }
-  const rejectReason=qualified?"":callReady?"call_ready_email_optional":effectiveWebsite?"owned_website":!attorneyCountVerified?"unverified_attorney_count":!preferredSize?"wrong_size":!isUsableLawPhone(lead.phone)?"no_usable_phone":!emails.length||!emailSourceVerified?"no_verified_email":"other";
+  const rejectReason=qualified?"":callReady?"call_ready_email_optional":effectiveWebsite?"owned_website":!attorneyCountVerified?"unverified_attorney_count":!preferredSize?"wrong_size":!isUsableLawPhone(lead.phone)?"no_usable_phone":"other";
   console.log(JSON.stringify({event:"law_firm_enriched",key,name:lead.name,emails:emails.length,emailMethod,attorneyCount:attorneyCount||null,attorneyCountVerified,attorneyCountSource:attorneyCountSource||"",effectiveWebsite:effectiveWebsite||"",sizeTier,practice:practices[0]||"",painPoint,qualified,rejectReason,priority,personalizationQuality:p.quality,elapsedMs:Date.now()-enrichStartedAt}));
   return true;
 }
@@ -5955,7 +5957,10 @@ async function persistDirectorySeed(candidate={}){
     await redis.hSet(LEAD_HASH,key,JSON.stringify(rejected));
     await redis.hSet("recover:leadstore:phone-index",phone,key);
     await redis.sAdd(REJECTED_SET,key);
-    await Promise.all([redis.sRem(SIZE_READY_PENDING_SET,key),redis.sRem(CALL_READY_SET,key),redis.sRem(READY_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)]);
+    await Promise.all([
+      redis.sRem(SIZE_READY_PENDING_SET,key),redis.sRem(CALL_READY_AUDIT_PENDING_SET,key),
+      redis.sRem(CALL_READY_SET,key),redis.sRem(READY_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)
+    ]);
     return {added:false,reason:"owned_website"};
   }
 
@@ -6378,14 +6383,14 @@ async function bootstrapPhoneFirstInventory(){
       const stateCode=String(normalizedStateCode(lead)||lead.region||lead.state||"").toUpperCase().trim()||"UNKNOWN";
       callableByState.set(stateCode,(callableByState.get(stateCode)||0)+1);
 
-      const n=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+      let n=Number(lead.attorney_count_estimate||lead.attorney_count||0);
       const source=String(lead.attorney_count_source||"");
       const staleDirectoryEvidence=
         lead.attorney_count_evidence_verified===true &&
         n>0 &&
         headcountSourceNeedsV2Identity(source) &&
         String(lead.headcount_identity_version||"")!==HEADCOUNT_IDENTITY_VERSION;
-      const verified=hasValidStoredHeadcount(lead);
+      let verified=hasValidStoredHeadcount(lead);
       if(staleDirectoryEvidence){
         // Re-open directory-derived counts produced before fetched-page-only
         // verification. Preserve contact/email evidence, but force firm size
@@ -6411,6 +6416,8 @@ async function bootstrapPhoneFirstInventory(){
         ]);
         await redis.hDel(VERIFIED_HEADCOUNT_EVIDENCE_HASH,entry.field);
         await redis.hIncrBy(STATS,"legacy_directory_headcount_reopened",1);
+        verified=false;
+        n=0;
       }
       if(verified){
         if(n>=2&&n<=10){
