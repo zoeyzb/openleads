@@ -1,0 +1,45 @@
+name: Law NY official open-data grouped research
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/law-ny-open-data.yml"
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: law-ny-public-registrations
+  cancel-in-progress: false
+jobs:
+  public-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: recover-scrape-mcp
+          persist-credentials: false
+      - name: Restore previous NY source checkpoint
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          mkdir -p state
+          previous="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow law-ny-open-data.yml --status completed --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+          if [ -n "$previous" ]; then
+            gh run download "$previous" --repo "$GITHUB_REPOSITORY" --name law-ny-public-source-state --dir state || true
+          fi
+      - name: Test official NY data source parser and safety gates
+        run: python3 -m unittest law_local.test_ny_roster -v
+      - name: Research NY registered attorney company-phone groups
+        run: |
+          python3 -m law_local.ny_roster --db state/ny-attorney-registrations.sqlite3 --max-pages 8 --page-size 500 --seconds 160 --out state/ny-source-groups.csv
+      - name: Save source research CSV and checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: law-ny-public-source-state
+          path: |
+            state/ny-attorney-registrations.sqlite3
+            state/ny-source-groups.csv
+          if-no-files-found: warn
+          retention-days: 14
