@@ -102,6 +102,7 @@ jobs:
         run: |
           if [ -f state/law-leads.sqlite3 ]; then
             python3 law_local/worker.py --db state/law-leads.sqlite3 export --status calling_qualified --out state/call-qualified-law.csv
+            python3 law_local/worker.py --db state/law-leads.sqlite3 export --status strict_eligible --out state/email-eligible-law.csv
             python3 law_local/worker.py --db state/law-leads.sqlite3 stats | tee state/stats.json
           fi
       - name: Enforce nonzero production yield (CI green is not acquisition success)
@@ -118,8 +119,10 @@ jobs:
           counts=data.get("counts",{})
           n=int(counts.get("calling_qualified",0))
           print(f"CALLING_QUALIFIED_TOTAL={n}")
-          if n==0:
-              print("ACQUISITION FAILED: 0 qualified phone-first law leads; inspect sources, do not call this a successful lead run.")
+          strict=int(counts.get("strict_eligible",0))
+          print(f"VERIFIED_EMAIL_ELIGIBLE_TOTAL={strict}")
+          if strict==0:
+              print("ACQUISITION FAILED: 0 fully eligible leads with source-verified usable email; preserve phone-only leads as a separate calling list.")
               sys.exit(1)
           PY
       - name: Save private durable state and evidence
@@ -130,6 +133,7 @@ jobs:
           path: |
             state/law-leads.sqlite3
             state/call-qualified-law.csv
+            state/email-eligible-law.csv
             state/stats.json
           if-no-files-found: warn
           retention-days: 14
