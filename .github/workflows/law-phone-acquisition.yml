@@ -1,0 +1,59 @@
+name: Law phone-first acquisition (bounded)
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/law-phone-acquisition.yml"
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: law-phone-acquisition
+  cancel-in-progress: false
+jobs:
+  acquire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: recover-scrape-mcp
+          persist-credentials: false
+      - name: Restore preceding verified job state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p state
+          previous="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow law-phone-acquisition.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+          if [ -n "$previous" ]; then
+            gh run download "$previous" --repo "$GITHUB_REPOSITORY" --name law-phone-state --dir state || true
+          fi
+      - name: Check local Python regression suite
+        run: python3 -m unittest discover -s law_local -v
+      - name: Discover published firm phone and size records
+        run: |
+          python3 law_local/worker.py --db state/law-leads.sqlite3 discover \
+            --states FL,TX,CA,NY,IL,GA,PA,OH,NC,MI,AZ,WA \
+            --max-queries 18 --max-pages 45 --seconds 120 --delay 1.2
+      - name: Verify headcount, owned website and published phone
+        run: |
+          python3 law_local/worker.py --db state/law-leads.sqlite3 run \
+            --max 18 --workers 3 --seconds 150
+      - name: Export verified phone-first firms
+        if: always()
+        run: |
+          if [ -f state/law-leads.sqlite3 ]; then
+            python3 law_local/worker.py --db state/law-leads.sqlite3 export --status strict_eligible --out state/qualified-law.csv
+            python3 law_local/worker.py --db state/law-leads.sqlite3 stats | tee state/stats.json
+          fi
+      - name: Save private durable state and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: law-phone-state
+          path: |
+            state/law-leads.sqlite3
+            state/qualified-law.csv
+            state/stats.json
+          if-no-files-found: warn
+          retention-days: 14
