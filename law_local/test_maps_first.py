@@ -83,10 +83,12 @@ class MapsFirstTests(unittest.TestCase):
             self.assertEqual(db.counts()["calling_qualified"],0)
             # Identifying a likely owned website must block promotion; an absent
             # Maps field alone does not overrule source-published website links.
-            from law_local.worker import process_candidate
-            row=dict(db.pending(1)[0])
-            result=process_candidate(row)
-            self.assertNotEqual(result["status"],"strict_eligible")
+            from law_local.worker import evaluate_candidate
+            result=evaluate_candidate(
+                {"firm":"Riverbank & Grove Law","phone":"8154561820","source_url":page},
+                html,[{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
+                lambda domain:True)
+            self.assertEqual(result["status"],"review_website")
             db.close()
 
 if __name__=="__main__":
