@@ -9,7 +9,7 @@ permissions:
 jobs:
   map-pilot:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,7 +44,7 @@ jobs:
           EOF
           # One pilot only. The upstream image is the existing MIT-licensed
           # gosom scraper; bound container execution to protect CI usage.
-          timeout --signal=TERM 510s docker run --rm \
+          timeout --signal=TERM --kill-after=12s 330s docker run --rm \
             -v "$PWD/law-maps-queries.txt:/queries.txt:ro" \
             -v "$PWD/law-maps-out:/out" \
             gosom/google-maps-scraper \
@@ -53,45 +53,12 @@ jobs:
           if [ "${code:-0}" != "0" ]; then
             echo "Maps collector stopped with status ${code}; inspecting any partial output"
           fi
-      - name: Independently classify phone-first Maps *candidates* only
+      - name: Recover partial raw Maps results into unverified candidates
+        if: always()
         run: |
-          python3 - <<'PY'
-          import csv, json, re
-          from pathlib import Path
-          from law_local.worker import normalize_phone
-          f=Path("law-maps-out/results.csv")
-          out=Path("law-maps-out/no-site-phone-candidates.csv")
-          fields=["firm","phone","city","state","maps_source","website_status","headcount_status"]
-          seen=set()
-          scan=0; matches=[]; headers=[]
-          if f.exists():
-              with f.open(newline="",encoding="utf-8-sig") as fd:
-                  reader=csv.DictReader(fd)
-                  headers=reader.fieldnames or []
-                  for item in reader:
-                      scan+=1
-                      name=(item.get("title") or item.get("name") or "").strip()
-                      phone=normalize_phone(item.get("phone") or "")
-                      website=(item.get("website") or "").strip()
-                      category=(item.get("category") or "").lower()
-                      address=(item.get("address") or "")
-                      if not name or not phone or website or not any(k in (name+" "+category).lower() for k in ("law","attorney","legal")):
-                          continue
-                      key=(phone,re.sub(r"\W+","",name.lower()))
-                      if key in seen:continue
-                      seen.add(key)
-                      state=next((s for s in ("TX","FL","IL","GA","OH","SC","MS","AR","IN","PA","DE","MN","CO","AZ","WV") if re.search(r"\b"+s+r"\b",address)), "")
-                      matches.append({"firm":name,"phone":phone,"city":"","state":state,
-                        "maps_source":item.get("link") or "", "website_status":"no_maps_website_field_only",
-                        "headcount_status":"unverified"})
-          with out.open("w",newline="",encoding="utf-8") as fd:
-              writer=csv.DictWriter(fd,fieldnames=fields)
-              writer.writeheader();writer.writerows(matches)
-          result={"maps_rows":scan,"candidate_rows":len(matches),"qualified_rows":0,"headers":headers,
-                  "note":"Absent Maps website field is not proof of no owned site. No source-verified attorney counts yet."}
-          Path("law-maps-out/summary.json").write_text(json.dumps(result,indent=2))
-          print(json.dumps(result))
-          PY
+          python3 -m law_local.maps_extract --raw law-maps-out/results.csv \
+            --out law-maps-out/no-site-phone-candidates.csv \
+            --summary law-maps-out/summary.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
