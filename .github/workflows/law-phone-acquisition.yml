@@ -85,14 +85,6 @@ jobs:
                                 "site_evidence":data.get("site_evidence",{})}}))
           db.close()
           PY
-      - name: Discover firm profiles and diagnose missing attorney-size or phone proof
-        run: |
-          python3 -m law_local.source_discovery --db state/law-leads.sqlite3 --seconds 65 --max-pages 35
-      - name: Discover fresh published law firm directory profiles
-        run: |
-          python3 law_local/worker.py --db state/law-leads.sqlite3 discover \
-            --states FL,TX,CA,NY,IL,GA,PA,OH,NC,MI \
-            --max-queries 2 --max-pages 10 --seconds 20 --delay 0.8
       - name: Reverify public directory evidence and owned websites
         run: |
           python3 law_local/worker.py --db state/law-leads.sqlite3 run \
