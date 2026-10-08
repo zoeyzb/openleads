@@ -28,6 +28,13 @@ jobs:
             ("bing_rss","https://www.bing.com/search?"+urlencode({"format":"rss","q":'"Dan Connell P.C." lawyers.com'})),
             ("duckduckgo_html","https://html.duckduckgo.com/html/?"+urlencode({"q":'"Dan Connell P.C." lawyers.com'})),
             ("google_search","https://www.google.com/search?"+urlencode({"q":'"Dan Connell P.C." lawyers.com'})),
+            ("bing_legacy_firm_broad","https://www.bing.com/search?"+urlencode({"format":"rss","q":'"Culmer & Davidson" Rockledge Florida'})),
+            ("bing_legacy_firm_site","https://www.bing.com/search?"+urlencode({"format":"rss","q":'"Culmer & Davidson" site:floridabar.org/directories/find-mbr/profile'})),
+            ("bing_legacy_lawyer","https://www.bing.com/search?"+urlencode({"format":"rss","q":'"Dan Connell P.C." site:lawyer.com/firm'})),
+            ("brave_search","https://search.brave.com/search?"+urlencode({"q":'"Culmer & Davidson" Rockledge Florida'})),
+            ("yahoo_search","https://search.yahoo.com/search?"+urlencode({"p":'"Culmer & Davidson" Rockledge Florida'})),
+            ("mojeek_search","https://www.mojeek.com/search?"+urlencode({"q":'"Culmer & Davidson" Rockledge Florida'})),
+            ("ecosia_search","https://www.ecosia.org/search?"+urlencode({"q":'"Culmer & Davidson" Rockledge Florida'})),
           ]
           for name,url in samples:
             try:
@@ -40,5 +47,11 @@ jobs:
                         "search_results":bool(re.search(r"result__a|<item>|lawyers\.com/storm-lake/iowa/",body,re.I))}
             except Exception as e:
               result={"source":name,"error":str(e)[:200]}
+            if name.startswith("bing_") and "body" in locals() and result.get("http_status")==200:
+              try:
+                from xml.etree import ElementTree as ET
+                root=ET.fromstring(body)
+                result["rss_items"]=[(e.findtext("link") or "")[:125] for e in root.findall(".//item")][:6]
+              except Exception:pass
             print(json.dumps(result),flush=True)
           PY
