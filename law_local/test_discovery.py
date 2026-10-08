@@ -38,6 +38,26 @@ class DiscoveryTests(unittest.TestCase):
         self.assertIsNone(_extract_directory_profile(URL, PROFILE.replace("(312) 422-1836","")))
         self.assertIsNone(_extract_directory_profile(URL, PROFILE.replace("Firm Size: 4","Firm Size: 1")))
 
+    def test_real_directory_shape_selects_firm_not_banner(self):
+        html="""<h1>800-620-0900</h1><h1>Resources</h1>
+        <h1>Keystone & Parker Law Group</h1>
+        <h2>Keystone & Parker Law Group</h2>
+        <p>Firm Size: 2 - 5 attorneys</p><p>Call 312-422-1836</p>
+        <footer>Call Us 800-620-0900</footer>"""
+        record=_extract_directory_profile(URL,html)
+        self.assertEqual(record["firm"],"Keystone & Parker Law Group")
+        self.assertEqual(record["phone"],"3124221836")
+        from law_local.worker import evaluate_published_source
+        evidence=evaluate_published_source(html,record)
+        self.assertEqual(evidence["attorneys"],2)
+        self.assertEqual(evidence["attorney_range"],(2,5))
+
+    def test_broad_firm_size_range_is_not_verified_2_to_10(self):
+        html="""<h1>Keystone & Parker Law Group</h1>
+        <p>Firm Size: 1 - 5 attorneys</p><p>Call 312-422-1836</p>"""
+        self.assertIsNone(_extract_directory_profile(URL,html))
+        self.assertIsNone(_extract_directory_profile(URL,html.replace("1 - 5","9 - 20")))
+
     def test_resume_query_checkpoint_and_dedupe(self):
         with tempfile.TemporaryDirectory() as folder:
             db=SqliteQueue(Path(folder)/"law.sqlite3")
