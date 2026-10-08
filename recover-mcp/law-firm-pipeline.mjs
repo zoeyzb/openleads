@@ -6234,6 +6234,7 @@ async function bootstrapPhoneFirstInventory(){
   await Promise.all([
     redis.del(CALL_READY_SET),
     redis.del(CALL_READY_AUDIT_PENDING_SET),
+    redis.del(ACTIVE_QUEUE),
     redis.del(PHONE_HEADCOUNT_PRIORITY_SET),
     redis.del(CHICAGO_PENDING_SET),
     redis.del(PENDING_SET),
