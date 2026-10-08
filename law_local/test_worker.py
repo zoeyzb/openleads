@@ -10,7 +10,7 @@ PROFILE = """
 <html><h1>Keystone & Parker Law Group</h1>
 <p>Call (312) 555-0182</p>
 <p>Keystone & Parker Law Group has 4 attorneys at this location.</p>
-<p>Contact: intake@keystoneparker.example</p></html>
+<p>Contact: intake@keystoneparker.testing-law.org</p></html>
 """
 LEAD = {
     "firm": "Keystone & Parker Law Group",
@@ -33,7 +33,7 @@ class QualityTests(unittest.TestCase):
     def test_headcount_and_email_are_attested_by_same_page(self):
         result=evaluate_published_source(PROFILE, LEAD)
         self.assertEqual(result["attorneys"],4)
-        self.assertEqual(result["emails"],["intake@keystoneparker.example"])
+        self.assertEqual(result["emails"],["intake@keystoneparker.testing-law.org"])
         self.assertFalse(result["website_candidates"])
 
     def test_reject_unattributed_headcount(self):
@@ -49,11 +49,11 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(found["status"],"screened_no_site")
 
     def test_possible_firm_site_must_be_reviewed(self):
-        found=classify_search_results([{"responded":True,"urls":["https://keystoneparker.example"]},{"responded":True,"urls":[]}])
+        found=classify_search_results([{"responded":True,"urls":["https://keystoneparker.testing-law.org"]},{"responded":True,"urls":[]}])
         self.assertEqual(found["status"],"review_website")
 
     def test_strict_gate_never_guesses_an_email(self):
-        result=evaluate_candidate(LEAD, PROFILE.replace("intake@keystoneparker.example",""),
+        result=evaluate_candidate(LEAD, PROFILE.replace("intake@keystoneparker.testing-law.org",""),
                                   [{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
                                   mx_check=lambda domain:True)
         self.assertEqual(result["status"],"call_ready_no_email")
@@ -73,7 +73,7 @@ class QualityTests(unittest.TestCase):
             self.assertTrue(db.add(LEAD))
             self.assertFalse(db.add(LEAD))
             self.assertEqual(len(db.pending(10)),1)
-            db.record(LEAD,{"status":"strict_eligible","attorneys":4,"email":"intake@keystoneparker.example"})
+            db.record(LEAD,{"status":"strict_eligible","attorneys":4,"email":"intake@keystoneparker.testing-law.org"})
             db.close()
             db=SqliteQueue(path)
             self.assertEqual(len(db.pending(10)),0)
