@@ -44,3 +44,29 @@
 - [Phone-first implementation PR #32](https://github.com/zoeyzb/openleads/pull/32)
 - [First zero-yield discovery run](https://github.com/zoeyzb/openleads/actions/runs/37741041667)
 - [Latest full inventory recheck](https://github.com/zoeyzb/openleads/actions/runs/37741491714)
+
+## 2026-10-08 later verification and acquisition evidence
+
+- PR #33 (merged): diversified Bing RSS and DuckDuckGo legal-directory search providers and firm-profile URL paths. GitHub CI passed, but in live run 37742651214 the 12 additional queries returned **0 usable new profiles**.
+- PR #34 (merged): parse actual source page heading/phone and strict 2–10 firm-size intervals. Reject a size range including 1 or above 10. Regression tests passed.
+- PR #35 (merged): label firm "Visit Site" relative redirect as a review blocker; exclude directory support email from firm email evidence. Regression tests passed.
+- Run 37742651214 revalidated all 292 previously archived candidates after parser change, still **0 passing**; 123 firm identity misses, 146 insufficient firm-size evidence, 23 inconclusive. Honest conversion not repaired by superficial regex changes.
+- Run 37742776226 ran the MIT-licensed Gosom Google Maps scraper as an actual bounded GitHub Actions pilot, without Railway or Render: **160** real business records, **2** with published phone and no Maps website field, **0** with verified 2–10 firm size. The two candidates were Stan Schwieger Law Office (Waco TX) and Vasqez Law Office (Amarillo TX). Neither can be promoted to calling-qualified: firm size remains unverified. Zero Maps website field is insufficient as proof of no owned website.
+- PR #36 (merged after CI): the primary **calling_qualified** export/count combines entries with published phone, verified 2–10 size, independent no-owned-website evidence, regardless of whether email exists. The separate `strict_eligible` subset also requires published MX-checked email. This preserves the phone-first calling goal without mislabeling an email-unverified record as strict eligible. No email lookup can be used as a blocker for calling-qualified output.
+- First-party ABA 2024 Legal Technology Survey observed **91%** website adoption among responding firms with 2–9 attorneys (survey; not a complete national census). Targeting 10,000 no-website firms of this size is therefore a sparse-market acquisition problem, not an issue fixed merely by parallelism.
+- The separate large Recover 350k lead spreadsheets are labeled home-service businesses (HVAC/plumbing); importing them into the law pool would be miscategorization.
+- The connected Supabase `recover-revenue-os` inventory returned zero current raw_leads and contacts in project table summaries, so it is not a proven source of the historical 18k law records. Supabase flagged public.sheet_acquisition_ranked_snapshot as RLS disabled; inspect role grants/policies and remediate separately, not blindly.
+
+### Current truth / 10,000 target
+
+**0 newly verified calling-qualified firms from these live runs.** **2 Maps no-site-field phone leads are only unverified candidate records.** Do not report the 292 spreadsheet candidates or 160 raw Maps listings as 2–10/no-site phone-qualified. GitHub CI tests prove software behavior only. An unbounded zero-cost 10,000-lead run is not established. GitHub private Actions minutes/artifact retention are quota-limited. No tasks are continuously running after a completed workflow.
+
+### Next evidence-driven step
+
+Preserve free/no-Railway/no-Render requirement. Improve candidate discovery only after measuring per-source real yield: target secondary rural markets, confirm Google Maps omissions against independent search, then source-match official bar/directory attorney rosters before promoting records. At 2 no-site candidates per 160 scraped business records in the initial small-sample pilot, scaling the exact unchanged strategy has weak economics. Keep evidence links, clear failure reason, deduplication and provenance in any subsequent batch.
+
+- [Merged profile parser PR #34](https://github.com/zoeyzb/openleads/pull/34)
+- [Merged site/third-party-email safeguard PR #35](https://github.com/zoeyzb/openleads/pull/35)
+- [Phone-qualified calling export PR #36](https://github.com/zoeyzb/openleads/pull/36)
+- [Latest archive revalidation run 37742651214](https://github.com/zoeyzb/openleads/actions/runs/37742651214)
+- [Actual Maps pilot run 37742776226](https://github.com/zoeyzb/openleads/actions/runs/37742776226)
