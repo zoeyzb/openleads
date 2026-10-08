@@ -68,6 +68,13 @@ class QualityTests(unittest.TestCase):
         ])
         self.assertNotEqual(found["status"],"screened_no_site")
 
+    def test_firm_owned_source_page_cannot_be_no_site(self):
+        lead={**LEAD,"source_url":"https://keystoneparker.testing-law.org/about"}
+        verdict=evaluate_candidate(lead,PROFILE,[
+            {"responded":True,"urls":[]},{"responded":True,"urls":[]}
+        ],mx_check=lambda domain:True)
+        self.assertEqual(verdict["status"],"owned_site_or_untrusted_source")
+
     def test_strict_gate_never_guesses_an_email(self):
         result=evaluate_candidate(LEAD, PROFILE.replace("intake@keystoneparker.testing-law.org",""),
                                   [{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
