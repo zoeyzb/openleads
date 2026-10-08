@@ -70,3 +70,13 @@ Preserve free/no-Railway/no-Render requirement. Improve candidate discovery only
 - [Phone-qualified calling export PR #36](https://github.com/zoeyzb/openleads/pull/36)
 - [Latest archive revalidation run 37742651214](https://github.com/zoeyzb/openleads/actions/runs/37742651214)
 - [Actual Maps pilot run 37742776226](https://github.com/zoeyzb/openleads/actions/runs/37742776226)
+
+
+## 2026-10-08 source-yield findings (latest)
+
+- PR #37 merged: direct-source Lawyer.com crawl to bypass zero-result search engines. Run 37807122494 fetched 40 real pages, extracted 12 firm-and-phone-size candidates, but 10 had possible owned sites and 2 were inconclusive. Zero qualified.
+- PR #38 merged: persist discovered firm URLs in a SQLite frontier and prioritize them over directory index pages. Main GitHub Actions workflow restores the latest completed checkpoint even after zero-yield failure.
+- Run 37807707978 fetched 100 pages including 84 actual firm profiles, yet parsed only 1 as published size 2–10 plus business phone. That 1 entered website review, NOT qualified. Counts: 123 unverified identity, 146 unverified size, 25 inconclusive, 11 website review, 0 calling-qualified.
+- PR #39 merged: explain real source rejection by one-attorney, range-including-one, missing-size, missing-phone and parser-mismatch categories. See new direct_discovery.profile_rejection_reasons in run logs before scaling. Tests passed.
+- The highest blocker is source quality and strict no-owned-website verification, not worker concurrency. General lawyer.com profiles often have firm size 1 or a Visit Site link. Firm-scoped bar directory member pages, e.g. https://www.inbar.org/members/?id=29049614, sometimes explicitly provide 2-10 attorney range and firm phone; investigate as candidate source but still independently verify no owned site.
+- Real 10,000-goal status is STILL ZERO qualified. No Railway/Render/paid services. Never infer positive firm size from roster count guesses or absent owned-site evidence.
