@@ -43,6 +43,20 @@ class QualityTests(unittest.TestCase):
         html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys at this location.","Firm Size: 4")
         self.assertEqual(evaluate_published_source(html,LEAD)["attorneys"],4)
 
+    def test_directory_footer_email_is_not_a_firm_email(self):
+        html=PROFILE.replace("intake@keystoneparker.testing-law.org",
+                             "support@corp.lawyer.com")
+        result=evaluate_published_source(html,LEAD)
+        self.assertEqual(result["emails"],[])
+
+    def test_relative_visit_site_link_requires_manual_review(self):
+        html=PROFILE.replace("</html>","<a href='/out?firm=123'>Visit Site</a></html>")
+        result=evaluate_candidate(LEAD,html,[
+            {"responded":True,"urls":[]},{"responded":True,"urls":[]}
+        ],mx_check=lambda domain:True)
+        self.assertEqual(result["status"],"review_website")
+        self.assertTrue(result["website_candidates"])
+
     def test_reject_unattributed_headcount(self):
         html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys at this location.","4 attorneys for defendant.")
         self.assertEqual(evaluate_published_source(html,LEAD)["attorneys"],0)
