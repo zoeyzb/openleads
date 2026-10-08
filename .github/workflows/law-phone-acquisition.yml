@@ -71,7 +71,7 @@ jobs:
           else
             echo "MAPS_CANDIDATE_FILE_PRESENT=0"
           fi
-      - name: Discover actual public firm and bar profile URLs then verify source-bound 2–10 attorney headcount and phone
+      - name: Verify source-bound attorney count; cool down empty real URL searches for 7 days
         run: |
           if [ -f state/maps/no-site-phone-candidates.csv ]; then
             python3 -m law_local.maps_first --db state/law-leads.sqlite3 --csv state/maps/no-site-phone-candidates.csv --seconds 160 --max-profiles 120
