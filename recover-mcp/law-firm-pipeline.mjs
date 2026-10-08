@@ -3,7 +3,12 @@
 import { createClient } from "redis";
 import { randomUUID } from "node:crypto";
 import { resolveMx } from "node:dns/promises";
-import { orchestrate as enrichProfessionalEmail } from "email-enrich";
+// Optional email-only enrichment is loaded lazily. The calling CLI has no
+// dependency on a separately cloned or permanently running email service.
+async function enrichProfessionalEmail(...args){
+  const {orchestrate}=await import("email-enrich");
+  return orchestrate(...args);
+}
 import { LAW_PRACTICES, lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesEmailReadyNoWebsiteLawLead, qualifiesCallReadyNoWebsiteLawLead, shouldPauseLawDiscovery, lawResearchQueries, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone, isLawFirmLead } from "./law-firm-targeting.mjs";
 import { buildLawEmailSearchQueries } from "./law-email-search-plan.mjs";
 import { decodePublishedRot13Emails } from "./published-email-obfuscation.mjs";
@@ -20,6 +25,8 @@ import { googleResultRecords } from "./google-serp-records.mjs";
 import { isTexasBarProfileUrl } from "./texas-bar-profile.mjs";
 import { campaignLeadSetKey, claimCoverage } from "./acquisition-coverage.mjs";
 import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
+import { readLawWorkerOptions, shouldRequeueLegacyEmail, headcountTimeoutDisposition } from "./law-cli-policy.mjs";
+const LAW_WORKER_OPTIONS=readLawWorkerOptions(process.argv.slice(2),process.env);
 
 const REDIS_URL=process.env.ACQUISITION_REDIS_URL||process.env.REDIS_URL||"";
 if(!REDIS_URL) throw new Error("ACQUISITION_REDIS_URL required");
@@ -33,8 +40,8 @@ const TARGET_TOTAL=Math.max(100,Number(process.env.LAW_FIRM_TARGET_TOTAL||25000)
 const MAX_CITIES=Math.max(50,Number(process.env.LAW_FIRM_MAX_CITIES||1200));
 const QUEUE_HIGH_WATER=Math.max(8,Math.min(64,Number(process.env.LAW_FIRM_QUEUE_HIGH_WATER||24)));
 const SEED_BATCH=Math.max(1,Math.min(12,Number(process.env.LAW_FIRM_SEED_BATCH||3)));
-const ENRICH_BATCH=Math.max(1,Math.min(96,Number(process.env.LAW_FIRM_ENRICH_BATCH||96)));
-const ENRICH_CONCURRENCY=Math.max(1,Math.min(32,Number(process.env.LAW_FIRM_ENRICH_CONCURRENCY||32)));
+const ENRICH_BATCH=LAW_WORKER_OPTIONS.batchSize;
+const ENRICH_CONCURRENCY=LAW_WORKER_OPTIONS.concurrency;
 const ENRICH_LEAD_TIMEOUT_MS=Math.max(30000,Math.min(120000,Number(process.env.LAW_FIRM_ENRICH_LEAD_TIMEOUT_MS||90000)));
 const SIZE_READY_EMAIL_BATCH=Math.max(4,Math.min(96,Number(process.env.LAW_SIZE_READY_EMAIL_BATCH||48)));
 const SIZE_READY_EMAIL_CONCURRENCY=Math.max(2,Math.min(48,Number(process.env.LAW_SIZE_READY_EMAIL_CONCURRENCY||24)));
@@ -333,8 +340,8 @@ const UNIQUE_VERIFIED_HEADCOUNT_SET="recover:law-firm:unique-verified-headcount:
 const CALL_READY_SET="recover:law-firm:call-ready:v1";
 const CALL_READY_AUDIT_PENDING_SET="recover:law-firm:call-ready-audit-pending:v1";
 const CALL_READY_AUDIT_VERSION="call-ready-no-site-v1";
-const CALL_READY_AUDIT_BATCH=Math.max(1,Math.min(48,Number(process.env.LAW_CALL_READY_AUDIT_BATCH||24)));
-const CALL_READY_AUDIT_CONCURRENCY=Math.max(1,Math.min(12,Number(process.env.LAW_CALL_READY_AUDIT_CONCURRENCY||6)));
+const CALL_READY_AUDIT_BATCH=LAW_WORKER_OPTIONS.auditBatchSize;
+const CALL_READY_AUDIT_CONCURRENCY=LAW_WORKER_OPTIONS.auditConcurrency;
 const CALLING_MODE=true;
 const CALLING_DISCOVERY_PAUSE_THRESHOLD=Math.max(100,Number(process.env.LAW_CALLING_DISCOVERY_PAUSE_THRESHOLD||500));
 const SOURCE_CIRCUIT_STATE_HASH="recover:law-firm:source-circuit-state:v1";
@@ -350,7 +357,7 @@ const WEBSITE_AUDIT_BATCH=Math.max(1,Math.min(32,Number(process.env.LAW_WEBSITE_
 const WEBSITE_AUDIT_CONCURRENCY=Math.max(1,Math.min(12,Number(process.env.LAW_WEBSITE_AUDIT_CONCURRENCY||8)));
 const DISCOVERY_BACKLOG_LIMIT=Math.max(1000,Number(process.env.LAW_FIRM_DISCOVERY_BACKLOG_LIMIT||15000));
 const DIRECTORY_DISCOVERY_ENABLED=String(process.env.LAW_DIRECTORY_DISCOVERY_ENABLED||"true").toLowerCase()!=="false";
-const DIRECTORY_DISCOVERY_BATCH=Math.max(1,Math.min(8,Number(process.env.LAW_DIRECTORY_DISCOVERY_BATCH||6)));
+const DIRECTORY_DISCOVERY_BATCH=LAW_WORKER_OPTIONS.mode==="once"?1:Math.max(1,Math.min(8,Number(process.env.LAW_DIRECTORY_DISCOVERY_BATCH||6)));
 const DIRECTORY_DISCOVERY_PAGES=Math.max(1,Math.min(4,Number(process.env.LAW_DIRECTORY_DISCOVERY_PAGES||2)));
 const DIRECTORY_DISCOVERY_MAX_PAGES=Math.max(DIRECTORY_DISCOVERY_PAGES,Math.min(6,Number(process.env.LAW_DIRECTORY_DISCOVERY_MAX_PAGES||4)));
 const DIRECTORY_VERIFY_CONCURRENCY=Math.max(2,Math.min(12,Number(process.env.LAW_DIRECTORY_VERIFY_CONCURRENCY||6)));
@@ -395,7 +402,7 @@ await connectRedis();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"redis_connected"}));
 function normalize(v=""){return String(v||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();}
 async function emitCallReadySnapshot(){
-  const keys=await redis.sMembers(UNIQUE_VERIFIED_HEADCOUNT_SET);
+  const keys=await redis.sMembers(CALL_READY_SET);
   let matches=0,withEmail=0;
   for(let offset=0;offset<keys.length;offset+=250){
     const chunk=keys.slice(offset,offset+250);
@@ -408,8 +415,7 @@ async function emitCallReadySnapshot(){
       const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
       const sizeReady=lead.attorney_count_evidence_verified===true&&attorneyCount>=2&&attorneyCount<=10;
       const phone=String(lead.phone||"").trim();
-      if(!isLaw||/^https?:\/\//i.test(website)||!sizeReady||!isUsableLawPhone(phone)){await redis.sRem(CALL_READY_SET,chunk[i]);continue;}
-      await redis.sAdd(CALL_READY_SET,chunk[i]);
+      if(!isLaw||!qualifiesCallReadyNoWebsiteLawLead(lead))continue;
       const emails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
         .map(x=>String(x||"").trim().toLowerCase())
         .filter(x=>isUsableLawEmail(x));
@@ -438,7 +444,7 @@ async function emitCallReadySnapshot(){
       }));
     }
   }
-  console.log(JSON.stringify({event:"law_call_ready_export_summary",verifiedHeadcountSet:keys.length,matches,withEmail}));
+  console.log(JSON.stringify({event:"law_call_ready_export_summary",callReadySetKeys:keys.length,matches,withEmail}));
 }
 await emitCallReadySnapshot().catch(error=>console.error("law_call_ready_export_error",error?.message||error));
 function lawFirmNameShape(lead={}){
@@ -5549,7 +5555,7 @@ async function processEnrichKeys(keys=[],lane="general",concurrency=ENRICH_CONCU
           redis.sRem(PRIORITY_PENDING_SET,key),
           redis.sRem(PENDING_SET,key)
         ]);
-        if(retryPending){
+        if(shouldRequeueLegacyEmail({callingMode:CALLING_MODE,legacyRecoveryPending:retryPending})){
           await redis.sAdd(finalSizeReady?SIZE_READY_PENDING_SET:RECOVERABLE_PENDING_SET,key);
         }
         if(result)done++;
@@ -5560,35 +5566,45 @@ async function processEnrichKeys(keys=[],lane="general",concurrency=ENRICH_CONCU
         const retryCount=Number(retryLead.attorney_count_estimate||retryLead.attorney_count||0);
         const retrySizeReady=retryLead.attorney_count_evidence_verified===true&&retryCount>=2&&retryCount<=10&&!/^https?:\/\//i.test(retryWebsite);
         const needsPhoneHeadcount=!/^https?:\/\//i.test(retryWebsite)&&isUsableLawPhone(retryLead.phone)&&retryLead.attorney_count_evidence_verified!==true;
-        if(retrySizeReady){
-          const disposition=sizeReadyFailureDisposition(retryLead.email_recovery_attempts,{maxAttempts:4});
-          const timedOutLead={...retryLead,
-            email_recovery_attempts:disposition.nextAttempt,
-            email_recovery_last_at:new Date().toISOString(),
-            law_email_validation:disposition.shouldRetry?"recovery_pending":"rejected",
-            qualified_lead:false
-          };
-          await redis.hSet(LEAD_HASH,key,JSON.stringify(timedOutLead));
-          await Promise.all([
-            redis.sRem(SIZE_READY_PENDING_SET,key),
-            redis.sRem(READY_SET,key),
-            redis.sRem(UNIQUE_ELIGIBLE_SET,key)
-          ]);
-          if(disposition.shouldRetry){
-            await redis.sAdd(SIZE_READY_PENDING_SET,key);
-            await redis.hIncrBy(STATS,"size_ready_timeout_requeued",1);
-          }else{
-            await redis.sAdd(ENRICHED_SET,key);
-            await redis.sRem(REJECTED_SET,key);
-            await redis.hIncrBy(STATS,"size_ready_timeout_exhausted",1);
-          }
+        // Calling-mode errors may retry headcount at most twice per adapter
+        // version. Legacy email flags cannot enqueue a failed law record.
+        await Promise.all([
+          redis.sRem(PHONE_HEADCOUNT_PRIORITY_SET,key),
+          redis.sRem(CHICAGO_PENDING_SET,key),
+          redis.sRem(SIZE_READY_PENDING_SET,key),
+          redis.sRem(RECOVERABLE_PENDING_SET,key),
+          redis.sRem(PRIORITY_PENDING_SET,key),
+          redis.sRem(SOURCE_PENDING_SET,key),
+          redis.sRem(PENDING_SET,key)
+        ]);
+        if(retrySizeReady&&hasValidStoredHeadcount(retryLead)){
+          await redis.sAdd(CALL_READY_AUDIT_PENDING_SET,key);
+          await redis.hIncrBy(STATS,"headcount_timeout_recovered_to_site_audit",1);
         }else if(needsPhoneHeadcount){
-          const shape=lawFirmNameShape(retryLead);
-          await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
+          const disposition=headcountTimeoutDisposition({
+            attempts:retryLead.phone_headcount_attempts,
+            attemptVersion:retryLead.phone_headcount_attempts_version,
+            currentVersion:PHONE_HEADCOUNT_METHOD_VERSION,
+            maxAttempts:2
+          });
+          const updated={...retryLead,
+            phone_headcount_attempts:disposition.nextAttempt,
+            phone_headcount_attempts_version:disposition.attemptVersion,
+            phone_headcount_method_version:PHONE_HEADCOUNT_METHOD_VERSION,
+            phone_headcount_status:"unverified",
+            phone_headcount_last_at:new Date().toISOString(),
+            phone_headcount_last_error:String(error?.message||error).slice(0,250),
+            call_ready_lead:false
+          };
+          await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
+          if(disposition.retry){
+            const shape=lawFirmNameShape(updated);
+            await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
+          }else{
+            await redis.hIncrBy(STATS,"headcount_timeout_exhausted",1);
+          }
         }else{
-          const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(isUsableLawEmail);
-          const retrySet=retryEmails.length?PENDING_SET:(emailRecoveryPriority(retryLead)>=3?RECOVERABLE_PENDING_SET:PRIORITY_PENDING_SET);
-          await moveToEmailQueue(key,retrySet);
+          await redis.hIncrBy(STATS,"calling_lane_timeout_skipped_irrelevant",1);
         }
         console.warn(JSON.stringify({event:"law_firm_enrich_retry",lane,key,error:String(error?.message||error)}));
       }
@@ -6234,7 +6250,6 @@ async function bootstrapPhoneFirstInventory(){
   await Promise.all([
     redis.del(CALL_READY_SET),
     redis.del(CALL_READY_AUDIT_PENDING_SET),
-    redis.del(ACTIVE_QUEUE),
     redis.del(PHONE_HEADCOUNT_PRIORITY_SET),
     redis.del(CHICAGO_PENDING_SET),
     redis.del(PENDING_SET),
@@ -6542,6 +6557,79 @@ async function callReadyAuditLoop(){
   }
 }
 
+// Portable mode makes one bounded attempt against existing Redis state and
+// then exits. In particular it does not erase any queue or repeat bootstrap
+// unless explicitly invoked with --bootstrap.
+async function runPortableOnce(){
+  const lockKey="recover:law-firm:portable-run:lease:v1";
+  const token=randomUUID();
+  const acquired=await redis.set(lockKey,token,{NX:true,EX:1800});
+  if(acquired!=="OK")throw new Error("Another portable law batch is running; exit without duplicating work");
+  let stage="start";
+  try{
+    if(LAW_WORKER_OPTIONS.bootstrap){
+      stage="bootstrap";
+      await bootstrapPhoneFirstInventory();
+    }
+    stage="audit_before";
+    const before=await callReadyAuditBatch();
+    stage="headcount";
+    const headcount=await enrichBatch();
+    stage="audit_after";
+    const after=await callReadyAuditBatch();
+    let directory={cities:0,candidates:0,verified:0,added:0};
+    if(LAW_WORKER_OPTIONS.discover){
+      stage="directory";
+      directory=await seedLawyersComDirectory(await loadCities());
+    }
+    stage="sheet";
+    await startLawLeadSheetSync({
+      getRedis:async()=>redis,
+      serviceAccountJson:GOOGLE_SERVICE_ACCOUNT_JSON,
+      spreadsheetId:LAW_LEADS_SPREADSHEET_ID,
+      enabled:LAW_LEADS_SHEET_SYNC_ENABLED,
+      intervalMs:LAW_LEADS_SHEET_SYNC_INTERVAL_MS,
+      continuous:false
+    });
+    const [pendingHeadcountPriority,pendingHeadcountGeneral,pendingSiteAudit,callReady,strictEligible]=await Promise.all([
+      redis.sCard(PHONE_HEADCOUNT_PRIORITY_SET),
+      redis.sCard(CHICAGO_PENDING_SET),
+      redis.sCard(CALL_READY_AUDIT_PENDING_SET),
+      redis.sCard(CALL_READY_SET),
+      redis.sCard(UNIQUE_ELIGIBLE_SET)
+    ]);
+    console.log(JSON.stringify({
+      event:"law_portable_batch_complete",
+      runMode:"once",
+      bootstrap:LAW_WORKER_OPTIONS.bootstrap,
+      before,headcount,after,directory,
+      pendingHeadcount:pendingHeadcountPriority+pendingHeadcountGeneral,
+      pendingSiteAudit,
+      rawCallReadyKeys:callReady,
+      rawStrictEligibleKeys:strictEligible,
+      note:"Raw Redis key counts are not deduplicated callable businesses; use the Sheet export for that KPI."
+    }));
+  }catch(error){
+    console.error(JSON.stringify({
+      event:"law_portable_batch_failure",stage,error:String(error?.message||error)
+    }));
+    throw error;
+  }finally{
+    // Compare-and-delete: a timed-out process must not erase a newer lease.
+    try{
+      await redis.eval(
+        'if redis.call("GET",KEYS[1])==ARGV[1] then return redis.call("DEL",KEYS[1]) else return 0 end',
+        {keys:[lockKey],arguments:[token]}
+      );
+    }catch(error){console.error("law_cli_lease_release_error",error?.message||error);}
+    try{await redis.quit();}catch{}
+  }
+}
+
+let cities=[];
+if(LAW_WORKER_OPTIONS.mode==="once"){
+  await runPortableOnce();
+}else{
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"phone_first_fast_bootstrap"}));
 await bootstrapPhoneFirstInventory();
 
@@ -6560,7 +6648,7 @@ startLawLeadSheetSync({
   intervalMs:LAW_LEADS_SHEET_SYNC_INTERVAL_MS
 });
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_load"}));
-const cities=await loadCities();
+cities=await loadCities();
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"city_loaded",cities:cities.length}));
 
 console.log(JSON.stringify({event:"law_firm_pipeline_started",cities:cities.length,practices:PRACTICE_FOCI.map(x=>x.key),target:TARGET_TOTAL,queueHighWater:QUEUE_HIGH_WATER,seedBatch:SEED_BATCH,enrichBatch:ENRICH_BATCH,enrichConcurrency:ENRICH_CONCURRENCY,discoveryBacklogLimit:DISCOVERY_BACKLOG_LIMIT}));
@@ -6684,3 +6772,4 @@ async function websiteAuditLoop(){
 const loops=[seedLoop(),directorySeedLoop(),enrichmentLoop(),callReadyAuditLoop(),statusLoop()];
 if(shouldRunEmailConversionWorker({callingMode:CALLING_MODE}))loops.push(sizeReadyConversionLoop());
 await Promise.all(loops);
+}

@@ -270,10 +270,19 @@ async function collectMetricsSnapshot(redis){
   };
 }
 
-export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadsheetId="",enabled=false,intervalMs=120000}={}){
-  if(!enabled||!spreadsheetId)return;
+export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadsheetId="",enabled=false,intervalMs=120000,continuous=true}={}){
+  if(!enabled)return;
+  if(!spreadsheetId){
+    console.error("law_sheet_sync_missing_spreadsheet_id");
+    if(!continuous)throw new Error("law_sheet_sync_missing_spreadsheet_id");
+    return;
+  }
   const sa=serviceAccount(serviceAccountJson);
-  if(!sa){console.error("law_sheet_sync_not_configured");return;}
+  if(!sa){
+    console.error("law_sheet_sync_not_configured");
+    if(!continuous)throw new Error("law_sheet_sync_not_configured");
+    return;
+  }
   let token="",tokenAt=0,running=false,sheetId=null,tabName="Call Ready Leads";
   const archiveTabName="Lead Archive";
   const metricsTabName="Diagnostics";
@@ -528,9 +537,13 @@ export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadshee
       }));
 
       // Website-refresh inventory is intentionally excluded from this campaign.
-    }catch(error){console.error("law_sheet_sync_error",error?.message||error);}
+    }catch(error){
+      console.error("law_sheet_sync_error",error?.message||error);
+      if(!continuous)throw error;
+    }
     finally{running=false;}
   }
-  void sync();
-  setInterval(()=>void sync(),Math.max(60000,Number(intervalMs)||120000)).unref?.();
+  const firstSync=sync();
+  if(continuous)setInterval(()=>void sync(),Math.max(60000,Number(intervalMs)||120000)).unref?.();
+  return firstSync;
 }
