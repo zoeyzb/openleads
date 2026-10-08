@@ -49,6 +49,17 @@ jobs:
                     "sitemap_urls":urls[:25]}),flush=True)
             except Exception as ex:
               print(json.dumps({"sitemap":sm,"error":str(ex)[:160]}),flush=True)
+          for rp in ("/firms","/firms?page=2","/firms?size=2-10","/firms?sort=name"):
+            try:
+              with urlopen(Request(root+rp,headers={"User-Agent":ua}),timeout=12) as rr:
+                doc=rr.read(250000).decode("utf-8","replace")
+                p=reader(doc)
+                firm_links=[(url,label) for url,label in p.links if url.startswith("/firm/")]
+                print(json.dumps({"browse":rp,"status":rr.status,"final_url":rr.url,
+                    "bytes":len(doc),"firm_link_count":len(firm_links),
+                    "sample_links":firm_links[:5],"text_excerpt":" ".join(p.parts)[-400:]}),flush=True)
+            except Exception as ex:
+              print(json.dumps({"browse":rp,"error":str(ex)[:180]}),flush=True)
           for slug in ["haas-law-pllc","stearns-weaver-miller","office-of-regional-counsel","culmer-davidson","dubiner-wilensky-llc","harold-h-weisman-pa"]:
             url=root+"/firm/"+slug
             if robots.mtime() and not robots.can_fetch(ua,url):
