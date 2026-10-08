@@ -1,6 +1,8 @@
 name: Law phone-first acquisition (bounded)
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
   workflow_run:
     workflows: ["Law Google Maps public discovery pilot"]
     types: [completed]
@@ -131,6 +133,7 @@ jobs:
           db.row_factory=sqlite3.Row
           records=db.execute("""SELECT firm,phone,state,city,source_url,status,result_json
              FROM candidates WHERE source_url LIKE 'https://www.floridalawdirectory.com/firm/%'
+               AND status NOT IN ('review_nonlaw_employer')
              ORDER BY firm""").fetchall()
           path=Path("state/roster-sourced-size-phone.csv")
           path.parent.mkdir(parents=True,exist_ok=True)
@@ -146,7 +149,7 @@ jobs:
                     "Phone":r["phone"],"Email":ev.get("email",""),"City":r["city"],
                     "State":r["state"],"Headcount source":r["source_url"],
                     "Website/email status":r["status"] if r["status"]!="pending" else "pending_no_owned_site_email_audit"})
-          print("BAR_ROSTER_SIZE_PHONE_CANDIDATES="+str(len(records)))
+          print("BAR_ROSTER_SIZE_PHONE_RESEARCH_CANDIDATES="+str(len(records)))
           print("FULL_STRICT_VERIFIED_IN_ROSTER="+str(sum(r["status"]=="strict_eligible" for r in records)))
           db.close()
           PY
