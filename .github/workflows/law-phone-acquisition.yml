@@ -95,10 +95,16 @@ jobs:
                                 "site_evidence":data.get("site_evidence",{})}}))
           db.close()
           PY
-      - name: Reverify public directory evidence and owned websites
+      - name: Prove independent website search providers can find a known owned site
+        run: python3 -m law_local.site_provider_health --ready-flag state/website-search-ready.flag
+      - name: Reverify public directory evidence and owned websites only with healthy independent site searches
         run: |
-          python3 law_local/worker.py --db state/law-leads.sqlite3 run \
-            --max 220 --workers 8 --seconds 150
+          if [ -f state/website-search-ready.flag ]; then
+            python3 law_local/worker.py --db state/law-leads.sqlite3 run \
+              --max 220 --workers 8 --seconds 150
+          else
+            echo "WEBSITE_GATE_PAUSED: no two healthy, relevant search providers; preserving all source-backed firms for later no-site/email verification."
+          fi
       - name: Preserve sourced 2–10 firm-size and business-phone candidates separately from email/no-site qualification
         if: always()
         run: |
