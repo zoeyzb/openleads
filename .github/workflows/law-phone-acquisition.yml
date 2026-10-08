@@ -115,6 +115,9 @@ jobs:
                                 "site_evidence":data.get("site_evidence",{})}}))
           db.close()
           PY
+      - name: Check official FL Bar publicly published email/owned-site evidence (12-firm pilot)
+        run: |
+          python3 -m law_local.fl_bar_contacts --db state/law-leads.sqlite3 --max-firms 12 --max-members 2 --seconds 100
       - name: Prove independent website search providers can find a known owned site
         run: python3 -m law_local.site_provider_health --ready-flag state/website-search-ready.flag
       - name: Reverify public directory evidence and owned websites only with healthy independent site searches
