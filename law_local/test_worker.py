@@ -104,6 +104,16 @@ class QualityTests(unittest.TestCase):
             db.close()
 
 class EndToEndTests(unittest.TestCase):
+    def test_outage_is_not_retried_three_times_in_one_run(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"law.sqlite3")
+            self.assertTrue(db.add(LEAD))
+            with patch("law_local.worker.fetch_public",side_effect=TimeoutError("source timeout")):
+                result=run_batch(db,max_rows=5,workers=1,seconds=10)
+            self.assertEqual(result,{"inconclusive":1})
+            self.assertEqual(db.conn.execute("SELECT attempts FROM candidates").fetchone()[0],1)
+            db.close()
+
     def test_import_process_export_source_provenance(self):
         with tempfile.TemporaryDirectory() as folder:
             db=SqliteQueue(Path(folder)/"law.sqlite3")
