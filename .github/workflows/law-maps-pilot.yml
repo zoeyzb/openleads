@@ -15,7 +15,7 @@ jobs:
         with:
           ref: recover-scrape-mcp
           persist-credentials: false
-      - name: Run 8 targeted public Maps queries (no hosted infrastructure)
+      - name: Run bounded multi-state public Maps queries (no hosted infrastructure)
         shell: bash
         run: |
           set -euo pipefail
@@ -29,6 +29,18 @@ jobs:
           law firm in Springfield Illinois
           law office in Macon Georgia
           law firm in Akron Ohio
+          law office in Florence South Carolina
+          law firm in Tupelo Mississippi
+          law office in Jonesboro Arkansas
+          estate planning law office in Evansville Indiana
+          family law firm in Altoona Pennsylvania
+          law office in Dover Delaware
+          law firm in Rochester Minnesota
+          criminal defense law office in Pueblo Colorado
+          law office in San Angelo Texas
+          law firm in Flagstaff Arizona
+          law office in Fort Smith Arkansas
+          law firm in Morgantown West Virginia
           EOF
           # One pilot only. The upstream image is the existing MIT-licensed
           # gosom scraper; bound container execution to protect CI usage.
@@ -68,7 +80,7 @@ jobs:
                       key=(phone,re.sub(r"\W+","",name.lower()))
                       if key in seen:continue
                       seen.add(key)
-                      state=next((s for s in ("TX","FL","IL","GA","OH") if re.search(r"\b"+s+r"\b",address)), "")
+                      state=next((s for s in ("TX","FL","IL","GA","OH","SC","MS","AR","IN","PA","DE","MN","CO","AZ","WV") if re.search(r"\b"+s+r"\b",address)), "")
                       matches.append({"firm":name,"phone":phone,"city":"","state":state,
                         "maps_source":item.get("link") or "", "website_status":"no_maps_website_field_only",
                         "headcount_status":"unverified"})
