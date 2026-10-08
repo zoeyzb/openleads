@@ -89,8 +89,10 @@ jobs:
         run: node recover-mcp/law-firm-targeting.node-test.mjs
       - name: Run law sheet metrics regression test
         run: node recover-mcp/law-sheet-metrics.node-test.mjs
-      - name: Check law sheet sync syntax
-        run: node --check recover-mcp/law-sheet-sync.mjs
+      - name: Check law sheet sync and server syntax
+        run: |
+          node --check recover-mcp/law-sheet-sync.mjs
+          node --check recover-mcp/server.mjs
       - name: Check acquisition worker syntax
         run: |
           node --check recover-mcp/acquisition-worker.mjs
