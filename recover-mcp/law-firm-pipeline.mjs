@@ -6370,6 +6370,186 @@ async function bootstrapPhoneFirstInventory(){
   return {scanned,callableNoSite,queuedHeadcount,queuedSiteAudit,wrongSizeKnown};
 }
 
+
+async function auditCallReadyCandidate(key){
+  const raw=await redis.hGet(LEAD_HASH,key);
+  if(!raw){
+    await redis.sRem(CALL_READY_AUDIT_PENDING_SET,key);
+    return "missing";
+  }
+  let lead;try{lead=JSON.parse(raw)||{};}catch{
+    await redis.sRem(CALL_READY_AUDIT_PENDING_SET,key);
+    return "invalid_json";
+  }
+  const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
+  const attorneyCountVerified=hasValidStoredHeadcount(lead);
+  const website=String(lead.website||lead.website_url||lead.discovered_website||lead.owned_website||"").trim();
+  const isLaw=(String(lead.search_profile||"")==="law-firm"||normalize(lead.industry)==="law firm")&&isLawFirmLead(lead);
+
+  if(!isLaw||!isUsableLawPhone(lead.phone)||!attorneyCountVerified||attorneyCount<2||attorneyCount>10){
+    const updated={...lead,no_owned_website_verified:false,no_owned_website_audit_version:"",
+      call_ready_lead:false,eligible_lead:false};
+    await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
+    await Promise.all([
+      redis.sRem(CALL_READY_AUDIT_PENDING_SET,key),
+      redis.sRem(CALL_READY_SET,key),
+      redis.sRem(UNIQUE_ELIGIBLE_SET,key),
+      redis.sRem(READY_SET,key)
+    ]);
+    return "not_candidate";
+  }
+
+  if(/^https?:\/\//i.test(website)){
+    const updated={...lead,no_owned_website_verified:false,no_owned_website_audit_version:CALL_READY_AUDIT_VERSION,
+      no_owned_website_audited_at:new Date().toISOString(),call_ready_lead:false,eligible_lead:false};
+    await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
+    await Promise.all([
+      redis.sRem(CALL_READY_AUDIT_PENDING_SET,key),
+      redis.sRem(CALL_READY_SET,key),
+      redis.sRem(UNIQUE_ELIGIBLE_SET,key),
+      redis.sRem(READY_SET,key),
+      redis.sAdd(REJECTED_SET,key)
+    ]);
+    await redis.hIncrBy(STATS,"call_ready_audit_known_website",1);
+    return "owned_site";
+  }
+
+  if(!needsCallReadyOwnedWebsiteAudit({
+    website,
+    phone:lead.phone,
+    attorneyCount,
+    attorneyCountVerified,
+    noOwnedWebsiteVerified:lead.no_owned_website_verified===true&&String(lead.no_owned_website_audit_version||"")===CALL_READY_AUDIT_VERSION
+  })){
+    if(qualifiesCallReadyNoWebsiteLawLead(lead))await redis.sAdd(CALL_READY_SET,key);
+    await redis.sRem(CALL_READY_AUDIT_PENDING_SET,key);
+    return "current";
+  }
+
+  let ownedWebsite="";
+  let method="";
+  try{
+    ownedWebsite=await ownedWebsiteFromTrustedProfile(String(lead.attorney_count_source||""),lead,key);
+    if(ownedWebsite)method="trusted_headcount_profile";
+  }catch{}
+
+  const existingEmails=[...(Array.isArray(lead.emails)?lead.emails:[]),lead.email]
+    .map(x=>String(x||"").trim().toLowerCase()).filter(isUsableLawEmail);
+  if(!ownedWebsite&&existingEmails.length){
+    try{
+      ownedWebsite=await detectOwnedWebsiteFromEmailDomains(existingEmails,lead);
+      if(ownedWebsite)method="email_domain";
+    }catch{}
+  }
+  if(!ownedWebsite){
+    try{
+      ownedWebsite=await probeLikelyOwnedDomains(lead,key);
+      if(ownedWebsite)method="likely_domain_probe";
+    }catch{}
+  }
+  if(!ownedWebsite){
+    try{
+      ownedWebsite=await findOwnedWebsitePreflight({...lead,emails:existingEmails},key,true);
+      if(ownedWebsite)method="exact_firm_preflight";
+    }catch{}
+  }
+
+  const auditedAt=new Date().toISOString();
+  if(ownedWebsite){
+    const updated={...lead,
+      website:ownedWebsite,
+      owned_website_evidence_source:method||"call_ready_audit",
+      no_owned_website_verified:false,
+      no_owned_website_audit_version:CALL_READY_AUDIT_VERSION,
+      no_owned_website_audited_at:auditedAt,
+      call_ready_lead:false,
+      eligible_lead:false
+    };
+    await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
+    await Promise.all([
+      redis.sRem(CALL_READY_AUDIT_PENDING_SET,key),
+      redis.sRem(CALL_READY_SET,key),
+      redis.sRem(UNIQUE_ELIGIBLE_SET,key),
+      redis.sRem(READY_SET,key),
+      redis.sAdd(REJECTED_SET,key),
+      redis.sAdd(ENRICHED_SET,key)
+    ]);
+    await redis.hIncrBy(STATS,"call_ready_audit_owned_website",1);
+    console.log(JSON.stringify({event:"law_call_ready_audit_reject",key,name:String(lead.name||lead.title||""),website:ownedWebsite,method,attorneyCount}));
+    return "owned_site";
+  }
+
+  const updated={...lead,
+    website:"",
+    no_owned_website_verified:true,
+    no_owned_website_audit_version:CALL_READY_AUDIT_VERSION,
+    no_owned_website_audited_at:auditedAt,
+    no_owned_website_audit_method:"trusted_profile+domain_probe+exact_preflight",
+    call_ready_lead:true,
+    eligible_lead:true,
+    primary_pain_point:"No website",
+    website_opportunity:"website_build"
+  };
+  const callReady=qualifiesCallReadyNoWebsiteLawLead(updated);
+  if(!callReady)throw new Error("call-ready audit invariant failed");
+  const strictEligible=qualifiesEmailReadyNoWebsiteLawLead(updated);
+  await redis.hSet(LEAD_HASH,key,JSON.stringify({...updated,email_ready_lead:strictEligible,qualified_lead:strictEligible}));
+  await Promise.all([
+    redis.sRem(CALL_READY_AUDIT_PENDING_SET,key),
+    redis.sAdd(CALL_READY_SET,key),
+    redis.sRem(REJECTED_SET,key),
+    strictEligible?redis.sAdd(UNIQUE_ELIGIBLE_SET,key):redis.sRem(UNIQUE_ELIGIBLE_SET,key),
+    strictEligible?redis.sAdd(READY_SET,key):redis.sRem(READY_SET,key)
+  ]);
+  await redis.hIncrBy(STATS,"call_ready_audit_no_site_verified",1);
+  console.log(JSON.stringify({
+    event:"law_call_ready_verified",key,firm:String(lead.name||lead.title||""),
+    phone:String(lead.phone||""),attorneys:attorneyCount,
+    headcountSource:String(lead.attorney_count_source||""),
+    strictEmailBonus:strictEligible
+  }));
+  return "call_ready";
+}
+
+async function callReadyAuditBatch(){
+  const keys=await popSetBatch(CALL_READY_AUDIT_PENDING_SET,CALL_READY_AUDIT_BATCH);
+  if(!keys.length)return {processed:0,ready:0,rejected:0};
+  let index=0,ready=0,rejected=0,processed=0;
+  const run=async()=>{
+    while(index<keys.length){
+      const key=keys[index++];
+      try{
+        const result=await auditCallReadyCandidate(key);
+        processed++;
+        if(result==="call_ready"||result==="current")ready++;
+        else if(result==="owned_site"||result==="not_candidate")rejected++;
+      }catch(error){
+        await redis.hIncrBy(STATS,"call_ready_audit_error",1);
+        console.warn(JSON.stringify({event:"law_call_ready_audit_error",key,error:String(error?.message||error).slice(0,240)}));
+      }
+    }
+  };
+  await Promise.all(Array.from({length:Math.min(CALL_READY_AUDIT_CONCURRENCY,keys.length)},()=>run()));
+  return {processed,ready,rejected};
+}
+
+async function callReadyAuditLoop(){
+  while(true){
+    try{
+      const result=await callReadyAuditBatch();
+      if(result.processed){
+        console.log(JSON.stringify({
+          event:"law_call_ready_audit_cycle",
+          ...result,
+          pending:await redis.sCard(CALL_READY_AUDIT_PENDING_SET),
+          callReady:await redis.sCard(CALL_READY_SET)
+        }));
+      }
+    }catch(error){console.error("law_call_ready_audit_loop_error",error?.stack||error?.message||error);}
+    await sleep(Math.max(1200,Math.min(LOOP_MS,3000)));
+  }
+}
+
 console.log(JSON.stringify({event:"law_firm_pipeline_boot",phase:"phone_first_fast_bootstrap"}));
 await bootstrapPhoneFirstInventory();
 
