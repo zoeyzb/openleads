@@ -46,7 +46,7 @@ jobs:
                 print(json.dumps({"sitemap":sm,"status":rr.status,"bytes":len(body),
                     "url_count_first_mb":len(urls),
                     "firm_urls_first_mb":sum("/firm/" in (u or "") for u in urls),
-                    "first_urls":urls[:8]}),flush=True)
+                    "sitemap_urls":urls[:25]}),flush=True)
             except Exception as ex:
               print(json.dumps({"sitemap":sm,"error":str(ex)[:160]}),flush=True)
           for slug in ["haas-law-pllc","stearns-weaver-miller","office-of-regional-counsel","culmer-davidson","dubiner-wilensky-llc","harold-h-weisman-pa"]:
