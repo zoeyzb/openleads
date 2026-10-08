@@ -11,7 +11,6 @@ import { campaignLeadSetKey } from "./acquisition-coverage.mjs";
 import { isCoreHomeServiceLead } from "./home-service-targeting.mjs";
 import { lawFirmPracticeAreas, lawFirmPracticeKeys, TARGET_LAW_PRACTICES, qualifiesNoWebsiteLawLead, qualifiesCallReadyNoWebsiteLawLead, isUsableLawEmail, isUsableLawPhone, normalizeLawPhone } from "./law-firm-targeting.mjs";
 import { startQualifiedGoogleSheetSync } from "./google-sheet-direct-sync.mjs";
-import { startLawLeadSheetSync } from "./law-sheet-sync.mjs";
 import { createSmsSheetBridge } from "./sms-sheet-bridge.mjs";
 import {
   bulkSmsBlockReason,
@@ -3496,13 +3495,7 @@ startQualifiedGoogleSheetSync({
   serviceAccountJson: GOOGLE_SERVICE_ACCOUNT_JSON,
 });
 
-startLawLeadSheetSync({
-  getRedis: getLawExportRedis,
-  serviceAccountJson: GOOGLE_SERVICE_ACCOUNT_JSON,
-  spreadsheetId: LAW_LEADS_SPREADSHEET_ID,
-  enabled: LAW_LEADS_SHEET_SYNC_ENABLED,
-  intervalMs: LAW_LEADS_SHEET_SYNC_INTERVAL_MS,
-});
+// Law sheet sync is owned exclusively by the law-pipeline service.
 
 const httpServer = createHttpServer((req, res) => {
   const requestUrl = new URL(req.url || "/", OAUTH_ISSUER || `http://${req.headers.host || "localhost"}`);

@@ -29,6 +29,7 @@ assert.equal(isPreferredLawFirmSize(11),false);
 
 const qualifiedBase={
   website:"",
+  no_owned_website_verified:true,
   phone:"3125551212",
   emails:["realfirm@gmail.com"],
   practice_keys:["personal_injury"],
@@ -40,25 +41,27 @@ assert.equal(qualifiesCallReadyNoWebsiteLawLead({
   ...qualifiedBase,
   emails:[],
   email:"",
-  email_source_verified:false,
-  phone:"3125551212"
-}),true,"call-ready target means callable + no owned website + verified 2-10");
+  email_source_verified:false
+}),true,"call-ready requires audited no-owned-site + callable + verified 2-10 and does not require email");
+assert.equal(qualifiesCallReadyNoWebsiteLawLead({
+  ...qualifiedBase,
+  no_owned_website_verified:false
+}),false,"a blank website field alone must never count as verified no-owned-site");
 assert.equal(qualifiesNoWebsiteLawLead({
   ...qualifiedBase,
   emails:[],
   email:"",
-  email_source_verified:false,
-  phone:"3125551212"
-}),true,"eligible means callable + no owned website + verified 2-10; email is bonus");
+  email_source_verified:false
+}),true,"calling eligibility does not require email");
 assert.equal(qualifiesEmailReadyNoWebsiteLawLead(qualifiedBase),true);
 assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,emails:[],email:""}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",website:"https://example.com"}),false);
-assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",emails:[],email:""}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",practice_keys:[]}),true);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",attorney_count_estimate:1}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",attorney_count_estimate:11}),false);
-assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",email_source_verified:false}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,phone:"3125551212",attorney_count_evidence_verified:false}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,website:"https://example.com"}),false);
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,emails:[],email:""}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,practice_keys:[]}),true);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:1}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:11}),false);
+assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,email_source_verified:false}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_evidence_verified:false}),false);
 
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:1500,limit:1000}),true);
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:999,limit:1000}),false);
@@ -88,6 +91,5 @@ assert.equal(isUsableLawEmail("info@thesunfirm.complease"),false);
 
 assert.equal(qualifiesEmailReadyNoWebsiteLawLead({
   ...qualifiedBase,
-  phone:"3125551212",
   emails:["error-lite+9c39@duckduckgo.com"]
 }),false);

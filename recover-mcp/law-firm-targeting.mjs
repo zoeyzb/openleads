@@ -104,6 +104,7 @@ export function qualifiesCallReadyNoWebsiteLawLead(lead={}){
   const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
   const sizeEvidenceVerified=lead.attorney_count_evidence_verified===true;
   return !/^https?:\/\//i.test(website) &&
+    lead.no_owned_website_verified===true &&
     sizeEvidenceVerified &&
     isPreferredLawFirmSize(attorneyCount) &&
     isUsableLawPhone(lead.phone);

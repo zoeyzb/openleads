@@ -14,3 +14,16 @@ export function reconcileExportMetrics(snapshot={}, {strictRows,callReadyRows}={
   next.strictConversion=next.emailReadyRate;
   return next;
 }
+
+
+export function dedupeCallReadyRowsByPhone(rows=[]){
+  const out=[];
+  const seen=new Set();
+  for(const row of Array.isArray(rows)?rows:[]){
+    const phone=String(row?.identity||row?.row?.[0]||"").replace(/\D+/g,"").replace(/^1(?=\d{10}$)/,"");
+    if(!phone||seen.has(phone))continue;
+    seen.add(phone);
+    out.push(row);
+  }
+  return out;
+}
