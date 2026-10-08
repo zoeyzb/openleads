@@ -1,0 +1,35 @@
+name: NY official public attorney dataset schema probe
+on:
+  push:
+    paths:
+      - ".github/workflows/law-ny-open-data-probe.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  schema:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Inspect actual public NY open-data schema and safe sample
+        run: |
+          python3 - <<'PY'
+          import urllib.request,urllib.parse,json
+          urls=[
+            ("schema","https://data.ny.gov/api/views/eqw2-r5nb/columns.json"),
+            ("public_sample","https://data.ny.gov/resource/eqw2-r5nb.json?$limit=3"),
+          ]
+          for label,url in urls:
+            try:
+              req=urllib.request.Request(url,headers={"User-Agent":"OpenLeads-PublicSchemaCheck/1.0","Accept":"application/json"})
+              with urllib.request.urlopen(req,timeout=15) as f:
+                data=json.load(f)
+              if label=="schema":
+                fields=[{"fieldName":x.get("fieldName"),"name":x.get("name"),"dataTypeName":x.get("dataTypeName")} for x in data]
+                print(json.dumps({"label":label,"columns":fields},ensure_ascii=False))
+              else:
+                print(json.dumps({"label":label,"count":len(data),"sample_keys":list(data[0]) if data else [],
+                  "sample":{k:str(v)[:80] for k,v in (data[0] if data else {}).items() if any(t in k.lower() for t in ("firm","company","organization","phone","website","email","county"))}},ensure_ascii=False))
+            except Exception as e:
+              print(json.dumps({"label":label,"error":str(e)[:180]}))
+          PY
