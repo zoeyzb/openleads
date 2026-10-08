@@ -1,6 +1,9 @@
 name: Law phone-first acquisition (bounded)
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Law Google Maps public discovery pilot"]
+    types: [completed]
   push:
     paths:
       - ".github/workflows/law-phone-acquisition.yml"
