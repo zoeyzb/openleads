@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from law_local.florida_roster import (
     ROOT,listing_firms,parse_roster_profile,robots_permits,
-    run,add_or_upgrade,ensure_tables
+    run,add_or_upgrade,ensure_tables,clearly_non_law_employer
 )
 from law_local.worker import SqliteQueue,evaluate_published_source
 
@@ -50,6 +50,17 @@ class FloridaRosterTests(unittest.TestCase):
         none,status=parse_roster_profile(PROFILE.replace("Phone (813) 277-1144",""),URL)
         self.assertIsNone(none)
         self.assertEqual(status,"missing_business_phone")
+    def test_non_law_employers_are_not_private_law_practices(self):
+        for name in ("A. Duda & Sons, Inc.", "Bayshore Realty Inc",
+                     "Orange County Hospital", "Fortune Financial Services"):
+            self.assertTrue(clearly_non_law_employer(name),name)
+            result,status=parse_roster_profile(
+                PROFILE.replace("Sample Baker Law, PLLC",name),URL)
+            self.assertIsNone(result)
+            self.assertEqual(status,"not_private_firm")
+        for name in ("Johnson & Smith, P.A.","Baker Law Group PLLC","Avery & Co., Attorneys"):
+            self.assertFalse(clearly_non_law_employer(name),name)
+
     def test_public_robots_and_source_first_one_page(self):
         with tempfile.TemporaryDirectory() as path:
             def fetch(url,timeout=10):
