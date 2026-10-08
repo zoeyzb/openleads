@@ -370,7 +370,7 @@ def main(argv=None):
     db=SqliteQueue(args.db)
     try:
         if args.cmd=="import":
-            print(json.dumps({"imported":import_csv(db,args.csv"),"counts":db.counts()}))
+            print(json.dumps({"imported":import_csv(db,args.csv),"counts":db.counts()}))
         elif args.cmd=="run":
             print(json.dumps({"batch":run_batch(db,args.max,args.workers,args.seconds),"counts":db.counts()}))
         elif args.cmd=="export":
