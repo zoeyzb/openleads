@@ -23,7 +23,7 @@ LEAD = {
 
 class QualityTests(unittest.TestCase):
     def test_phone(self):
-        self.assertEqual(normalize_phone("+1 (312) 422-1836"), "3125550182")
+        self.assertEqual(normalize_phone("+1 (312) 422-1836"), "3124221836")
         self.assertEqual(normalize_phone("111-111-1111"), "")
         self.assertEqual(normalize_phone("000-000-0000"), "")
         self.assertEqual(normalize_phone("312-555-0182"), "")
