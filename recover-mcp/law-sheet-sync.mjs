@@ -271,9 +271,18 @@ async function collectMetricsSnapshot(redis){
 }
 
 export function startLawLeadSheetSync({getRedis,serviceAccountJson="",spreadsheetId="",enabled=false,intervalMs=120000,continuous=true}={}){
-  if(!enabled||!spreadsheetId)return;
+  if(!enabled)return;
+  if(!spreadsheetId){
+    console.error("law_sheet_sync_missing_spreadsheet_id");
+    if(!continuous)throw new Error("law_sheet_sync_missing_spreadsheet_id");
+    return;
+  }
   const sa=serviceAccount(serviceAccountJson);
-  if(!sa){console.error("law_sheet_sync_not_configured");return;}
+  if(!sa){
+    console.error("law_sheet_sync_not_configured");
+    if(!continuous)throw new Error("law_sheet_sync_not_configured");
+    return;
+  }
   let token="",tokenAt=0,running=false,sheetId=null,tabName="Call Ready Leads";
   const archiveTabName="Lead Archive";
   const metricsTabName="Diagnostics";
