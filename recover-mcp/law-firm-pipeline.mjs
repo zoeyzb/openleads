@@ -3959,7 +3959,10 @@ async function enrichLead(key,lead){
     // of spending another ~40s on email discovery. This preserves truthfulness:
     // unresolved size is not exported as 2-10.
     if(!attorneyCountVerified){
-      const attempts=Math.max(0,Number(lead.phone_headcount_attempts||0))+1;
+      const priorAttempts=String(lead.phone_headcount_method_version||"")===PHONE_HEADCOUNT_METHOD_VERSION
+        ? Math.max(0,Number(lead.phone_headcount_attempts||0))
+        : 0;
+      const attempts=priorAttempts+1;
       const unresolved={...lead,
         phone_headcount_attempts:attempts,
         phone_headcount_last_at:new Date().toISOString(),
@@ -5507,6 +5510,9 @@ async function processEnrichKeys(keys=[],lane="general",concurrency=ENRICH_CONCU
         const finalWebsite=String(finalLead.website||finalLead.website_url||"").trim();
         const finalCount=Number(finalLead.attorney_count_estimate||finalLead.attorney_count||0);
         const finalSizeReady=finalLead.attorney_count_evidence_verified===true&&finalCount>=2&&finalCount<=10&&!/^https?:\/\//i.test(finalWebsite);
+        const finalNeedsPhoneHeadcount=!/^https?:\/\//i.test(finalWebsite)&&
+          isUsableLawPhone(finalLead.phone)&&
+          finalLead.attorney_count_evidence_verified!==true;
         await Promise.all([
           redis.sRem(PHONE_HEADCOUNT_PRIORITY_SET,key),
           redis.sRem(CHICAGO_PENDING_SET,key),
@@ -5518,6 +5524,15 @@ async function processEnrichKeys(keys=[],lane="general",concurrency=ENRICH_CONCU
         ]);
         if(retryPending){
           await redis.sAdd(finalSizeReady?SIZE_READY_PENDING_SET:RECOVERABLE_PENDING_SET,key);
+        }else if(finalNeedsPhoneHeadcount){
+          const retry=headcountRetryDisposition(finalLead,{
+            currentMethodVersion:PHONE_HEADCOUNT_METHOD_VERSION,
+            maxAttempts:PHONE_HEADCOUNT_MAX_ATTEMPTS
+          });
+          if(retry.shouldRetry){
+            const shape=lawFirmNameShape(finalLead);
+            await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
+          }
         }
         if(result)done++;
       }catch(error){
@@ -5550,8 +5565,28 @@ async function processEnrichKeys(keys=[],lane="general",concurrency=ENRICH_CONCU
             await redis.hIncrBy(STATS,"size_ready_timeout_exhausted",1);
           }
         }else if(needsPhoneHeadcount){
-          const shape=lawFirmNameShape(retryLead);
-          await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
+          const priorAttempts=String(retryLead.phone_headcount_method_version||"")===PHONE_HEADCOUNT_METHOD_VERSION
+            ? Math.max(0,Number(retryLead.phone_headcount_attempts||0))
+            : 0;
+          const timedLead={...retryLead,
+            phone_headcount_attempts:priorAttempts+1,
+            phone_headcount_last_at:new Date().toISOString(),
+            phone_headcount_status:"unverified",
+            phone_headcount_method_version:PHONE_HEADCOUNT_METHOD_VERSION
+          };
+          await redis.hSet(LEAD_HASH,key,JSON.stringify(timedLead));
+          await redis.sAdd(UNRESOLVED_CALLABLE_SET,key);
+          const retry=headcountRetryDisposition(timedLead,{
+            currentMethodVersion:PHONE_HEADCOUNT_METHOD_VERSION,
+            maxAttempts:PHONE_HEADCOUNT_MAX_ATTEMPTS
+          });
+          if(retry.shouldRetry){
+            const shape=lawFirmNameShape(timedLead);
+            await redis.sAdd((shape==="multi"||shape==="firm")?PHONE_HEADCOUNT_PRIORITY_SET:CHICAGO_PENDING_SET,key);
+            await redis.hIncrBy(STATS,"phone_first_timeout_retry_queued",1);
+          }else{
+            await redis.hIncrBy(STATS,"phone_first_timeout_retry_exhausted",1);
+          }
         }else if(lane==="size_ready"){
           const retryEmails=[...(Array.isArray(retryLead.emails)?retryLead.emails:[]),retryLead.email].filter(isUsableLawEmail);
           const retrySet=retryEmails.length?PENDING_SET:SIZE_READY_PENDING_SET;
