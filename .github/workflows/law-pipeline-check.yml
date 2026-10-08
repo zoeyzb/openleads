@@ -128,12 +128,12 @@ jobs:
           REDIS_URL: redis://127.0.0.1:6379
         run: |
           timeout 120s npm run law:once
-          test "$(redis-cli EXISTS recover:law-firm:portable-run:lease:v1)" = "0"
+          test "$(docker exec "${{ job.services.redis.id }}" redis-cli EXISTS recover:law-firm:portable-run:lease:v1)" = "0"
       - name: Bootstrap preserves existing acquisition queue entries
         env:
           REDIS_URL: redis://127.0.0.1:6379
         run: |
-          redis-cli LPUSH recover:acquisition:queue "integration-sentinel"
+          docker exec "${{ job.services.redis.id }}" redis-cli LPUSH recover:acquisition:queue "integration-sentinel"
           timeout 120s npm run law:once -- --bootstrap
-          test "$(redis-cli LLEN recover:acquisition:queue)" = "1"
-          test "$(redis-cli EXISTS recover:law-firm:portable-run:lease:v1)" = "0"
+          test "$(docker exec "${{ job.services.redis.id }}" redis-cli LLEN recover:acquisition:queue)" = "1"
+          test "$(docker exec "${{ job.services.redis.id }}" redis-cli EXISTS recover:law-firm:portable-run:lease:v1)" = "0"
