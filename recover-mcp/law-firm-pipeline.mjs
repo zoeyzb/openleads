@@ -3907,7 +3907,8 @@ async function enrichLead(key,lead){
       await redis.hSet(LEAD_HASH,key,JSON.stringify(updated));
       await Promise.all([
         redis.sRem(CALL_READY_SET,key),redis.sRem(CHICAGO_PENDING_SET,key),
-        redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)
+        redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key),
+        redis.sRem(UNRESOLVED_CALLABLE_SET,key)
       ]);
       await redis.sAdd(REJECTED_SET,key);
       await redis.sAdd(ENRICHED_SET,key);
@@ -3942,7 +3943,8 @@ async function enrichLead(key,lead){
         await redis.sAdd(REJECTED_SET,key);
         await Promise.all([
           redis.sRem(CALL_READY_SET,key),redis.sRem(CHICAGO_PENDING_SET,key),
-          redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key)
+          redis.sRem(READY_SET,key),redis.sRem(EMAIL_CANDIDATE_SET,key),redis.sRem(UNIQUE_ELIGIBLE_SET,key),
+          redis.sRem(UNRESOLVED_CALLABLE_SET,key)
         ]);
         await redis.hIncrBy(STATS,"phone_first_wrong_size_short_circuit",1);
         return true;
