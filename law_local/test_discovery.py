@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from law_local.worker import (
     SqliteQueue, discovery_queries, _extract_directory_profile,
-    discover_candidates,
+    discover_candidates, _discovery_result_url, _search_directory_profiles,
 )
 
 PROFILE = """<html><h1>Keystone & Parker Law Group</h1>
@@ -20,6 +20,15 @@ class DiscoveryTests(unittest.TestCase):
         self.assertNotEqual(queries[0][1], queries[1][1])
         with self.assertRaises(ValueError):
             list(discovery_queries(["XX"]))
+
+    def test_directory_result_variations(self):
+        url="https://www.lawyer.com/firm/sample-firm.html"
+        alt="https://www.lawyer.com/firms/example-firm.html"
+        self.assertEqual(_discovery_result_url(url),url)
+        self.assertEqual(_discovery_result_url(alt),alt)
+        self.assertEqual(_discovery_result_url("//www.lawyer.com/firm/sample-firm.html"),url)
+        self.assertEqual(_discovery_result_url("https://example.com/firm/sample-firm.html"),"")
+        self.assertEqual(_discovery_result_url("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.lawyer.com%2Ffirm%2Fsample-firm.html"),url)
 
     def test_source_profile_requires_published_size_and_phone(self):
         record=_extract_directory_profile(URL, PROFILE)
