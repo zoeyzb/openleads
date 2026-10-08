@@ -208,5 +208,11 @@ export async function runPatchedWorker() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
-  await runPatchedWorker();
+  const paused=String(process.env.ACQUISITION_WORKER_PAUSED||"").toLowerCase()==="true";
+  if(paused){
+    console.log("Acquisition worker paused: existing law inventory is being qualified first");
+    while(true)await new Promise(resolve=>setTimeout(resolve,60000));
+  }else{
+    await runPatchedWorker();
+  }
 }
