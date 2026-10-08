@@ -9,6 +9,7 @@ on:
       - "recover-mcp/enrich-deadline*.mjs"
       - "recover-mcp/law-lane-pressure*.mjs"
       - "recover-mcp/law-cli-policy*.mjs"
+      - "law_local/**"
       - "recover-mcp/law-directory-runner*.mjs"
       - "recover-mcp/law-http-headers*.mjs"
       - "recover-mcp/indexed-target-headcount*.mjs"
@@ -76,6 +77,8 @@ jobs:
         run: node recover-mcp/law-lane-pressure.node-test.mjs
       - name: Run portable CLI policy regression test
         run: node recover-mcp/law-cli-policy.node-test.mjs
+      - name: Run zero-host local-law worker tests
+        run: python3 -m unittest discover -s law_local -v
       - name: Run law directory runner regression test
         run: node recover-mcp/law-directory-runner.node-test.mjs
       - name: Run legal-directory HTTP header regression test
