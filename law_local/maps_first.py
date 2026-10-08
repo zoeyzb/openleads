@@ -12,39 +12,12 @@ import json
 import re
 import time
 from pathlib import Path
+from law_local.search_sources import real_profile_urls
 from law_local.maps_extract import COUNTRY_STATE
 from law_local.worker import (
     SqliteQueue, _extract_directory_profile, normalize_phone, norm,
     fetch_public, utc_now, evaluate_published_source,
 )
-
-def profile_urls(firm,state,city=""):
-    """Try firm-size-forward profiles ahead of low-yield generic Lawyer.com slugs."""
-    slug="-".join(re.findall(r"[a-z0-9]+",firm.lower().replace("&"," and ")))
-    if len(slug)<8:
-        return []
-    names=[slug]
-    short=re.sub(r"-(?:llc|pllc|pc|p-c|p-a|pa|llp)$","",slug)
-    if short!=slug:
-        names.append(short)
-    city_slug="-".join(re.findall(r"[a-z0-9]+",str(city or "").lower()))
-    state_name=next((name for name,code in COUNTRY_STATE.items()
-                     if code==str(state or "").upper()),"")
-    urls=[]
-    # Firm-specific size directories expose both published business phone
-    # and an explicitly named firm-size range. They still frequently link
-    # an OWNED WEBSITE, which the existing final audit must block.
-    if city_slug and state_name:
-        state_slug=state_name.replace(" ","-")
-        for name in names:
-            for host in ("findthelawfirms.com","findthelawyers.com"):
-                urls.append(f"https://{host}/law-firms/{state_slug}/{city_slug}/{name}/")
-    if state and re.fullmatch(r"[A-Za-z]{2}",state):
-        names.append(short+"-"+state.lower())
-    for name in names:
-        for prefix in ("/firm/","/firms/"):
-            urls.append("https://www.lawyer.com"+prefix+name+".html")
-    return list(dict.fromkeys(urls))[:12]
 
 def ingest_maps_candidates(db,path):
     db.conn.execute("""CREATE TABLE IF NOT EXISTS maps_raw_candidates (
@@ -88,10 +61,14 @@ def ingest_maps_candidates(db,path):
     db.conn.commit()
     return inserted
 
-def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30):
+def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_resolver=None):
     fetch_fn=fetch_fn or fetch_public
+    source_resolver=source_resolver or (lambda firm,city,state: real_profile_urls(
+        firm,city,state,fetch_fn=fetch_fn))
     deadline=time.monotonic()+max(1,int(seconds))
-    counts={"maps_checked":0,"profile_requests":0,"identity_phone_size_matches":0,
+    counts={"maps_checked":0,"searches":0,"responsive_searches":0,
+            "actual_directory_links":0,"profile_requests":0,
+            "identity_phone_size_matches":0,
             "added_to_final_audit":0,"fetch_failures":0,"directory_hits":0}
     raw=db.conn.execute("""SELECT * FROM maps_raw_candidates
         WHERE status='unverified_headcount' ORDER BY added_at LIMIT 100""").fetchall()
@@ -99,7 +76,21 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30):
         if time.monotonic()>=deadline or counts["profile_requests"]>=max_profiles:
             break
         had_match=False
-        for url in profile_urls(record["firm"],record["state"],record["city"]):
+        counts["searches"]+=1
+        try:
+            source_results=source_resolver(record["firm"],record["city"],record["state"])
+        except Exception as exc:
+            print(json.dumps({"event":"firm_source_lookup_failed",
+                 "firm":record["firm"],"error":str(exc)[:150]}),flush=True)
+            continue
+        # Search outages are never "no firm" or proof of no website.
+        if not source_results.get("responded"):
+            print(json.dumps({"event":"firm_source_unavailable","firm":record["firm"]}),flush=True)
+            continue
+        counts["responsive_searches"]+=1
+        candidates=source_results.get("urls",[])
+        counts["actual_directory_links"]+=len(candidates)
+        for url in candidates:
             if time.monotonic()>=deadline or counts["profile_requests"]>=max_profiles:
                 break
             prev=db.conn.execute("SELECT 1 FROM maps_profile_checks WHERE map_id=? AND url=?",
