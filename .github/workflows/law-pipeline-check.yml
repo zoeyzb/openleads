@@ -73,6 +73,8 @@ jobs:
         run: node recover-mcp/enrich-deadline.node-test.mjs
       - name: Run law lane-pressure regression test
         run: node recover-mcp/law-lane-pressure.node-test.mjs
+      - name: Run portable CLI policy regression test
+        run: node recover-mcp/law-cli-policy.node-test.mjs
       - name: Run law directory runner regression test
         run: node recover-mcp/law-directory-runner.node-test.mjs
       - name: Run legal-directory HTTP header regression test
