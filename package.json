@@ -9,7 +9,10 @@
   "scripts": {
     "start": "node recover-mcp/server.mjs",
     "worker": "node recover-mcp/acquisition-worker-runtime.mjs",
-    "cleanup:acquisition-redis": "node recover-mcp/cleanup-acquisition-redis.mjs"
+    "cleanup:acquisition-redis": "node recover-mcp/cleanup-acquisition-redis.mjs",
+    "law:once": "node recover-mcp/law-firm-pipeline.mjs --once",
+    "law:daemon": "node recover-mcp/law-firm-pipeline.mjs",
+    "test:law:cli": "node recover-mcp/law-cli-policy.node-test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "latest",
