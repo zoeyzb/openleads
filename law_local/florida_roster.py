@@ -55,6 +55,15 @@ def clearly_non_law_employer(firm):
         return True
     return False
 
+def ambiguous_employer_identity(firm):
+    """Placeholder, redacted email, and service-address headings are not firm names."""
+    text=str(firm or "").strip()
+    return bool(
+        re.search(r"(?i)\bemail[\s._-]*protected\b|\bservice address\b|@",text)
+        or re.search(r"(?i)\bairport\b.*\[[A-Z]{2,5}\]",text)
+        or re.search(r"(?i)\b(?:placeholder|sample firm|test firm)\b",text)
+    )
+
 def allowed_profile(url):
     p=urlparse(str(url))
     return p.scheme=="https" and (p.hostname or "").lower()=="www.floridalawdirectory.com" \
@@ -93,6 +102,8 @@ def parse_roster_profile(html,url):
     if not headers:
         return None,"missing_h1"
     firm=" ".join(unescape(re.sub(r"(?s)<[^>]+>"," ",headers[0])).split()).strip()
+    if ambiguous_employer_identity(firm):
+        return None,"ambiguous_placeholder_identity"
     if len(norm(firm))<7 or NON_PRIVATE.search(firm) or clearly_non_law_employer(firm):
         return None,"not_private_firm"
     text=" ".join(reader(html).parts)
