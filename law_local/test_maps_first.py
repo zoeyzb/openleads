@@ -58,6 +58,24 @@ class MapsFirstTests(unittest.TestCase):
             self.assertEqual(db.counts()["calling_qualified"],0)
             db.close()
 
+    def test_unproductive_real_source_search_is_checkpointed_but_not_qualified(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"db.sqlite")
+            ingest_maps_candidates(db,self.seed(folder))
+            calls=[0]
+            def empty_index(firm,city,state):
+                calls[0]+=1
+                return {"responded":2,"urls":[]}
+            first=verify_map_headcounts(db,source_resolver=empty_index,seconds=15)
+            self.assertEqual(first["searches"],1)
+            self.assertEqual(first["added_to_final_audit"],0)
+            second=verify_map_headcounts(db,source_resolver=empty_index,seconds=15)
+            self.assertEqual(second["searches"],0)
+            self.assertEqual(second["source_cooldown_skips"],1)
+            self.assertEqual(calls[0],1)
+            self.assertEqual(db.counts()["calling_qualified"],0)
+            db.close()
+
     def test_provider_outage_retries_later_and_does_not_assume_no_site(self):
         with tempfile.TemporaryDirectory() as d:
             db=SqliteQueue(Path(d)/"db.sqlite")
