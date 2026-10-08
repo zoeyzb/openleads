@@ -20,7 +20,7 @@ import sqlite3
 from pathlib import Path
 import subprocess
 import time
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, parse_qs, unquote
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
@@ -124,11 +124,21 @@ def evaluate_published_source(html,lead):
                 continue
             # An outbound 'website' link on the source is evidence of a
             # possible owned site and must NOT be dismissed as a no-site lead.
-            if re.search(r"(?i)\b(website|visit site|official site|home page)\b",label):
-                external.append(href)
+            external.append(href)
         except ValueError:
             continue
     return {"attorneys":attorneys,"emails":emails,"website_candidates":sorted(set(external))}
+
+def search_target(url):
+    """Unwrap DuckDuckGo result redirects before deciding site ownership."""
+    try:
+        p=urlparse(url)
+        if p.hostname and p.hostname.lower() in ("duckduckgo.com","www.duckduckgo.com"):
+            target=parse_qs(p.query).get("uddg",[""])[0]
+            return unquote(target) if _public_http_url(unquote(target)) else ""
+    except ValueError:
+        return ""
+    return url
 
 def classify_search_results(search_results):
     """Both independent providers must answer with parseable evidence."""
@@ -136,8 +146,9 @@ def classify_search_results(search_results):
         return {"status":"inconclusive","reason":"search_provider_unavailable"}
     potential=[]
     for result in search_results[:2]:
-        for url in result.get("urls",[]):
+        for raw_url in result.get("urls",[]):
             try:
+                url=search_target(raw_url)
                 host=urlparse(url).hostname or ""
                 if _public_http_url(url) and not _third_party(host):
                     potential.append(url)
@@ -214,7 +225,8 @@ class SqliteQueue:
         return cur.rowcount>0
     def pending(self,limit):
         rows=self.conn.execute("""SELECT * FROM candidates
-             WHERE status='pending' ORDER BY updated ASC LIMIT ?""",(int(limit),)).fetchall()
+             WHERE status='pending' OR (status='inconclusive' AND attempts < 3)
+             ORDER BY updated ASC LIMIT ?""",(int(limit),)).fetchall()
         return [dict(row) for row in rows]
     def record(self,lead,result):
         self.conn.execute("""UPDATE candidates
@@ -318,25 +330,29 @@ def process_candidate(lead):
         return {"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
 
 def run_batch(db,max_rows=100,workers=4,seconds=600):
-    import_deadline=time.monotonic()+max(1,int(seconds))
-    batch=db.pending(max_rows)
-    counts={}
-    # Bounded concurrency and batch size; no runaway background jobs.
-    with ThreadPoolExecutor(max_workers=max(1,min(8,workers))) as pool:
-        future_to_lead={pool.submit(process_candidate,row):row for row in batch}
-        for future in as_completed(future_to_lead):
-            lead=future_to_lead[future]
-            try:
-                result=future.result()
-            except Exception as exc:
-                result={"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
-            db.record(lead,result)
-            counts[result["status"]]=counts.get(result["status"],0)+1
-            print(json.dumps({"event":"law_local_lead_processed","firm":lead["firm"],"status":result["status"]}),flush=True)
-            if time.monotonic()>import_deadline:
-                # In-flight small batch completes, but no new batch starts.
+    deadline=time.monotonic()+max(1,int(seconds))
+    total={}
+    processed=0
+    concurrency=max(1,min(8,int(workers)))
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        # Submit only one small chunk at a time, always persist every submitted
+        # result, then honor the time limit before taking the next chunk.
+        while processed<int(max_rows) and time.monotonic()<deadline:
+            batch=db.pending(min(concurrency,int(max_rows)-processed))
+            if not batch:
                 break
-    return counts
+            future_to_lead={pool.submit(process_candidate,row):row for row in batch}
+            for future in as_completed(future_to_lead):
+                lead=future_to_lead[future]
+                try:
+                    result=future.result()
+                except Exception as exc:
+                    result={"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
+                db.record(lead,result)
+                processed+=1
+                total[result["status"]]=total.get(result["status"],0)+1
+                print(json.dumps({"event":"law_local_lead_processed","firm":lead["firm"],"status":result["status"]}),flush=True)
+    return total
 
 def import_csv(db,path):
     added=0
