@@ -2,7 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from law_local.worker import SqliteQueue
+from law_local.worker import SqliteQueue, apply_verified_bar_contact_proof
 from law_local.fl_bar_contacts import (
     parse_roster_member_ids,parse_bar_profile_contact,store_bar_contact_proof,
     contact_proof_totals
@@ -68,6 +68,81 @@ class ContactEvidenceTests(unittest.TestCase):
             self.assertEqual(db.counts()["calling_qualified"],0)
             self.assertEqual(db.counts().get("strict_eligible",0),0)
             self.assertEqual(contact_proof_totals(db)["source_emails_with_mx"],1)
+            db.close()
+
+
+class FinalGateIntegrationTests(unittest.TestCase):
+    """Official Bar contact proof can only add email AFTER owned-site clearance."""
+
+    @staticmethod
+    def lead():
+        return {"firm":FIRM,"phone":PHONE,"state":"FL","city":"Tampa",
+                "source_url":"https://www.floridalawdirectory.com/firm/murray-shepard-law-llc"}
+
+    @staticmethod
+    def screened_no_email():
+        return {"status":"call_qualified_no_email","attorneys":2,
+                "phone":"8134221960","site_status":"screened_no_site",
+                "headcount_source":"https://www.floridalawdirectory.com/firm/murray-shepard-law-llc",
+                "email":"","email_source":""}
+
+    def test_email_is_promoted_only_after_website_clearance(self):
+        with tempfile.TemporaryDirectory() as d:
+            db=SqliteQueue(Path(d)/"leads.sqlite")
+            lead=self.lead()
+            db.add(lead)
+            proof=parse_bar_profile_contact(BAR_HTML,FIRM,PHONE,"321456")
+            store_bar_contact_proof(db,lead,proof,mx_ok=True)
+            result=apply_verified_bar_contact_proof(db,lead,self.screened_no_email())
+            self.assertEqual(result["status"],"strict_eligible")
+            self.assertEqual(result["email"],"bertha.murray@businessmail.org")
+            self.assertEqual(result["email_source"],
+                             "https://www.floridabar.org/directories/find-mbr/profile/?num=321456")
+            db.close()
+
+    def test_unverified_website_never_qualifies_from_published_email_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            db=SqliteQueue(Path(d)/"leads.sqlite")
+            lead=self.lead();db.add(lead)
+            proof=parse_bar_profile_contact(BAR_HTML,FIRM,PHONE,"321456")
+            store_bar_contact_proof(db,lead,proof,mx_ok=True)
+            result=apply_verified_bar_contact_proof(db,lead,{
+                **self.screened_no_email(),"status":"inconclusive","site_status":"inconclusive"
+            })
+            self.assertEqual(result["status"],"inconclusive")
+            self.assertEqual(result.get("email",""),"")
+            db.close()
+
+    def test_any_attributed_bar_owned_website_overrides_negative_searches(self):
+        with tempfile.TemporaryDirectory() as d:
+            db=SqliteQueue(Path(d)/"leads.sqlite")
+            lead=self.lead();db.add(lead)
+            site=parse_bar_profile_contact(SITE_HTML,FIRM,PHONE,"321456")
+            store_bar_contact_proof(db,lead,site,mx_ok=True)
+            result=apply_verified_bar_contact_proof(db,lead,self.screened_no_email())
+            self.assertEqual(result["status"],"review_website")
+            self.assertEqual(result.get("email",""),"")
+            self.assertIn("murrayandshepard.com",str(result.get("website_candidates")))
+            db.close()
+
+    def test_mismatched_firm_or_phone_proof_is_not_accepted(self):
+        with tempfile.TemporaryDirectory() as d:
+            db=SqliteQueue(Path(d)/"leads.sqlite")
+            lead=self.lead();db.add(lead)
+            proof=parse_bar_profile_contact(BAR_HTML,FIRM,PHONE,"321456")
+            store_bar_contact_proof(db,lead,proof,mx_ok=True)
+            db.conn.execute("UPDATE fl_bar_contact_proofs SET phone='8139999999' ")
+            db.conn.commit()
+            result=apply_verified_bar_contact_proof(db,lead,self.screened_no_email())
+            self.assertEqual(result["status"],"call_qualified_no_email")
+            db.close()
+
+    def test_no_contact_table_does_not_break_existing_verification(self):
+        with tempfile.TemporaryDirectory() as d:
+            db=SqliteQueue(Path(d)/"leads.sqlite")
+            lead=self.lead();db.add(lead)
+            result=apply_verified_bar_contact_proof(db,lead,self.screened_no_email())
+            self.assertEqual(result["status"],"call_qualified_no_email")
             db.close()
 
 if __name__=="__main__":
