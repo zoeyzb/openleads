@@ -321,6 +321,78 @@ class SqliteQueue:
     def close(self):
         self.conn.close()
 
+
+def apply_verified_bar_contact_proof(db,lead,result):
+    """Join published/matched Florida Bar contacts only after site clearance.
+
+    This is strictly a final evidence join, NOT a shortcut around the
+    independent 2–10 firm-size, phone and no-owned-site checks.
+    An attributed owned site always revokes calling/strict eligibility.
+    """
+    lead_id=db._id(lead)
+    try:
+        proofs=db.conn.execute(
+            """SELECT bar_number,firm,phone,email,email_source,mx_ok,website,
+                      status,checked_at FROM fl_bar_contact_proofs
+               WHERE candidate_id=? ORDER BY checked_at DESC""",
+            (lead_id,)
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table: fl_bar_contact_proofs" in str(exc):
+            return result
+        raise
+    supported=[]
+    expected_phone=normalize_phone(lead.get("phone"))
+    expected_firm=norm(lead.get("firm"))
+    for proof in proofs:
+        if norm(proof["firm"])!=expected_firm or normalize_phone(proof["phone"])!=expected_phone:
+            continue
+        try:
+            when=datetime.fromisoformat(str(proof["checked_at"]).replace("Z","+00:00"))
+            if when.tzinfo is None or abs((datetime.now(timezone.utc)-when).total_seconds())>30*86400:
+                continue
+            src=urlparse(proof["email_source"])
+            params=parse_qs(src.query)
+            bar_number=str(proof["bar_number"])
+            if not (src.scheme=="https" and src.hostname in ("www.floridabar.org","floridabar.org")
+                    and src.path=="/directories/find-mbr/profile/"
+                    and re.fullmatch(r"\d{2,8}",bar_number)
+                    and params.get("num")==[bar_number]):
+                continue
+        except (ValueError,TypeError,OverflowError):
+            continue
+        if proof["status"] not in ("published_site","published_site_and_email",
+                                    "published_mx_pending","no_published_contact"):
+            continue
+        supported.append(proof)
+    for proof in supported:
+        website=str(proof["website"] or "").strip()
+        try:
+            host=urlparse(website).hostname or ""
+        except ValueError:
+            host=""
+        if website and _public_http_url(website) and not _third_party(host):
+            return {**result,"status":"review_website","site_status":"published_owned_website",
+                    "email":"","email_source":"",
+                    "website_candidates":[website],
+                    "website_evidence_source":proof["email_source"]}
+    if (result.get("status")!="call_qualified_no_email"
+            or result.get("site_status")!="screened_no_site"
+            or not 2<=int(result.get("attorneys") or 0)<=10
+            or normalize_phone(result.get("phone"))!=expected_phone):
+        return result
+    for proof in supported:
+        email=str(proof["email"] or "").lower().strip()
+        if (proof["status"]!="published_mx_pending" or proof["mx_ok"]!=1
+                or not EMAIL_RE.fullmatch(email)):
+            continue
+        domain=email.rsplit("@",1)[-1]
+        if domain.endswith(BLOCKED_SUFFIXES) or _third_party(domain):
+            continue
+        return {**result,"status":"strict_eligible","email":email,
+                "email_source":proof["email_source"]}
+    return result
+
 def fetch_public(url,timeout=9):
     if not _public_http_url(url):
         raise ValueError("Not a public HTTP URL")
@@ -410,6 +482,7 @@ def run_batch(db,max_rows=100,workers=4,seconds=600):
                     result=future.result()
                 except Exception as exc:
                     result={"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
+                result=apply_verified_bar_contact_proof(db,lead,result)
                 db.record(lead,result)
                 total[result["status"]]=total.get(result["status"],0)+1
                 print(json.dumps({"event":"law_local_lead_processed","firm":lead["firm"],"status":result["status"]}),flush=True)
