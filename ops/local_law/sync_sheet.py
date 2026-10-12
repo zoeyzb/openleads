@@ -1,20 +1,31 @@
 #!/usr/bin/env python3
-"""Strict-qualified-only Google Sheet upsert. Never deletes existing rows."""
+"""Non-destructive source-verified phone calling queue Sheets upsert."""
 import csv, hashlib, json, os, subprocess, sys, time
 from pathlib import Path
 from datetime import datetime,timezone
 ROOT=Path.home()/"lead-workspace"
 SHEET="1iKfhmIZCi3vcwsfI5Dlwg2rhQtqi-5zPkrlGmfxs42M"
-TAB="Strict Eligible Leads"
+TAB="Verified Calling Queue"
 def key(r):
- return hashlib.sha256((r["firm"].casefold().strip()+"|"+r["phone"]+"|"+r["state"].upper().strip()).encode()).hexdigest()[:24]
+ return hashlib.sha256((r["Firm"].casefold().strip()+"|"+r["Phone"]+"|"+r["State"].upper().strip()).encode()).hexdigest()[:24]
 def rows():
  p=subprocess.run(["/opt/homebrew/bin/python3.11",str(ROOT/"campaign.py"),"export"],capture_output=True,text=True,check=True)
- with (ROOT/"strict-qualified-law.csv").open(newline="") as f:
+ with (ROOT/"call-qualified-law.csv").open(newline="") as f:
   for r in csv.DictReader(f):
-   if not (r.get("email") and r.get("email_source") and r.get("headcount_source") and r.get("site_status")=="screened_no_site" and 2<=int(r.get("attorneys") or 0)<=10):continue
+   if not (r.get("Headcount source") and r.get("Website audit")=="screened_no_site" and 2<=int(r.get("Attorneys") or 0)<=10 and r.get("Phone")):continue
    yield r
+def preview():
+ batch=[]
+ for r in rows():
+  batch.append([r["Firm"],r["Phone"],r["Attorneys"],r["City"],r["State"],r["Headcount source"],
+    r["Website audit"],r["Checked at"],r.get("Email",""),r.get("Email source",""),key(r)])
+ print(json.dumps({"event":"calling_queue_preview","count":len(batch),"sample":batch[:3]}))
+ return batch
+
 def run():
+ if "--preview" in sys.argv:
+  preview()
+  return 0
  creds=os.environ.get("LAW_SHEETS_CREDENTIALS","")
  if not creds or not Path(creds).is_file():
   print("SHEETS_SYNC_BLOCKED: supply LAW_SHEETS_CREDENTIALS pointing to a dedicated authorized service-account JSON; no rows changed")
@@ -44,7 +55,7 @@ def run():
  appended=[]
  for r in rows():
   k=key(r)
-  v=[r["firm"],r["email"],r["attorneys"],r["phone"],r["city"],r["state"],r["headcount_source"],r["email_source"],r["site_status"],r["checked_at"],k,now]
+  v=[r["Firm"],r["Phone"],r["Attorneys"],r["City"],r["State"],r["Headcount source"],r["Website audit"],r["Checked at"],r.get("Email",""),r.get("Email source",""),k,now]
   if k in mapping:
    updates.append({"range":f"'{TAB}'!A{mapping[k]}:L{mapping[k]}","values":[v]})
   else:
@@ -56,7 +67,7 @@ def run():
  for start in range(0,len(appended),200):
   request("POST",TAB+"!A:L:append",{"values":appended[start:start+200]},
           {"valueInputOption":"RAW","insertDataOption":"INSERT_ROWS"})
- print(json.dumps({"event":"sheet_sync","strict_rows_checked":len(updates)+len(appended),"updated":len(updates),"new":len(appended)}))
+ print(json.dumps({"event":"sheet_sync","phone_rows_checked":len(updates)+len(appended),"updated":len(updates),"new":len(appended)}))
  return 0
 if __name__=="__main__":
  try:sys.exit(run())

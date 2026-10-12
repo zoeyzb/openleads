@@ -1,7 +1,8 @@
 """Classify restored research sources without inventing firm-wide size or site absence."""
-import argparse,json,sqlite3,time
+import argparse,json,sqlite3,time,sys
 from pathlib import Path
 from urllib.parse import urlparse
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 from law_local import worker
 DB=Path.home()/"lead-workspace/research_catalog.sqlite3"
 def run(limit=30):

@@ -28,3 +28,10 @@ The Mac controller runs the known-owned-website positive control before verifier
 
 ### Recovered archive source triage
 `archive_triage.py --max 25` researches recovered firm source pages in resumable SQLite batches; it records explicit firm-owned website hints, source-unavailable errors, and identity/phone mismatches. It does not pretend Florida-local registered count establishes firm-wide 2–10 lawyers or turn missing source links into proof of no website. The Mac controller invokes this batch before geographic query discovery. Each result is checkpointed in `research_catalog.sqlite3`.
+
+## Phone-first Google Sheets export (2026-10-13)
+The verified calling-output Sheet is **Verified Calling Queue** in Recover Revenue — Law Lead Live Tracker. Run `python3 ~/lead-workspace/sync_sheet.py --preview` to inspect sanitized phone-qualified rows without Google credentials. The unattended local upsert requires authorized credentials (`LAW_SHEETS_CREDENTIALS`); it will not claim any Sheet write without authentication. ChatGPT’s connected Drive task can handle a separate six-hour sync. Do not confuse this calling-qualified list (email optional) with the stricter email-evidenced eligible subset.
+
+Mac browser probes: Lawyers.com, Justia and Martindale returned HTTP 403; a subsequent FindLaw fetch also returned 403, and a headless Google known-website query failed the positive-domain control. Browser access alone does NOT repair owned-website absence verification; do not bypass challenges.
+
+Critical operational fix: archive_triage.py now inserts its repository root in sys.path before importing law_local.worker, because the scheduled file-path subprocess otherwise failed ModuleNotFoundError and processed zero archived leads.
