@@ -279,3 +279,7 @@ PRs very welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md). The highest-impac
 **If OpenLeads saved you a subscription, consider leaving a ⭐ — it genuinely helps.**
 
 </div>
+
+## Local law lead audit — October 12, 2026
+
+The Mac controller lives in [ops/local_law](ops/local_law/README.md). The local October 12 checks produced **0 strict qualified law firms**. Florida index sampling found no complete firms, and the broader Florida roster had already been exhausted in prior GitHub Actions research. The old 9,037-source-contact historical pool is RESEARCH ONLY, not qualified leads. Strict eligibility requires source-verified 2–10 attorney count, independent no-owned-website checks, and source-published usable email. Existing phone-first export is not strict eligibility. Unattended Sheet sync requires separate Google authentication and has not succeeded yet. OpenLeads is PolyForm Noncommercial licensed; commercial deployment requires authorization or an appropriately licensed replacement.
