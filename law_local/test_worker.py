@@ -61,6 +61,12 @@ class QualityTests(unittest.TestCase):
         html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys at this location.","4 attorneys for defendant.")
         self.assertEqual(evaluate_published_source(html,LEAD)["attorneys"],0)
 
+    def test_positive_site_detected_even_if_second_provider_is_down(self):
+        found=classify_search_results([
+            {"responded":True,"urls":["https://example-firm-owned-domain.org/contact"]},
+            {"responded":False,"urls":[]}])
+        self.assertEqual(found["status"],"review_website")
+
     def test_search_outage_does_not_certify_absence(self):
         found=classify_search_results([{"responded":False,"urls":[]},{"responded":True,"urls":[]}])
         self.assertEqual(found["status"],"inconclusive")

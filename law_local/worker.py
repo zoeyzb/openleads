@@ -187,8 +187,9 @@ def search_target(url):
 
 def classify_search_results(search_results):
     """Both independent providers must answer with parseable evidence."""
-    if len(search_results)<2 or not all(r.get("responded") is True for r in search_results[:2]):
-        return {"status":"inconclusive","reason":"search_provider_unavailable"}
+    # A positive possible owned website is useful even during provider outages.
+    # Never use an outage or a third-party search hit as negative website proof.
+    healthy=len(search_results)>=2 and all(r.get("responded") is True for r in search_results[:2])
     potential=[]
     for result in search_results[:2]:
         for raw_url in result.get("urls",[]):
@@ -201,6 +202,8 @@ def classify_search_results(search_results):
                 continue
     if potential:
         return {"status":"review_website","reason":"possible_owned_site","urls":sorted(set(potential))[:10]}
+    if not healthy:
+        return {"status":"inconclusive","reason":"search_provider_unavailable"}
     return {"status":"screened_no_site","reason":"two_completed_negative_searches"}
 
 def evaluate_candidate(lead,source_html,search_results,mx_check):
