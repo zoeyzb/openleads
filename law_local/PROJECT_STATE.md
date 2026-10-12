@@ -161,3 +161,8 @@ Preserve free/no-Railway/no-Render requirement. Improve candidate discovery only
 - Hard qualification blockers: website-negative search fails known owned-site controls; roster source gives no published email; NY registered-attorney group count is not firm headcount. No false positive has been promoted.
 - Google Sheet now has Area Coverage and Strict Eligible Leads tabs. Local strict CSV exports correctly. Unattended Google Sheets write is blocked by missing authorized local credentials; ChatGPT connector edits are separate and currently manual.
 - Mac controller, strict-only exporter, tests and guarded Sheets sync are in [ops/local_law](../ops/local_law/README.md). PolyForm Noncommercial licensed root applies; commercial use needs license authorization.
+
+## 2026-10-13 — Mac calling-first operational correction
+- User's first-priority target is phone outreach, not email. The local campaign controller now writes `call-qualified-law.csv` as the **primary** calling output using existing `calling_qualified` (2–10 source-verified attorneys + no owned website + published business phone, email optional). The separate `strict-qualified-law.csv` remains an email-evidenced subset, not the main calling queue.
+- On initial local re-export: calling qualified 0, strict email qualified 0. Do not mistake missing email as the reason for zero calling records: independent owned-site screening and source integrity are blocking promotion.
+- Both export paths execute on the Mac; five local controller tests passed. Automatic Google Sheet phone-queue syncing is still pending authenticated sync adapter configuration and must not be claimed operational.

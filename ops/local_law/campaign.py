@@ -48,6 +48,20 @@ def strict_export():
  c.close()
  print(json.dumps(dict(event="strict_export",qualified=len(qualified),file=str(OUT))))
  return len(qualified)
+def calling_export():
+ from pathlib import Path
+ from sys import path as sys_path
+ import csv
+ sys_path.insert(0,str(SRC))
+ from law_local.worker import SqliteQueue
+ queue=SqliteQueue(DB)
+ try:
+  result=queue.export("calling_qualified",ROOT/"call-qualified-law.csv")
+ finally:
+  queue.close()
+ print(json.dumps({"event":"calling_export","phone_qualified":result,"file":str(ROOT/"call-qualified-law.csv")}))
+ return result
+
 def cycle():
  import fcntl
  ROOT.mkdir(exist_ok=True)
@@ -61,7 +75,7 @@ def cycle():
    cov.commit()
    rows=cov.execute("SELECT state FROM areas WHERE source='directory' AND (next_retry IS NULL OR next_retry <= ?) ORDER BY coalesce(last_attempt,'') LIMIT 1",(now(),)).fetchall()
   if not rows:
-   print("no area due; strict export only");strict_export();return 0
+   print("no area due; calling and strict exports only");calling_export();strict_export();return 0
   st=rows[0][0]
   started=now()
   args=(["-m","law_local.florida_roster","--db",str(DB),"--max-pages","3","--max-profiles","50","--seconds","90"] if st=="FL" else ["law_local/worker.py","--db",str(DB),"discover","--states",st,"--max-queries","5","--max-pages","25","--seconds","100","--delay","2"])
@@ -82,14 +96,15 @@ def cycle():
   cov.commit()
   pending=command(["law_local/worker.py","--db",str(DB),"run","--max","20","--workers","2","--seconds","90"],120)
   (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),verify_exit=pending.returncode,output=(pending.stdout+pending.stderr)[-5000:]))+"\n")
+  phone_count=calling_export()
   count=strict_export()
   if os.environ.get("LAW_SHEETS_CREDENTIALS"):
    sync=subprocess.run([str(ROOT/".venv/bin/python"),str(ROOT/"sync_sheet.py")],capture_output=True,text=True,timeout=120)
    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),sync_exit=sync.returncode,output=(sync.stdout+sync.stderr)[-1500:]))+"\n")
-  print(json.dumps(dict(state=st,discovery_exit=rc,verification_exit=pending.returncode,strict_qualified=count)))
+  print(json.dumps(dict(state=st,discovery_exit=rc,verification_exit=pending.returncode,calling_qualified=phone_count,strict_qualified=count)))
   return 0 if rc==0 and pending.returncode==0 else 1
 if __name__=="__main__":
- if len(sys.argv)>1 and sys.argv[1]=="export": strict_export()
+ if len(sys.argv)>1 and sys.argv[1]=="export": calling_export();strict_export()
  elif len(sys.argv)>1 and sys.argv[1]=="coverage":
   con=connect();print(json.dumps([dict(zip(["state","city","source","last_attempt","last_success","next_retry","attempts","last_exit","last_error"],r)) for r in con.execute("SELECT * FROM areas ORDER BY state")]))
  else:sys.exit(cycle())
