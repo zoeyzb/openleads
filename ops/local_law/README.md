@@ -25,3 +25,6 @@ The primary operational CSV is `~/lead-workspace/call-qualified-law.csv`, export
 
 ### Website provider health guard
 The Mac controller runs the known-owned-website positive control before verifier batches. When either provider is unhealthy or the positive control is not recovered, it skips candidate website queries and records blocked_website_provider. This prevents wasted HTTP requests but does not certify any website-free firm.
+
+### Recovered archive source triage
+`archive_triage.py --max 25` researches recovered firm source pages in resumable SQLite batches; it records explicit firm-owned website hints, source-unavailable errors, and identity/phone mismatches. It does not pretend Florida-local registered count establishes firm-wide 2–10 lawyers or turn missing source links into proof of no website. The Mac controller invokes this batch before geographic query discovery. Each result is checkpointed in `research_catalog.sqlite3`.

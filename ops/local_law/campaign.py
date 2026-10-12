@@ -86,6 +86,14 @@ def cycle():
  with (ROOT/"campaign.lock").open("w") as lock:
   try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
   except BlockingIOError: print('another run is active');return 2
+  # Research the recovered 9,037-source pool incrementally before wasting discovery queries.
+  archive_script=SRC/"ops/local_law/archive_triage.py"
+  if archive_script.exists():
+   try:
+    triage=command(["ops/local_law/archive_triage.py","--max","25"],100)
+    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),archive_triage_exit=triage.returncode,output=(triage.stdout+triage.stderr)[-1200:]))+"\n")
+   except subprocess.TimeoutExpired:
+    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),archive_triage_error="timeout"))+"\n")
   cov=connect()
   rows=cov.execute("SELECT state FROM areas WHERE source='directory' AND (next_retry IS NULL OR next_retry <= ?) ORDER BY coalesce(last_attempt,'') LIMIT 1",(now(),)).fetchall()
   if not rows:
