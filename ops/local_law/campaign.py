@@ -114,14 +114,26 @@ def cycle():
   for city,state in sqlite3.connect(DB).execute("SELECT DISTINCT city,state FROM candidates WHERE state=? AND trim(city)!=''",(st,)):
    cov.execute("INSERT OR IGNORE INTO areas(state,city,source,last_attempt) VALUES(?,?,'candidate_observed',?)",(state,city,now()))
   cov.commit()
-  pending=command(["law_local/worker.py","--db",str(DB),"run","--max","20","--workers","2","--seconds","90"],120)
-  (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),verify_exit=pending.returncode,output=(pending.stdout+pending.stderr)[-5000:]))+"\n")
+  # Never spend verifier requests while the known-owned-site positive control fails.
+  health=command(["-m","law_local.site_provider_health","--ready-flag",str(ROOT/"site-ready.flag")],45)
+  try:
+   site_state=json.loads((health.stdout.strip().splitlines() or ["{}"])[-1]).get("website_search_provider_health",{}).get("status")
+  except (ValueError,IndexError):
+   site_state="unavailable"
+  if health.returncode!=0 or site_state!="usable":
+   verify_exit=3
+   verify_output="blocked_website_provider: known-owned-site control failed; no candidate requests spent"
+  else:
+   pending=command(["law_local/worker.py","--db",str(DB),"run","--max","20","--workers","2","--seconds","90"],120)
+   verify_exit=pending.returncode
+   verify_output=(pending.stdout+pending.stderr)[-5000:]
+  (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),verify_exit=verify_exit,site_status=site_state,output=verify_output))+"\n")
   phone_count=calling_export()
   count=strict_export()
   if os.environ.get("LAW_SHEETS_CREDENTIALS"):
    sync=subprocess.run([str(ROOT/".venv/bin/python"),str(ROOT/"sync_sheet.py")],capture_output=True,text=True,timeout=120)
    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),sync_exit=sync.returncode,output=(sync.stdout+sync.stderr)[-1500:]))+"\n")
-  print(json.dumps(dict(state=st,discovery_exit=rc,verification_exit=pending.returncode,calling_qualified=phone_count,strict_qualified=count)))
+  print(json.dumps(dict(state=st,discovery_exit=rc,verification_exit=verify_exit,calling_qualified=phone_count,strict_qualified=count)))
   return 0 if success and pending.returncode==0 else 1
 if __name__=="__main__":
  if len(sys.argv)>1 and sys.argv[1]=="export": calling_export();strict_export()

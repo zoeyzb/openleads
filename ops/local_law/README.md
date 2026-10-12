@@ -22,3 +22,6 @@ The primary operational CSV is `~/lead-workspace/call-qualified-law.csv`, export
 - Live local database after scope recheck: 47 headcount-scope reviews and 2 non-law employer reviews, 0 calling-qualified. Do not put these 49 on the calling sheet.
 - Execute tests: `/opt/homebrew/bin/python3.11 -m unittest discover -s law_local -q` and `/opt/homebrew/bin/python3.11 -m unittest discover -s ops/local_law -q`.
 - Production has not been proven to produce phone-qualified output; do not increase concurrency or reuse generic dead search sources to manufacture throughput.
+
+### Website provider health guard
+The Mac controller runs the known-owned-website positive control before verifier batches. When either provider is unhealthy or the positive control is not recovered, it skips candidate website queries and records blocked_website_provider. This prevents wasted HTTP requests but does not certify any website-free firm.
