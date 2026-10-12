@@ -29,8 +29,10 @@ def strict_export():
   try:
    ev=json.loads(row["result_json"])
    email=str(ev.get("email","")).strip()
-   if (ev.get("status")!="strict_eligible" or ev.get("site_status")!="screened_no_site"
-       or not (2<=int(ev.get("attorneys") or 0)<=10) or not email
+   sys.path.insert(0,str(SRC))
+   from law_local.worker import SqliteQueue
+   if (not SqliteQueue._verified_for_export(row,ev,"strict_eligible")
+       or not email
        or "@" not in email or not ev.get("email_source") or not ev.get("headcount_source")
        or not ev.get("checked_at") or not row["phone"]):
     continue
@@ -62,6 +64,22 @@ def calling_export():
  print(json.dumps({"event":"calling_export","phone_qualified":result,"file":str(ROOT/"call-qualified-law.csv")}))
  return result
 
+def discovery_result(exit_code,output):
+    if exit_code!=0:
+        return "failed"
+    for line in reversed(output.splitlines()):
+        try: payload=json.loads(line)
+        except (ValueError,TypeError):continue
+        d=payload.get("discovery")
+        if isinstance(d,dict):
+            if int(d.get("candidates_added",0))==0:
+                return "zero_source_yield"
+            return "candidates_added"
+        r=payload.get("fl_roster_profiles")
+        if isinstance(r,dict):
+            return "candidates_added" if int(r.get("added",0))>0 else "zero_source_yield"
+    return "no_machine_readable_yield"
+
 def cycle():
  import fcntl
  ROOT.mkdir(exist_ok=True)
@@ -84,12 +102,14 @@ def cycle():
    r=command(args,130);rc=r.returncode
    log=(r.stdout+"\n"+r.stderr)[-8000:]
    error=log[-1200:] if rc else ""
-   if rc==0 and st!="FL" and '"added": 0' in log and log.count('"added": 0')>=3:
-    error="low_yield: discovery returned no candidates; rotate to next area/source"
+   outcome=discovery_result(rc,log)
+   if outcome!="candidates_added":
+    error=outcome
   except subprocess.TimeoutExpired:rc=124;log="deadline exceeded";error=log
   (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=started,state=st,exit=rc,output=log))+"\n")
-  retry=(datetime.now(timezone.utc)+(timedelta(days=7) if rc==0 and '"candidates_added": 0' in log else timedelta(hours=72 if error.startswith("low_yield") else (24 if rc==0 else 6)))).isoformat(timespec="seconds")
-  cov.execute("UPDATE areas SET last_attempt=?,last_success=CASE WHEN ?=0 THEN ? ELSE last_success END,next_retry=?,attempts=attempts+1,last_exit=?,last_error=? WHERE state=? AND city='' AND source='directory'",(started,rc,now(),retry,rc,error,st))
+  success=bool(rc==0 and error=="")
+  retry=(datetime.now(timezone.utc)+timedelta(days=7 if error=="zero_source_yield" else 1)).isoformat(timespec="seconds")
+  cov.execute("UPDATE areas SET last_attempt=?,last_success=CASE WHEN ? THEN ? ELSE last_success END,next_retry=?,attempts=attempts+1,last_exit=?,last_error=? WHERE state=? AND city='' AND source='directory'",(started,int(success),now(),retry,rc,error,st))
   # Observed city records are candidate hints, not evidence of completed city coverage.
   for city,state in sqlite3.connect(DB).execute("SELECT DISTINCT city,state FROM candidates WHERE state=? AND trim(city)!=''",(st,)):
    cov.execute("INSERT OR IGNORE INTO areas(state,city,source,last_attempt) VALUES(?,?,'candidate_observed',?)",(state,city,now()))
@@ -102,7 +122,7 @@ def cycle():
    sync=subprocess.run([str(ROOT/".venv/bin/python"),str(ROOT/"sync_sheet.py")],capture_output=True,text=True,timeout=120)
    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),sync_exit=sync.returncode,output=(sync.stdout+sync.stderr)[-1500:]))+"\n")
   print(json.dumps(dict(state=st,discovery_exit=rc,verification_exit=pending.returncode,calling_qualified=phone_count,strict_qualified=count)))
-  return 0 if rc==0 and pending.returncode==0 else 1
+  return 0 if success and pending.returncode==0 else 1
 if __name__=="__main__":
  if len(sys.argv)>1 and sys.argv[1]=="export": calling_export();strict_export()
  elif len(sys.argv)>1 and sys.argv[1]=="coverage":

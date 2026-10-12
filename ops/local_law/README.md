@@ -11,3 +11,14 @@ Local existing launchd schedule points at ~/lead-workspace/campaign.py, not this
 
 ## Calling-first campaign output
 The primary operational CSV is `~/lead-workspace/call-qualified-law.csv`, exported using the existing `calling_qualified` status. This includes the source-screened phone-qualified records with or without a published email. Email discovery must not block this calling queue. `strict-qualified-law.csv` is an additional email-verified subset and is never a substitute for the calling count. Both remain subject to firm-specific 2–10 attorney evidence and independent no-owned-website checks. No phone connectivity is asserted from formatting alone.
+
+## October 13 audit and source recovery
+- Real source artifacts are restored privately under `~/lead-workspace/research_archives/fl` and `.../ny`.
+- `python3 ops/local_law/research_index.py` builds a **research-only**, deduplicated `~/lead-workspace/research_catalog.sqlite3` (5,575 FL + 3,488 NY - 26 duplicates = 9,037 identities). It does **not** populate the calling queue.
+- The Florida roster's "N active" refers to jurisdiction-active attorneys, not necessarily nationwide firm size. It is now held in `review_headcount_scope` until a separate firmwide size source is obtained. Non-law employer signals are held separately.
+- The real CLI verifier now preflights Bing/DDG site providers using a known owned-domain positive control before processing non-FL leads. A failed preflight has process exit 3 and **does not consume candidate attempts**. The current Mac provider health is degraded (1/2 responded, known-positive site missed).
+- Calling CSV export independently checks supporting headcount source, exact phone, 2–10 firmwide size, website search evidence and freshness; an invalid status label alone is insufficient.
+- The Mac campaign controller records zero yielded candidates as `zero_source_yield` rather than a successful discovery region. It cools down ineffective queries and does not mark an area complete.
+- Live local database after scope recheck: 47 headcount-scope reviews and 2 non-law employer reviews, 0 calling-qualified. Do not put these 49 on the calling sheet.
+- Execute tests: `/opt/homebrew/bin/python3.11 -m unittest discover -s law_local -q` and `/opt/homebrew/bin/python3.11 -m unittest discover -s ops/local_law -q`.
+- Production has not been proven to produce phone-qualified output; do not increase concurrency or reuse generic dead search sources to manufacture throughput.

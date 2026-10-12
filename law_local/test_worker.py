@@ -110,6 +110,27 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(bad["status"],"call_qualified_no_email")
         self.assertEqual(bad["email"],"")
 
+    def test_fl_active_roster_count_is_not_firm_wide_size_proof(self):
+        lead={**LEAD,"firm":"Abrahamson & Uiterwyk Injury Lawyers",
+              "phone":"7277259411",
+              "source_url":"https://www.floridalawdirectory.com/firm/abrahamson-uiterwyk-injury-lawyers"}
+        page="<h1>Abrahamson & Uiterwyk Injury Lawyers</h1><p>727-725-9411</p><p>Attorneys 5 active</p>"
+        result=evaluate_candidate(lead,page,[{"responded":True,"urls":[]},
+                              {"responded":True,"urls":[]}],lambda domain:True)
+        self.assertEqual(result["status"],"review_headcount_scope")
+        self.assertEqual(result["attorneys"],5)
+        self.assertEqual(result["headcount_scope"],"florida_active_attorneys_only")
+
+    def test_owned_site_hint_still_trumps_fl_size_scope(self):
+        lead={**LEAD,"firm":"Abrahamson & Uiterwyk Injury Lawyers",
+              "phone":"7277259411",
+              "source_url":"https://www.floridalawdirectory.com/firm/abrahamson-uiterwyk-injury-lawyers"}
+        page=("<h1>Abrahamson & Uiterwyk Injury Lawyers</h1>"
+              "<p>727-725-9411</p><p>Attorneys 5 active</p>"
+              '<a href="https://www.theinjurylawyers.com/">Visit Website</a>')
+        result=evaluate_candidate(lead,page,[],lambda domain:True)
+        self.assertEqual(result["status"],"review_website")
+
     def test_queue_persists_and_deduplicates(self):
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/"law.sqlite3"
@@ -128,11 +149,25 @@ class QualityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             db=SqliteQueue(Path(folder)/"law.sqlite3")
             self.assertTrue(db.add(LEAD))
-            db.record(LEAD,{"status":"call_qualified_no_email","attorneys":4})
+            from datetime import datetime,timezone
+            db.record(LEAD,{"status":"call_qualified_no_email","attorneys":4,
+                "phone":"3124221836","headcount_source":LEAD["source_url"],
+                "site_status":"screened_no_site",
+                "site_evidence":{"providers":[{"responded":True,"urls":[]},{"responded":True,"urls":[]}]},
+                "checked_at":datetime.now(timezone.utc).isoformat()})
             self.assertEqual(db.counts()["calling_qualified"],1)
             self.assertEqual(db.counts().get("strict_eligible",0),0)
             export_path=Path(folder)/"call.csv"
             self.assertEqual(db.export("calling_qualified",export_path),1)
+            db.close()
+
+    def test_export_does_not_trust_status_without_verified_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"law.sqlite3")
+            db.add(LEAD)
+            db.record(LEAD,{"status":"call_qualified_no_email","attorneys":4})
+            self.assertEqual(db.counts()["calling_qualified"],0)
+            self.assertEqual(db.export("calling_qualified",Path(folder)/"calls.csv"),0)
             db.close()
 
     def test_legacy_no_email_records_are_requeued(self):
@@ -155,6 +190,23 @@ class EndToEndTests(unittest.TestCase):
                 result=run_batch(db,max_rows=5,workers=1,seconds=10)
             self.assertEqual(result,{"inconclusive":1})
             self.assertEqual(db.conn.execute("SELECT attempts FROM candidates").fetchone()[0],1)
+            db.close()
+
+    def test_cli_provider_outage_does_not_consume_candidate_attempt(self):
+        from law_local.worker import main
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"law.sqlite3"
+            db=SqliteQueue(path)
+            self.assertTrue(db.add(LEAD))
+            db.close()
+            with patch("law_local.site_provider_health.audit_provider_health",
+                       return_value={"status":"degraded","responded":1,
+                                     "positive_control_found":False}):
+                with self.assertRaises(SystemExit) as blocked:
+                    main(["--db",str(path),"run","--max","1"])
+            self.assertEqual(blocked.exception.code,3)
+            db=SqliteQueue(path)
+            self.assertEqual(db.conn.execute("SELECT attempts FROM candidates").fetchone()[0],0)
             db.close()
 
     def test_import_process_export_source_provenance(self):

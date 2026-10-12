@@ -218,10 +218,27 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
         return {**evidence,"status":"unverified_identity"}
     if source["attorneys"]<2 or source["attorneys"]>10:
         return {**evidence,"status":"unverified_size"}
+    if (urlparse(str(lead.get("source_url",""))).hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com":
+        from law_local.florida_roster import clearly_non_law_employer
+        if clearly_non_law_employer(lead.get("firm","")):
+            return {**evidence,"status":"review_nonlaw_employer",
+                    "reason":"Roster lists an in-house or non-law business employer"}
     if source["website_candidates"]:
         return {**evidence,"status":"review_website","website_candidates":source["website_candidates"]}
+    # FloridaLawDirectory reports ACTIVE FL BAR-LICENSED lawyers under an employer.
+    # This is NOT necessarily the employer's firm-wide headcount. A national firm
+    # can have five locally registered attorneys and dozens elsewhere. The roster
+    # is valid discovery evidence, not conclusive 2-10 firm-size evidence.
+    if (urlparse(str(lead.get("source_url",""))).hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com":
+        return {**evidence,"status":"review_headcount_scope",
+                "headcount_scope":"florida_active_attorneys_only",
+                "reason":"Needs independent evidence of total firm size 2-10"}
     site=classify_search_results(search_results)
     evidence["site_status"]=site["status"]
+    evidence["site_evidence"]={"checked_at":utc_now(),"providers":[
+        {"responded":bool(r.get("responded")),
+         "urls":[v for v in r.get("urls",[])[:10] if _public_http_url(v)]}
+        for r in search_results[:2]]}
     if site["status"]!="screened_no_site":
         return {**evidence,"status":site["status"],"site_evidence":site}
     # PHONE-FIRST CONTRACT: email is an optional, source-published bonus.
@@ -292,9 +309,40 @@ class SqliteQueue:
              WHERE id=?""",
              (result["status"],json.dumps(result,sort_keys=True),utc_now(),self._id(lead)))
         self.conn.commit()
+    @staticmethod
+    def _verified_for_export(row,evidence,status):
+        try:
+            when=datetime.fromisoformat(str(evidence.get("checked_at","")).replace("Z","+00:00"))
+            age=datetime.now(timezone.utc)-when
+            if when.tzinfo is None or not (0<=age.total_seconds()<=30*86400):
+                return False
+            if evidence.get("status")!=status or evidence.get("site_status")!="screened_no_site":
+                return False
+            if evidence.get("headcount_scope")=="florida_active_attorneys_only":
+                return False
+            head_host=(urlparse(str(evidence.get("headcount_source",""))).hostname or "").lower().removeprefix("www.")
+            if head_host=="floridalawdirectory.com" and not evidence.get("firmwide_size_source"):
+                return False
+            if not 2<=int(evidence.get("attorneys") or 0)<=10:
+                return False
+            if not normalize_phone(row["phone"]) or normalize_phone(row["phone"])!=normalize_phone(evidence.get("phone")):
+                return False
+            if not evidence.get("headcount_source") or not _third_party(urlparse(evidence["headcount_source"]).hostname or ""):
+                return False
+            if status=="strict_eligible" and (not EMAIL_RE.fullmatch(evidence.get("email","")) or
+                      not evidence.get("email_source")):
+                return False
+            providers=evidence.get("site_evidence",{}).get("providers",[])
+            if len(providers)<2 or not all(p.get("responded") is True for p in providers[:2]):
+                return False
+            return True
+        except (ValueError,TypeError,KeyError,AttributeError):
+            return False
     def counts(self):
         totals=dict(self.conn.execute("SELECT status,COUNT(*) FROM candidates GROUP BY status").fetchall())
-        totals["calling_qualified"]=totals.get("strict_eligible",0)+totals.get("call_qualified_no_email",0)
+        totals["calling_qualified"]=sum(
+            1 for row in self.conn.execute("SELECT phone,status,result_json FROM candidates WHERE status IN ('strict_eligible','call_qualified_no_email')")
+            if self._verified_for_export(row,json.loads(row["result_json"]),row["status"]))
         return totals
     def export(self,status,path):
         statuses=("strict_eligible","call_qualified_no_email") if status=="calling_qualified" else (status,)
@@ -309,6 +357,9 @@ class SqliteQueue:
             w.writeheader()
             for row in rows:
                 evidence=json.loads(row["result_json"])
+                candidate_status="strict_eligible" if evidence.get("status")=="strict_eligible" else "call_qualified_no_email"
+                if not self._verified_for_export(row,evidence,candidate_status):
+                    continue
                 w.writerow({
                     "Firm":row["firm"],"Phone":row["phone"],"City":row["city"],"State":row["state"],
                     "Attorneys":evidence.get("attorneys",""),"Email":evidence.get("email",""),
@@ -317,7 +368,11 @@ class SqliteQueue:
                     "Website audit":evidence.get("site_status",""),
                     "Checked at":evidence.get("checked_at","")
                 })
-        return len(rows)
+        return sum(
+            self._verified_for_export(row,json.loads(row["result_json"]),
+                                      json.loads(row["result_json"]).get("status"))
+            for row in rows
+        )
     def close(self):
         self.conn.close()
 
@@ -418,7 +473,7 @@ def _links_from_html(html):
     return links[:35]
 
 def search_for_firm(lead):
-    term='\"'+str(lead["firm"]).replace('"',"")+'\" \"'+normalize_phone(lead["phone"])+'\" website'
+    term='"'+str(lead["firm"]).replace('"',"")+'"'+" law firm "+str(lead.get("city") or "")+" "+str(lead.get("state") or "")
     queries=[
         "https://www.bing.com/search?format=rss&"+urlencode({"q":term}),
         "https://html.duckduckgo.com/html/?"+urlencode({"q":term})
@@ -458,7 +513,10 @@ def process_candidate(lead):
         if not firm_identity_matches(html,lead):
             return {"status":"unverified_identity","source_url":lead["source_url"],"checked_at":utc_now()}
         source=evaluate_published_source(html,lead)
-        search=search_for_firm(lead) if 2<=source["attorneys"]<=10 and not source["website_candidates"] else []
+        # A state-only count is not firm-wide size proof; do not issue wasted
+        # site-search calls for a record that cannot pass size qualification.
+        local_count_only=(urlparse(str(lead.get("source_url",""))).hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com"
+        search=search_for_firm(lead) if 2<=source["attorneys"]<=10 and not source["website_candidates"] and not local_count_only else []
         return evaluate_candidate(lead,html,search,mx_check=domain_has_mail)
     except Exception as exc:
         return {"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
@@ -670,6 +728,8 @@ def main(argv=None):
     p.add_argument("--max",type=int,default=100)
     p.add_argument("--workers",type=int,default=4)
     p.add_argument("--seconds",type=int,default=600)
+    p.add_argument("--skip-provider-preflight",action="store_true",
+                   help="Unsafe except controlled test fixtures; bypass site-search health probe")
     p=sub.add_parser("discover",help="Find new public law-directory candidates, resumably")
     p.add_argument("--states",default="FL,TX,CA,NY,IL,GA,PA,OH,NC,MI")
     p.add_argument("--max-queries",type=int,default=20)
@@ -686,6 +746,19 @@ def main(argv=None):
         if args.cmd=="import":
             print(json.dumps({"imported":import_csv(db,args.csv),"counts":db.counts()}))
         elif args.cmd=="run":
+            pending=db.pending(args.max)
+            needs_site_provider=any(
+                (urlparse(str(row.get("source_url",""))).hostname or "").lower().removeprefix("www.")
+                !="floridalawdirectory.com" for row in pending
+            )
+            if pending and needs_site_provider and not args.skip_provider_preflight:
+                from law_local.site_provider_health import audit_provider_health
+                health=audit_provider_health()
+                if health["status"]!="usable":
+                    print(json.dumps({"batch":{"status":"blocked_website_provider",
+                                               "pending_untouched":len(pending)},
+                                      "site_provider_health":health,"counts":db.counts()}))
+                    raise SystemExit(3)
             print(json.dumps({"batch":run_batch(db,args.max,args.workers,args.seconds),"counts":db.counts()}))
         elif args.cmd=="discover":
             states=[s.strip().upper() for s in args.states.split(",") if s.strip()]

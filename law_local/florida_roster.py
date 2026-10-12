@@ -42,7 +42,8 @@ NON_LAW_BUSINESS=re.compile(
     r"electric|utility|power company|university|insurance|"
     r"engineering|logistics|transport|financial services|"
     r"mortgage|automotive|restaurant|resort|hotel|retail|"
-    r"supermarket|communications|telecom|pharmaceutical)\b",re.I)
+    r"supermarket|communications|telecom|pharmaceutical|"
+    r"furniture|industries|allstate)\b",re.I)
 LAW_PRACTICE_SIGNAL=re.compile(
     r"\b(?:law(?:\s+(?:firm|office|offices|group|practice))?|"
     r"attorneys?|lawyers?|legal(?:\s+(?:group|services|counsel))?|"
@@ -186,7 +187,8 @@ def add_or_upgrade(db,lead):
         return "added" if db.add(lead) else "already_known"
     if original["source_url"]==lead["source_url"]:
         return "already_known"
-    if original["status"] not in ("unverified_size","unverified_identity","inconclusive"):
+    if original["status"] not in ("unverified_size","unverified_identity","inconclusive",
+                                  "review_headcount_scope"):
         return "preserved_other_status"
     db.conn.execute("""INSERT OR IGNORE INTO fl_roster_prior_sources
         VALUES (?,?,?,?)""",(lead_id,original["source_url"],original["status"],utc_now()))

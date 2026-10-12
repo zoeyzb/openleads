@@ -13,14 +13,16 @@ class ExportTests(unittest.TestCase):
   self.c=c
  def tearDown(self):
   self.c.close();campaign.DB,campaign.OUT=self.orig;self.t.cleanup()
- def add(self,status="strict_eligible",email="info@sample-law.test",site_status="screened_no_site",attorneys=5,checked=None,email_source="https://directory.example/firm",headcount_source="https://directory.example/firm"):
+ def add(self,status="strict_eligible",email="info@sample-law.test",site_status="screened_no_site",attorneys=5,checked=None,email_source="https://www.lawyers.com/firm/fixture",headcount_source="https://www.lawyers.com/firm/fixture"):
   v={"status":status,"email":email,"site_status":site_status,"attorneys":attorneys,
+     "phone":"3125552222","site_evidence":{"providers":[{"responded":True,"urls":[]},{"responded":True,"urls":[]}]},
      "checked_at":checked or datetime.now(timezone.utc).isoformat(),"email_source":email_source,"headcount_source":headcount_source}
-  self.c.execute("INSERT INTO candidates VALUES(?,?,?,?,?,?,?)",("Fixture & Partners","3125552222","Chicago","IL","https://directory.example/firm",status,json.dumps(v)));self.c.commit()
+  self.c.execute("INSERT INTO candidates VALUES(?,?,?,?,?,?,?)",("Fixture & Partners","3125552222","Chicago","IL","https://www.lawyers.com/firm/fixture",status,json.dumps(v)));self.c.commit()
  def test_strict_record_exported(self):
   self.add()
   self.assertEqual(campaign.strict_export(),1)
-  self.assertEqual(len(list(csv.DictReader(campaign.OUT.open()))),1)
+  with campaign.OUT.open() as fd:
+   self.assertEqual(len(list(csv.DictReader(fd))),1)
  def test_phone_only_excluded(self):
   self.add(status="call_qualified_no_email")
   self.assertEqual(campaign.strict_export(),0)
