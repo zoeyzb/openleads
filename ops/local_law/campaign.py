@@ -123,12 +123,16 @@ def cycle():
    cov.execute("INSERT OR IGNORE INTO areas(state,city,source,last_attempt) VALUES(?,?,'candidate_observed',?)",(state,city,now()))
   cov.commit()
   # Never spend verifier requests while the known-owned-site positive control fails.
-  health=command(["-m","law_local.site_provider_health","--ready-flag",str(ROOT/"site-ready.flag")],45)
   try:
-   site_state=json.loads((health.stdout.strip().splitlines() or ["{}"])[-1]).get("website_search_provider_health",{}).get("status")
-  except (ValueError,IndexError):
-   site_state="unavailable"
-  if health.returncode!=0 or site_state!="usable":
+   health=command(["-m","law_local.site_provider_health","--ready-flag",str(ROOT/"site-ready.flag")],45)
+   try:
+    site_state=json.loads((health.stdout.strip().splitlines() or ["{}"])[-1]).get("website_search_provider_health",{}).get("status")
+   except (ValueError,IndexError):
+    site_state="unavailable"
+  except subprocess.TimeoutExpired:
+   health=None
+   site_state="timeout"
+  if health is None or health.returncode!=0 or site_state!="usable":
    verify_exit=3
    verify_output="blocked_website_provider: known-owned-site control failed; no candidate requests spent"
   else:
@@ -142,7 +146,7 @@ def cycle():
    sync=subprocess.run([str(ROOT/".venv/bin/python"),str(ROOT/"sync_sheet.py")],capture_output=True,text=True,timeout=120)
    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),sync_exit=sync.returncode,output=(sync.stdout+sync.stderr)[-1500:]))+"\n")
   print(json.dumps(dict(state=st,discovery_exit=rc,verification_exit=verify_exit,calling_qualified=phone_count,strict_qualified=count)))
-  return 0 if success and pending.returncode==0 else 1
+  return 0 if success and verify_exit==0 else (3 if verify_exit==3 else 1)
 if __name__=="__main__":
  if len(sys.argv)>1 and sys.argv[1]=="export": calling_export();strict_export()
  elif len(sys.argv)>1 and sys.argv[1]=="coverage":

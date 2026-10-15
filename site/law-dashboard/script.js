@@ -2,9 +2,39 @@ const FEED="https://gist.githubusercontent.com/zoeyzb/e7e05d76a0f1855e1953a69ce1
 const get=id=>document.getElementById(id);
 const fmt=x=>Number.isFinite(x)?new Intl.NumberFormat("en-US").format(x):"—";
 function ago(s){const m=Math.max(0,Math.floor((Date.now()-Date.parse(s))/60000));return !Number.isFinite(m)?"unknown":m<2?"just now":m<60?m+"m ago":m<1440?Math.floor(m/60)+"h ago":Math.floor(m/1440)+"d ago"}
+let trendMetric="qualified";
+document.querySelector("#mobile-menu")?.addEventListener("click",()=>{
+ const rail=document.querySelector(".rail"),button=get("mobile-menu");
+ rail.classList.toggle("menu-open");
+ button.setAttribute("aria-expanded",String(rail.classList.contains("menu-open")));
+});
+document.querySelectorAll(".rail nav a").forEach(a=>a.addEventListener("click",()=>{
+ document.querySelector(".rail").classList.remove("menu-open");get("mobile-menu")?.setAttribute("aria-expanded","false");
+}));
+for(const button of document.querySelectorAll("[data-metric]"))button.addEventListener("click",()=>{
+ trendMetric=button.dataset.metric;
+ document.querySelectorAll("[data-metric]").forEach(b=>b.classList.toggle("active",b===button));
+ if(lastMetrics)drawTrend(lastMetrics);
+});
+function drawTrend(d){
+ const chart=get("trend-chart");chart.replaceChildren();
+ const history=Array.isArray(d.history)?d.history.slice(-30):[];
+ get("trend-range").textContent=history.length?history.length+" real hourly samples":"No historical samples yet";
+ if(!history.length){chart.textContent="Waiting for the first Mac snapshot";return}
+ const values=history.map(v=>Number(v[trendMetric]||0));
+ const max=Math.max(1,...values),min=0;
+ const width=800,height=170,pad=24;
+ const coords=values.map((v,i)=>[pad+(history.length===1?0.5:i/(history.length-1))*(width-pad*2),height-pad-(v-min)/(max-min)*(height-pad*2)]);
+ const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");svg.setAttribute("viewBox","0 0 800 170");svg.setAttribute("role","img");svg.setAttribute("aria-label",trendMetric+" measured over "+history.length+" hourly samples");
+ for(let i=0;i<4;i++){const l=document.createElementNS(svg.namespaceURI,"line");const y=pad+i*(height-pad*2)/3;for(const [key,val] of Object.entries({x1:pad,x2:width-pad,y1:y,y2:y,stroke:"#e8eee7","stroke-width":"1"}))l.setAttribute(key,String(val));svg.append(l)}
+ const poly=document.createElementNS(svg.namespaceURI,"polyline");poly.setAttribute("points",coords.map(p=>p.join(",")).join(" "));poly.setAttribute("fill","none");poly.setAttribute("stroke","#4d8055");poly.setAttribute("stroke-width","3");poly.setAttribute("stroke-linejoin","round");poly.setAttribute("stroke-linecap","round");svg.append(poly);
+ for(const [x,y] of coords){const c=document.createElementNS(svg.namespaceURI,"circle");c.setAttribute("cx",x);c.setAttribute("cy",y);c.setAttribute("r","4");c.setAttribute("fill","#4d8055");svg.append(c)}
+ chart.append(svg);
+ get("trend-latest").textContent="Latest "+trendMetric+": "+fmt(values[values.length-1]);
+}
 let chartMode="bar",lastMetrics=null;
 function drawCharts(d){
- lastMetrics=d;
+ lastMetrics=d;drawTrend(d);
  const sources=d.sourceBreakdown||{};
  const fl=Number(sources["FL roster"]||0),ny=Number(sources["NY registrations"]||0),total=fl+ny;
  const chart=get("source-chart"),legend=get("source-legend");chart.replaceChildren();legend.replaceChildren();

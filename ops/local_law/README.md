@@ -44,3 +44,9 @@ To install the Mac publisher: copy `ops/local_law/publish_metrics.py` to `~/lead
 ### Live analytics charts
 Dashboard now includes interactive bar/donut charts of FL/NY research sources and candidate-status bars, derived from real aggregate Mac SQLite data. The publisher exports sourceBreakdown every ten minutes. Visual reference: MIT-licensed shreyvijayvargiya/crm-saas; no additional Next.js service was installed and no source components were copied.
 Verified in Chrome at 1440px and 390px with no overflow, including bar/donut switch.
+
+### October 2026 repair pass
+- Controller no longer raises UnboundLocalError when website verifier is intentionally skipped, and handles site-provider preflight timeout as an explicit controlled failure (exit 3). This does not make degraded providers valid or promote prospects.
+- Public aggregate Mac metrics publisher now preserves genuine hourly observations in private local metrics-history.json and publishes up to 168 observed hourly snapshots (no backfilled or synthetic history).
+- Dashboard has a live historical trend chart with qualified / triaged / candidates switches and a usable mobile navigation menu.
+- Connected hourly ChatGPT Google Sheets task upserts source-verified calling leads directly through connected Google Sheets, without expecting an absent local service account. The local sync_sheet.py credential-based path remains unavailable until authorized credentials are provided. Qualified rows are still 0; no fabricated sync rows.

@@ -11,7 +11,7 @@
 <div class="layout">
 <aside class="rail" aria-label="Navigation">
   <a class="identity" href="./" aria-label="OpenLeads operations home"><span class="identity-icon">o<span>.</span></span><span>openleads<small>OPERATIONS</small></span></a>
-  <div class="rail-label">WORKSPACE</div>
+  <button class="mobile-nav-button" id="mobile-menu" aria-expanded="false" type="button">☰ Menu</button><div class="rail-label">WORKSPACE</div>
   <nav><a class="selected" href="#overview"><span class="nav-ico">◫</span> Overview</a><a href="#pipeline"><span class="nav-ico">◈</span> Qualification</a><a href="#coverage"><span class="nav-ico">◎</span> Coverage</a><a href="#systems"><span class="nav-ico">⌘</span> System status</a></nav>
   <div class="rail-bottom"><span class="green-signal"></span><div>Local-first architecture<small>Runs on your Mac</small></div></div>
 </aside>
@@ -25,6 +25,12 @@
    <article class="plain-stat"><p class="stat-title">SOURCE PAGES TRIAGED <span>03 / 03</span></p><strong id="triaged">—</strong><p>Archived candidates checked and checkpointed locally.</p><div class="stat-foot"><span class="small-dot green"></span> Reuse existing research</div></article>
  </section>
  <section class="blocking" id="blocking"><span class="blocking-ico">!</span><div><strong id="blocking-title">Connecting to your Mac metrics feed</strong><p id="blocking-description">Metrics update from your local SQLite databases through a sanitized publisher.</p></div><a href="#systems">View system health <span>↗</span></a></section>
+ <section class="panel trend-panel" aria-label="Lead progress history">
+   <div class="section-top"><div><p class="overline">RECORDED PERFORMANCE</p><h2>Qualification progress over time</h2></div><div class="chart-switch" role="group" aria-label="Trend metric"><button type="button" data-metric="qualified" class="active">Qualified</button><button type="button" data-metric="triaged">Triaged</button><button type="button" data-metric="candidates">Candidates</button></div></div>
+   <p class="panel-description">Actual hourly snapshots captured by the Mac publisher. No fabricated historical values.</p>
+   <div class="trend-chart" id="trend-chart" aria-label="Recorded historical metrics chart"><div class="empty">Awaiting published history…</div></div>
+   <div class="trend-foot"><span id="trend-range">History begins with the first published snapshot</span><span id="trend-latest"></span></div>
+ </section>
  <section class="analytics" aria-label="Visual analytics">
    <div class="panel analytics-main"><div class="section-top"><div><p class="overline">DATA COMPOSITION</p><h2>Where your research comes from</h2></div><div class="chart-switch" role="group" aria-label="Chart type"><button type="button" class="active" data-view="bar">Bars</button><button type="button" data-view="donut">Donut</button></div></div>
    <p class="panel-description">Recovered source contacts by state. This is research volume, not qualified calling leads.</p>

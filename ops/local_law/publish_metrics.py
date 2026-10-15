@@ -5,6 +5,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 ROOT=Path.home()/"lead-workspace"
 CONFIG=ROOT/"metrics-feed-config.json"
+HISTORY=ROOT/"metrics-history.json"
 def rows(db,sql):
  try:
   con=sqlite3.connect(f"file:{db}?mode=ro",uri=True,timeout=6)
@@ -44,6 +45,19 @@ def api(args,body=None):
  return json.loads(r.stdout)
 def publish():
  data=snapshot()
+ # Persist one aggregate sample per UTC hour; do not manufacture earlier history.
+ try:
+  history=json.loads(HISTORY.read_text()) if HISTORY.exists() else []
+ except (ValueError,OSError):
+  history=[]
+ stamp=data["updatedAt"][:13]
+ item={"hour":stamp,"qualified":data["callingQualified"],"research":data["research"],
+       "triaged":sum(data["triageStatuses"].values()),"candidates":sum(data["candidateStatuses"].values())}
+ history=[v for v in history if isinstance(v,dict) and v.get("hour")!=stamp]
+ history.append(item)
+ history=sorted(history,key=lambda x:x["hour"])[-168:]
+ temp=HISTORY.with_suffix(".tmp");temp.write_text(json.dumps(history));os.replace(temp,HISTORY)
+ data["history"]=history
  content=json.dumps(data,separators=(",",":"),ensure_ascii=True)
  if CONFIG.exists():config=json.loads(CONFIG.read_text())
  else:config={}
