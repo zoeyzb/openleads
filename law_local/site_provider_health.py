@@ -32,7 +32,7 @@ def audit_provider_health(lookups=None):
                     relevant=True
     return {"status":"usable" if both_ready and relevant else "degraded",
             "responded":sum(bool(s.get("responded")) for s in sources[:2]),
-            "positive_control_found":bool(relevant),
+            "positive_control_found":bool(relevant),"provider_details":[{"responded":bool(v.get("responded")),"result_count":len(v.get("urls",[]))} for v in sources[:2]],
             "reason":"site searches are not usable for strict negative evidence unless both answer and find a known positive site"}
 
 def main():

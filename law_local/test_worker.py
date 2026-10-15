@@ -77,6 +77,11 @@ class QualityTests(unittest.TestCase):
             {"responded":False,"urls":[]}])
         self.assertEqual(found["status"],"review_website")
 
+    def test_email_still_optional_for_calling(self):
+        html=PROFILE.replace("intake@keystoneparker.testing-law.org","")
+        verdict=evaluate_candidate(LEAD,html,[{"responded":True,"urls":[]},{"responded":True,"urls":[]}],mx_check=lambda domain:False)
+        self.assertEqual(verdict["status"],"call_qualified_no_email")
+
     def test_search_index_noise_does_not_count_as_firm_match(self):
         from law_local.worker import search_result_relevant
         self.assertFalse(search_result_relevant("The - Wikipedia", "definition of the", LEAD))

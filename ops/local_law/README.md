@@ -62,3 +62,7 @@ Verified in Chrome at 1440px and 390px with no overflow, including bar/donut swi
 - Existing coverage.sqlite3 contained leftover FL and NY generic source rows. Queries now constrain scheduled generic discovery to configured STATES, preventing stale checkpoint rows from forcing repeated Florida/NY runs.
 - Archive triage now includes NY registrations, with NY prioritized to ensure the previously excluded source is actually tested. State registration counts remain *research-only*, never firmwide headcount proof.
 - These fixes improve scheduling and coverage but do not cure search-provider health or produce qualified calling leads.
+
+### Website search provider diagnostics (2026-10-16)
+Live Mac probes show Bing RSS serving unrelated Wikipedia, Microsoft and gaming links to firm-name/domain queries; DuckDuckGo HTML is blocked. Do not permit irrelevant HTTP 200 payloads to certify website absence. The site preflight now emits per-provider responded/result_count diagnostics; the fail-closed behavior remains intact.
+The calling verifier still classifies no-email firms as `call_qualified_no_email` after all firm-size, website and phone gates pass. Published email harvesting is a bonus.
