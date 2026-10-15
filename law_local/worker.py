@@ -115,6 +115,8 @@ def evaluate_published_source(html,lead):
     # Only accept explicit firm-size wording, not "attorneys for plaintiff".
     size_pattern=rf"\b{re.escape(firm)}\s+(?:has|employs|includes|comprises)\s+(\d{{1,2}})\s+attorneys?\b"
     m=re.search(size_pattern,text)
+    if m and re.match(r"\s+at (?:this|the|our|its) (?:location|office|branch)\b",text[m.end():]):
+        m=None
     # Third-party firm profiles commonly use an explicit "Firm Size: N"
     # field rather than a prose sentence. Require an identity/phone match
     # first and do not interpret client counts or generic search snippets.
@@ -122,7 +124,7 @@ def evaluate_published_source(html,lead):
     if not m:
         # Interpret an explicit firm-size *range* as a range; do not claim its
         # lower bound is the exact number or accept "1-5" as 2+.
-        range_match=re.search(r"\b(?:firm size|office size|firm/organization size)\s*:?\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\b",raw_text,re.I)
+        range_match=re.search(r"\b(?:firm size|firm/organization size)\s*:?\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\b",raw_text,re.I)
         if range_match:
             lo,hi=map(int,range_match.groups())
             if 2<=lo<=hi<=10:

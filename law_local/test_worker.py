@@ -11,7 +11,7 @@ from pathlib import Path
 PROFILE = """
 <html><h1>Keystone & Parker Law Group</h1>
 <p>Call (312) 422-1836</p>
-<p>Keystone & Parker Law Group has 4 attorneys at this location.</p>
+<p>Keystone & Parker Law Group has 4 attorneys.</p>
 <p>Contact: intake@keystoneparker.testing-law.org</p></html>
 """
 LEAD = {
@@ -40,8 +40,12 @@ class QualityTests(unittest.TestCase):
         self.assertFalse(result["website_candidates"])
 
     def test_explicit_directory_firm_size_field(self):
-        html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys at this location.","Firm Size: 4")
+        html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys.","Firm Size: 4")
         self.assertEqual(evaluate_published_source(html,LEAD)["attorneys"],4)
+
+    def test_office_size_range_is_not_firmwide_proof(self):
+        html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys.", "Office Size: 2-5 attorneys")
+        self.assertEqual(evaluate_published_source(html,LEAD)["attorneys"],0)
 
     def test_directory_footer_email_is_not_a_firm_email(self):
         html=PROFILE.replace("intake@keystoneparker.testing-law.org",
@@ -57,8 +61,14 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(result["status"],"review_website")
         self.assertTrue(result["website_candidates"])
 
+    def test_local_office_count_is_not_firmwide_size(self):
+        html=PROFILE.replace("has 4 attorneys.", "has 4 attorneys at this location.")
+        self.assertEqual(evaluate_published_source(html,LEAD)["attorneys"],0)
+        firmwide=PROFILE.replace("has 4 attorneys.","has 4 attorneys.")
+        self.assertEqual(evaluate_published_source(firmwide,LEAD)["attorneys"],4)
+
     def test_reject_unattributed_headcount(self):
-        html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys at this location.","4 attorneys for defendant.")
+        html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys.","4 attorneys for defendant.")
         self.assertEqual(evaluate_published_source(html,LEAD)["attorneys"],0)
 
     def test_positive_site_detected_even_if_second_provider_is_down(self):
