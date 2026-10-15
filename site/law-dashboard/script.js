@@ -1,0 +1,1 @@
+document.querySelector("#refresh").addEventListener("click",function(){this.textContent="✓ Static snapshot";this.setAttribute("aria-label","This is a static snapshot; live data is not connected");setTimeout(()=>{this.textContent="↻ Recheck display"},1800)});
