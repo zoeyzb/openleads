@@ -30,6 +30,16 @@ def snapshot():
  states=rows(ROOT/"coverage.sqlite3","SELECT state,last_attempt,last_success,last_error,attempts FROM areas WHERE city='' AND source='directory' ORDER BY state")
  coverage=[{"state":r[0],"attempts":int(r[4] or 0),"lastAttempt":r[1],"lastSuccess":r[2],"stateStatus":"low-yield" if r[3] else ("checked" if r[4] else "not-started")} for r in states]
  triage=rows(ROOT/"research_catalog.sqlite3","SELECT status, COUNT(*) FROM source_triage GROUP BY status")
+ # Read bounded run log and expose aggregate-only diagnostics, never firm names or phone numbers.
+ last_verification={}
+ logpath=ROOT/"campaign-runs.log"
+ if logpath.exists():
+  try:
+   for line in logpath.read_text().splitlines()[-30:]:
+    record=json.loads(line)
+    if "verify_exit" in record:
+     last_verification={"time":record.get("time"),"exit":record.get("verify_exit"),"siteHealth":record.get("site_status","unknown")}
+  except (ValueError,OSError):pass
  provider="unknown"
  logfile=ROOT/"final-provider-health.log"
  if logfile.exists():
@@ -37,7 +47,7 @@ def snapshot():
   except (ValueError,KeyError,IndexError):pass
  catalog=count(ROOT/"research_catalog.sqlite3","source_research")
  sources=rows(ROOT/"research_catalog.sqlite3","SELECT source,COUNT(*) FROM source_research GROUP BY source ORDER BY source")
- return {"schema":1,"updatedAt":datetime.now(timezone.utc).isoformat(timespec="seconds"),"host":"Mac local worker","research":catalog,"sourceBreakdown":{str(k):int(v) for k,v in sources},"callingQualified":qualified,"candidateStatuses":statuses,"triageStatuses":{k:v for k,v in triage},"coverage":coverage,"providerHealth":provider,"source":"mac-sqlite-aggregate","note":"Research rows are not verified leads. Email is optional for phone-qualified leads."}
+ return {"schema":1,"updatedAt":datetime.now(timezone.utc).isoformat(timespec="seconds"),"host":"Mac local worker","research":catalog,"sourceBreakdown":{str(k):int(v) for k,v in sources},"callingQualified":qualified,"candidateStatuses":statuses,"triageStatuses":{k:v for k,v in triage},"coverage":coverage,"providerHealth":provider,"lastVerification":last_verification,"source":"mac-sqlite-aggregate","note":"Research rows are not verified leads. Email is optional for phone-qualified leads."}
 def api(args,body=None):
  command=["/opt/homebrew/bin/gh","api",*args]
  r=subprocess.run(command,input=json.dumps(body) if body else None,text=True,capture_output=True,timeout=25)

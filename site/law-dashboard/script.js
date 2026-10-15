@@ -84,7 +84,7 @@ function render(d){
  const triage=Object.values(d.triageStatuses||{}).reduce((a,b)=>a+(Number(b)||0),0);
  for(const [key,val] of Object.entries({"qualified":d.callingQualified,"stage-qualified":d.callingQualified,"research":d.research,"source-stage":d.research,"candidates":candidates,"unverified":candidates,"triaged":triage}))get(key).textContent=fmt(val);
  get("db-status").textContent="CONNECTED";get("triage-status").textContent=triage?"CHECKPOINTED":"EMPTY";
- const health=String(d.providerHealth||"unknown").toLowerCase();
+ const health=String(d.lastVerification?.siteHealth||d.providerHealth||"unknown").toLowerCase();
  get("site-health").textContent=health.toUpperCase();get("site-health").className="check-label "+(health==="usable"?"":"bad");
  get("site-gate").textContent=health==="usable"?"AVAILABLE":"BLOCKED";
  get("published-time").textContent=ago(d.updatedAt);get("feed-stamp").textContent="Mac snapshot · "+new Date(d.updatedAt).toLocaleString();

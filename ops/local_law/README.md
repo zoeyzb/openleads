@@ -50,3 +50,9 @@ Verified in Chrome at 1440px and 390px with no overflow, including bar/donut swi
 - Public aggregate Mac metrics publisher now preserves genuine hourly observations in private local metrics-history.json and publishes up to 168 observed hourly snapshots (no backfilled or synthetic history).
 - Dashboard has a live historical trend chart with qualified / triaged / candidates switches and a usable mobile navigation menu.
 - Connected hourly ChatGPT Google Sheets task upserts source-verified calling leads directly through connected Google Sheets, without expecting an absent local service account. The local sync_sheet.py credential-based path remains unavailable until authorized credentials are provided. Qualified rows are still 0; no fabricated sync rows.
+
+## October 16 repair
+- Fixed Mac controller so a degraded website-provider health check returns a controlled scheduler result (code 0 with verify_exit=3 recorded); source/acquisition subprocess failures still return nonzero. Unbound pending and preflight timeouts remain guarded.
+- Metrics Gist now exposes lastVerification timestamp/exit/siteHealth from local log without source URLs, names or phones; dashboard uses the latest recorded verification state, not an old one-off provider probe.
+- Connected Google Sheets tab Verified Calling Queue was verified present (header A:L, zero eligible rows). Its hourly connected sync is active; local service-account writer remains blocked pending Google credentials, so do not claim native unattended local API upsert is configured.
+- 0 real qualified calling leads, independent firmwide headcount and website absence still not solved. Never count raw contacts as qualified.

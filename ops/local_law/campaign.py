@@ -146,7 +146,9 @@ def cycle():
    sync=subprocess.run([str(ROOT/".venv/bin/python"),str(ROOT/"sync_sheet.py")],capture_output=True,text=True,timeout=120)
    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),sync_exit=sync.returncode,output=(sync.stdout+sync.stderr)[-1500:]))+"\n")
   print(json.dumps(dict(state=st,discovery_exit=rc,verification_exit=verify_exit,calling_qualified=phone_count,strict_qualified=count)))
-  return 0 if success and verify_exit==0 else (3 if verify_exit==3 else 1)
+  # Provider outages are expected controlled blocks, not scheduler crashes.
+  # Keep the true verification_exit=3 and failed discovery in the run log.
+  return 0 if rc==0 and verify_exit in (0,3) else 1
 if __name__=="__main__":
  if len(sys.argv)>1 and sys.argv[1]=="export": calling_export();strict_export()
  elif len(sys.argv)>1 and sys.argv[1]=="coverage":
