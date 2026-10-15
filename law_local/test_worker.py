@@ -77,6 +77,13 @@ class QualityTests(unittest.TestCase):
             {"responded":False,"urls":[]}])
         self.assertEqual(found["status"],"review_website")
 
+    def test_search_index_noise_does_not_count_as_firm_match(self):
+        from law_local.worker import search_result_relevant
+        self.assertFalse(search_result_relevant("The - Wikipedia", "definition of the", LEAD))
+        self.assertFalse(search_result_relevant("Help on Windows - Microsoft", "Microsoft support", LEAD))
+        self.assertTrue(search_result_relevant("Keystone & Parker Law Group profile",
+                                               "Chicago attorneys", LEAD))
+
     def test_search_outage_does_not_certify_absence(self):
         found=classify_search_results([{"responded":False,"urls":[]},{"responded":True,"urls":[]}])
         self.assertEqual(found["status"],"inconclusive")

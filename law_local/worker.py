@@ -477,6 +477,16 @@ def _links_from_html(html):
             pass
     return links[:35]
 
+def search_result_relevant(title,description,lead):
+    """Discard generic search-index noise before treating provider output as evidence."""
+    firm=norm(lead.get("firm",""))
+    combined=norm(str(title or "")+" "+str(description or ""))
+    tokens=[t for t in firm.split() if len(t)>3 and t not in {"firm","office","law","legal","attorneys","lawyers","the","and","llp","pllc"}]
+    if not tokens:
+        return False
+    # All distinctive firm-name tokens must be present; a generic query hit is not a search result.
+    return all(t in combined.split() for t in tokens)
+
 def search_for_firm(lead):
     term='"'+str(lead["firm"]).replace('"',"")+'"'+" law firm "+str(lead.get("city") or "")+" "+str(lead.get("state") or "")
     queries=[
@@ -491,12 +501,17 @@ def search_for_firm(lead):
                 root=ET.fromstring(page)
                 items=root.findall(".//item")
                 responded=root.tag.lower().endswith("rss") or bool(items)
-                links=[(item.findtext("link") or "").strip() for item in items]
+                links=[(item.findtext("link") or "").strip() for item in items
+                       if search_result_relevant(item.findtext("title"),item.findtext("description"),lead)]
+                # A valid RSS envelope full of irrelevant suggestions is not
+                # firm-specific negative website evidence.
+                responded=bool(responded and links)
             else:
                 responded="duckduckgo" in page.lower() and (
                     "result__a" in page.lower() or "no results" in page.lower()
                 )
                 links=_links_from_html(page)
+                responded=bool(responded and search_result_relevant(page,"",lead) and links)
             out.append({"responded":bool(responded),"urls":[v for v in links if _public_http_url(v)]})
         except Exception:
             out.append({"responded":False,"urls":[]})
