@@ -56,3 +56,9 @@ Verified in Chrome at 1440px and 390px with no overflow, including bar/donut swi
 - Metrics Gist now exposes lastVerification timestamp/exit/siteHealth from local log without source URLs, names or phones; dashboard uses the latest recorded verification state, not an old one-off provider probe.
 - Connected Google Sheets tab Verified Calling Queue was verified present (header A:L, zero eligible rows). Its hourly connected sync is active; local service-account writer remains blocked pending Google credentials, so do not claim native unattended local API upsert is configured.
 - 0 real qualified calling leads, independent firmwide headcount and website absence still not solved. Never count raw contacts as qualified.
+
+## October 16 geographic and archive selection fixes
+- The Mac job was observed to finish with exit 0 after controller crash repair; verification exit 3 still records degraded site screening separately.
+- Existing coverage.sqlite3 contained leftover FL and NY generic source rows. Queries now constrain scheduled generic discovery to configured STATES, preventing stale checkpoint rows from forcing repeated Florida/NY runs.
+- Archive triage now includes NY registrations, with NY prioritized to ensure the previously excluded source is actually tested. State registration counts remain *research-only*, never firmwide headcount proof.
+- These fixes improve scheduling and coverage but do not cure search-provider health or produce qualified calling leads.

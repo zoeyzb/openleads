@@ -9,7 +9,7 @@ def run(limit=30):
  c=sqlite3.connect(DB,timeout=15)
  c.execute("""CREATE TABLE IF NOT EXISTS source_triage (lead_id TEXT PRIMARY KEY, status TEXT, website_url TEXT, source_checked_at TEXT, error TEXT)""")
  c.commit()
- rows=c.execute("""SELECT lead_id,firm,phone,city,state,source_url FROM source_research WHERE source='FL roster' AND lead_id NOT IN (SELECT lead_id FROM source_triage) LIMIT ?""",(limit,)).fetchall()
+ rows=c.execute("""SELECT lead_id,firm,phone,city,state,source_url FROM source_research WHERE source IN ('FL roster','NY registrations') AND lead_id NOT IN (SELECT lead_id FROM source_triage) ORDER BY CASE source WHEN 'NY registrations' THEN 0 ELSE 1 END, lead_id LIMIT ?""",(limit,)).fetchall()
  counts={}
  for lead_id,firm,phone,city,state,url in rows:
   status="source_unavailable"; website=""; error=""

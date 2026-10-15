@@ -95,11 +95,11 @@ def cycle():
    except subprocess.TimeoutExpired:
     (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),archive_triage_error="timeout"))+"\n")
   cov=connect()
-  rows=cov.execute("SELECT state FROM areas WHERE source='directory' AND (next_retry IS NULL OR next_retry <= ?) ORDER BY coalesce(last_attempt,'') LIMIT 1",(now(),)).fetchall()
+  rows=cov.execute("SELECT state FROM areas WHERE source='directory' AND state IN (" + ",".join("?" for _ in STATES) + ") AND (next_retry IS NULL OR next_retry <= ?) ORDER BY coalesce(last_attempt,'') LIMIT 1",(*STATES,now())).fetchall()
   if not rows:
    for st in STATES: cov.execute("INSERT OR IGNORE INTO areas(state,source) VALUES(?,'directory')",(st,))
    cov.commit()
-   rows=cov.execute("SELECT state FROM areas WHERE source='directory' AND (next_retry IS NULL OR next_retry <= ?) ORDER BY coalesce(last_attempt,'') LIMIT 1",(now(),)).fetchall()
+   rows=cov.execute("SELECT state FROM areas WHERE source='directory' AND state IN (" + ",".join("?" for _ in STATES) + ") AND (next_retry IS NULL OR next_retry <= ?) ORDER BY coalesce(last_attempt,'') LIMIT 1",(*STATES,now())).fetchall()
   if not rows:
    print("no area due; calling and strict exports only");calling_export();strict_export();return 0
   st=rows[0][0]
