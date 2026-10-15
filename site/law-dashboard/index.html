@@ -25,6 +25,13 @@
    <article class="plain-stat"><p class="stat-title">SOURCE PAGES TRIAGED <span>03 / 03</span></p><strong id="triaged">—</strong><p>Archived candidates checked and checkpointed locally.</p><div class="stat-foot"><span class="small-dot green"></span> Reuse existing research</div></article>
  </section>
  <section class="blocking" id="blocking"><span class="blocking-ico">!</span><div><strong id="blocking-title">Connecting to your Mac metrics feed</strong><p id="blocking-description">Metrics update from your local SQLite databases through a sanitized publisher.</p></div><a href="#systems">View system health <span>↗</span></a></section>
+ <section class="analytics" aria-label="Visual analytics">
+   <div class="panel analytics-main"><div class="section-top"><div><p class="overline">DATA COMPOSITION</p><h2>Where your research comes from</h2></div><div class="chart-switch" role="group" aria-label="Chart type"><button type="button" class="active" data-view="bar">Bars</button><button type="button" data-view="donut">Donut</button></div></div>
+   <p class="panel-description">Recovered source contacts by state. This is research volume, not qualified calling leads.</p>
+   <div class="chart-frame"><div class="chart-plot" id="source-chart" aria-label="Research source breakdown chart"></div><div class="chart-legend" id="source-legend"></div></div></div>
+   <div class="panel analytics-side"><div class="section-top"><div><p class="overline">ACTIVE QUEUE</p><h2>Candidate breakdown</h2></div><span class="tiny-tag">LIVE LOCAL DB</span></div>
+   <p class="panel-description">Why the work queue has not produced verified contacts.</p><div class="queue-bars" id="queue-bars"></div><div class="queue-foot"><strong id="queue-total">—</strong><span>total candidates requiring validation</span></div></div>
+ </section>
  <div class="two-column">
   <section class="panel" id="pipeline"><div class="section-top"><div><p class="overline">QUALIFICATION ENGINE</p><h2>Where records stop</h2></div><span class="tiny-tag">PHONE FIRST</span></div><p class="panel-description">These are separate evidence stages—not an invented conversion rate.</p>
     <div class="stages"><div class="stage"><div class="stage-mark completed">01</div><div class="stage-copy"><strong>Source inventory</strong><small>Deduplicated research, not proven qualified</small></div><b id="source-stage">—</b></div>

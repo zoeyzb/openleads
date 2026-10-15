@@ -35,7 +35,8 @@ def snapshot():
   try: provider=json.loads(logfile.read_text().splitlines()[-1])["website_search_provider_health"]["status"]
   except (ValueError,KeyError,IndexError):pass
  catalog=count(ROOT/"research_catalog.sqlite3","source_research")
- return {"schema":1,"updatedAt":datetime.now(timezone.utc).isoformat(timespec="seconds"),"host":"Mac local worker","research":catalog,"callingQualified":qualified,"candidateStatuses":statuses,"triageStatuses":{k:v for k,v in triage},"coverage":coverage,"providerHealth":provider,"source":"mac-sqlite-aggregate","note":"Research rows are not verified leads. Email is optional for phone-qualified leads."}
+ sources=rows(ROOT/"research_catalog.sqlite3","SELECT source,COUNT(*) FROM source_research GROUP BY source ORDER BY source")
+ return {"schema":1,"updatedAt":datetime.now(timezone.utc).isoformat(timespec="seconds"),"host":"Mac local worker","research":catalog,"sourceBreakdown":{str(k):int(v) for k,v in sources},"callingQualified":qualified,"candidateStatuses":statuses,"triageStatuses":{k:v for k,v in triage},"coverage":coverage,"providerHealth":provider,"source":"mac-sqlite-aggregate","note":"Research rows are not verified leads. Email is optional for phone-qualified leads."}
 def api(args,body=None):
  command=["/opt/homebrew/bin/gh","api",*args]
  r=subprocess.run(command,input=json.dumps(body) if body else None,text=True,capture_output=True,timeout=25)
