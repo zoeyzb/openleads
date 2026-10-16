@@ -90,10 +90,10 @@ class QualityTests(unittest.TestCase):
             {"responded":False,"urls":[]}])
         self.assertEqual(found["status"],"review_website")
 
-    def test_email_still_optional_for_calling(self):
+    def test_missing_email_never_qualifies(self):
         html=PROFILE.replace("intake@keystoneparker.testing-law.org","")
         verdict=evaluate_candidate(LEAD,html,[{"responded":True,"urls":[]},{"responded":True,"urls":[]}],mx_check=lambda domain:False)
-        self.assertEqual(verdict["status"],"call_qualified_no_email")
+        self.assertEqual(verdict["status"],"research_missing_verified_email")
 
     def test_search_index_noise_does_not_count_as_firm_match(self):
         from law_local.worker import search_result_relevant
@@ -149,7 +149,7 @@ class QualityTests(unittest.TestCase):
         result=evaluate_candidate(LEAD, PROFILE.replace("intake@keystoneparker.testing-law.org",""),
                                   [{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
                                   mx_check=lambda domain:True)
-        self.assertEqual(result["status"],"call_qualified_no_email")
+        self.assertEqual(result["status"],"research_missing_verified_email")
         self.assertEqual(result["email"],"")
 
     def test_strict_gate_requires_mx_and_two_no_site_checks(self):
@@ -158,19 +158,18 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(good["status"],"strict_eligible")
         bad=evaluate_candidate(LEAD,PROFILE,[{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
                                mx_check=lambda domain:False)
-        self.assertEqual(bad["status"],"call_qualified_no_email")
+        self.assertEqual(bad["status"],"research_missing_verified_email")
         self.assertEqual(bad["email"],"")
 
-    def test_fl_active_roster_size_not_required_but_site_checks_are(self):
+    def test_fl_active_roster_count_is_not_firmwide_size(self):
         lead={**LEAD,"firm":"Abrahamson & Uiterwyk Injury Lawyers",
               "phone":"7277259411",
               "source_url":"https://www.floridalawdirectory.com/firm/abrahamson-uiterwyk-injury-lawyers"}
         page="<h1>Abrahamson & Uiterwyk Injury Lawyers</h1><p>727-725-9411</p><p>Attorneys 5 active</p>"
         result=evaluate_candidate(lead,page,[{"responded":True,"urls":[]},
                               {"responded":True,"urls":[]}],lambda domain:True)
-        self.assertEqual(result["status"],"call_qualified_no_email")
-        self.assertEqual(result["qualification_scope"],"law_no_owned_website_any_size")
-        self.assertEqual(result["attorneys"],5)
+        self.assertEqual(result["status"],"review_headcount_scope")
+        self.assertEqual(result["attorneys"],0)
 
     def test_owned_site_hint_still_trumps_fl_size_scope(self):
         lead={**LEAD,"firm":"Abrahamson & Uiterwyk Injury Lawyers",
@@ -189,7 +188,7 @@ class QualityTests(unittest.TestCase):
             db.record(LEAD,{"status":"review_headcount_scope","reason":"old policy"})
             db.close()
             db=SqliteQueue(filename)
-            self.assertEqual(db.counts().get("pending"),1)
+            self.assertEqual(db.counts().get("review_headcount_scope"),1)
             self.assertEqual(db.counts()["calling_qualified"],0)
             db.close()
 
@@ -226,32 +225,32 @@ class QualityTests(unittest.TestCase):
             self.assertEqual(db.conn.execute("SELECT attempts FROM candidates").fetchone()["attempts"],1)
             db.close()
 
-    def test_calling_target_counts_both_optional_email_cases(self):
+    def test_phone_only_record_is_not_eligible(self):
         with tempfile.TemporaryDirectory() as folder:
             db=SqliteQueue(Path(folder)/"law.sqlite3")
             self.assertTrue(db.add(LEAD))
             from datetime import datetime,timezone
             db.record(LEAD,{"status":"call_qualified_no_email","attorneys":4,
                 "phone":"3124221836","headcount_source":LEAD["source_url"],
-                "site_status":"screened_no_site", "qualification_scope":"law_no_owned_website_any_size",
+                "site_status":"screened_no_site", "qualification_scope":"law_no_owned_website_2_10_email",
                 "site_evidence":{"providers":[{"responded":True,"urls":[]},{"responded":True,"urls":[]}]},
                 "checked_at":datetime.now(timezone.utc).isoformat()})
-            self.assertEqual(db.counts()["calling_qualified"],1)
+            self.assertEqual(db.counts()["calling_qualified"],0)
             self.assertEqual(db.counts().get("strict_eligible",0),0)
             export_path=Path(folder)/"call.csv"
-            self.assertEqual(db.export("calling_qualified",export_path),1)
+            self.assertEqual(db.export("calling_qualified",export_path),0)
             db.close()
 
-    def test_any_size_and_unreported_size_can_qualify_with_proof(self):
+    def test_unreported_firmwide_size_cannot_qualify(self):
         page=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys.","")
         result=evaluate_candidate(LEAD,page,[{"responded":True,"urls":[]},
              {"responded":True,"urls":[]}],lambda domain:False)
-        self.assertEqual(result["status"],"call_qualified_no_email")
+        self.assertEqual(result["status"],"review_headcount_scope")
         self.assertEqual(result["attorneys"],0)
         with tempfile.TemporaryDirectory() as folder:
             db=SqliteQueue(Path(folder)/"law.sqlite3")
             db.add(LEAD);db.record(LEAD,result)
-            self.assertEqual(db.counts()["calling_qualified"],1)
+            self.assertEqual(db.counts()["calling_qualified"],0)
             db.close()
 
     def test_export_does_not_trust_status_without_verified_evidence(self):

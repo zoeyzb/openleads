@@ -42,9 +42,11 @@ class FloridaRosterTests(unittest.TestCase):
         self.assertEqual(status,"size_phone_source_only")
         self.assertEqual((lead["firm"],lead["phone"],lead["published_active_attorneys"]),
                          ("Sample Baker Law, PLLC","8132771144",3))
+        # State-active roster count is useful research metadata only; it is
+        # not firmwide 2-10 proof for final eligibility.
         d=evaluate_published_source(PROFILE,lead)
-        self.assertEqual(d["attorneys"],3)
-        self.assertEqual(d["attorney_range"],(3,3))
+        self.assertEqual(d["attorneys"],0)
+        self.assertIsNone(d["attorney_range"])
         bad,_=parse_roster_profile(PROFILE.replace("3 active","1 active"),URL)
         self.assertIsNotNone(bad)
         large,_=parse_roster_profile(PROFILE.replace("3 active","55 active"),URL)

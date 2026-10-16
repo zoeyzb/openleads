@@ -138,16 +138,9 @@ def evaluate_published_source(html,lead):
             attorneys=int(m.group(1)) if m else 0
     else:
         attorneys=int(m.group(1))
-    # The Florida Bar-derived firm roster publishes a firm-specific count of
-    # ACTIVE licensed attorneys, not the "Firm Size" marketing label.
-    # Accept it only on the attributed /firm/ profile after exact firm AND
-    # published business-phone identity matching above.
-    parsed=urlparse(str(lead.get("source_url","")))
-    if (parsed.hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com" and parsed.path.startswith("/firm/"):
-        roster_match=re.search(r"\bAttorneys\s+(\d{1,4})\s+active\b",raw_text,re.I)
-        if roster_match:
-            attorneys=int(roster_match.group(1))
-            attorney_range=(attorneys,attorneys)
+    # State-active roster counts are discovery metadata, not firmwide size.
+    # Eligibility requires an explicit firm-specific 2-10 count/range from a
+    # source whose scope is the firm, not a jurisdiction-only registration tally.
     # Emails must be literally published in this identity-matched page.
     emails=sorted(set(v.lower() for v in EMAIL_RE.findall(unescape(html))))
     # Provider footer addresses are not prospect contact evidence.
@@ -222,16 +215,21 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
         return {**evidence,"status":"owned_site_or_untrusted_source"}
     if not firm_identity_matches(source_html,lead):
         return {**evidence,"status":"unverified_identity"}
-    # Campaign policy: any private law-firm size is acceptable. Firm name and
-    # published phone must match, and owned-site verification is still required.
-    evidence["qualification_scope"]="law_no_owned_website_any_size"
+    # A direct owned-site hint always wins, even when firmwide size is unresolved.
+    if source["website_candidates"]:
+        return {**evidence,"status":"review_website","website_candidates":source["website_candidates"]}
+
+    # Campaign invariant: only firmwide 2-10 attorney firms can become eligible.
+    # The same identity-matched public source must explicitly support that size.
+    if not (2 <= int(source.get("attorneys") or 0) <= 10):
+        return {**evidence,"status":"review_headcount_scope",
+                "reason":"firmwide_2_10_not_verified"}
+    evidence["qualification_scope"]="law_no_owned_website_2_10_email"
     if (urlparse(str(lead.get("source_url",""))).hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com":
         from law_local.florida_roster import clearly_non_law_employer
         if clearly_non_law_employer(lead.get("firm","")):
             return {**evidence,"status":"review_nonlaw_employer",
                     "reason":"Roster lists an in-house or non-law business employer"}
-    if source["website_candidates"]:
-        return {**evidence,"status":"review_website","website_candidates":source["website_candidates"]}
     site=classify_search_results(search_results)
     evidence["site_status"]=site["status"]
     evidence["site_evidence"]={"checked_at":utc_now(),"providers":[
@@ -240,9 +238,8 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
         for r in search_results[:2]]}
     if site["status"]!="screened_no_site":
         return {**evidence,"status":site["status"],"site_evidence":site}
-    # PHONE-FIRST CONTRACT: email is an optional, source-published bonus.
-    # Missing/invalid email never disqualifies an independently verified
-    # law firm with a published phone and no owned site (any attorney count).
+    # Source-published usable email is a hard eligibility gate. Never guess an
+    # address and never promote a phone-only record into the eligible pool.
     for email in source["emails"]:
         domain=email.rsplit("@",1)[-1]
         try:
@@ -253,9 +250,9 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
             evidence["email"]=email
             evidence["email_source"]=lead.get("source_url","")
             break
-    # The calling list requires a published business phone and no owned site.
-    # Preserve separate stricter eligibility for source-published usable email.
-    return {**evidence,"status":"strict_eligible" if evidence["email"] else "call_qualified_no_email"}
+    if not evidence["email"]:
+        return {**evidence,"status":"research_missing_verified_email"}
+    return {**evidence,"status":"strict_eligible"}
 
 class SqliteQueue:
     def __init__(self,path):
@@ -279,12 +276,11 @@ class SqliteQueue:
             );
             CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status);
         """)
-        # Re-evaluate old records previously rejected solely for no email.
-        self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status='call_ready_no_email'")
-        # Migration: firmwide attorney count is no longer an outreach criterion.
-        # Prior size-only reviews must get website screening; neither this
-        # migration nor any empty Maps website field grants eligibility.
-        self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status='review_headcount_scope'")
+        # Re-evaluate legacy phone-only statuses under the current hard gates:
+        # firmwide 2-10 + independent no-owned-site + source-verified usable email.
+        self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status IN ('call_ready_no_email','call_qualified_no_email')")
+        # Keep unresolved firmwide-size records in research. They are not
+        # eligible until a firm-specific public source proves 2-10 attorneys.
         self.conn.commit()
     @staticmethod
     def _id(lead):
@@ -335,11 +331,14 @@ class SqliteQueue:
                 return False
             if evidence.get("status")!=status or evidence.get("site_status")!="screened_no_site":
                 return False
-            if evidence.get("qualification_scope")!="law_no_owned_website_any_size":
+            if evidence.get("qualification_scope")!="law_no_owned_website_2_10_email":
+                return False
+            attorneys=int(evidence.get("attorneys") or 0)
+            if not (2 <= attorneys <= 10):
                 return False
             if not normalize_phone(row["phone"]) or normalize_phone(row["phone"])!=normalize_phone(evidence.get("phone")):
                 return False
-            identity_source=evidence.get("headcount_source") or row["source_url"]
+            identity_source=evidence.get("headcount_source")
             if not identity_source:
                 return False
             if not _third_party(urlparse(identity_source).hostname or ""):
@@ -368,11 +367,11 @@ class SqliteQueue:
     def counts(self):
         totals=dict(self.conn.execute("SELECT status,COUNT(*) FROM candidates GROUP BY status").fetchall())
         totals["calling_qualified"]=sum(
-            1 for row in self.conn.execute("SELECT phone,status,source_url,result_json FROM candidates WHERE status IN ('strict_eligible','call_qualified_no_email')")
-            if self._verified_for_export(row,json.loads(row["result_json"]),row["status"]))
+            1 for row in self.conn.execute("SELECT phone,status,source_url,result_json FROM candidates WHERE status='strict_eligible'")
+            if self._verified_for_export(row,json.loads(row["result_json"]),"strict_eligible"))
         return totals
     def export(self,status,path):
-        statuses=("strict_eligible","call_qualified_no_email") if status=="calling_qualified" else (status,)
+        statuses=("strict_eligible",) if status=="calling_qualified" else (status,)
         placeholders=",".join("?" for _ in statuses)
         rows=self.conn.execute(f"""SELECT firm,phone,city,state,source_url,result_json
              FROM candidates WHERE status IN ({placeholders}) ORDER BY state,firm""",statuses).fetchall()
@@ -384,7 +383,7 @@ class SqliteQueue:
             w.writeheader()
             for row in rows:
                 evidence=json.loads(row["result_json"])
-                candidate_status="strict_eligible" if evidence.get("status")=="strict_eligible" else "call_qualified_no_email"
+                candidate_status="strict_eligible"
                 if not self._verified_for_export(row,evidence,candidate_status):
                     continue
                 w.writerow({
@@ -458,9 +457,10 @@ def apply_verified_bar_contact_proof(db,lead,result):
                     "email":"","email_source":"",
                     "website_candidates":[website],
                     "website_evidence_source":proof["email_source"]}
-    if (result.get("status")!="call_qualified_no_email"
+    if (result.get("status")!="research_missing_verified_email"
             or result.get("site_status")!="screened_no_site"
-            or result.get("qualification_scope")!="law_no_owned_website_any_size"
+            or result.get("qualification_scope")!="law_no_owned_website_2_10_email"
+            or not (2 <= int(result.get("attorneys") or 0) <= 10)
             or normalize_phone(result.get("phone"))!=expected_phone):
         return result
     for proof in supported:

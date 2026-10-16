@@ -61,7 +61,7 @@ def calling_export():
   result=queue.export("calling_qualified",ROOT/"call-qualified-law.csv")
  finally:
   queue.close()
- print(json.dumps({"event":"calling_export","phone_qualified":result,"file":str(ROOT/"call-qualified-law.csv")}))
+ print(json.dumps({"event":"calling_export","eligible_qualified":result,"file":str(ROOT/"call-qualified-law.csv")}))
  return result
 
 def discovery_result(exit_code,output):

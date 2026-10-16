@@ -16,7 +16,7 @@ class ExportTests(unittest.TestCase):
  def tearDown(self):
   self.c.close();campaign.DB,campaign.OUT=self.orig;self.t.cleanup()
  def add(self,status="strict_eligible",email="info@sample-law.test",site_status="screened_no_site",attorneys=5,checked=None,email_source="https://www.lawyers.com/firm/fixture",headcount_source="https://www.lawyers.com/firm/fixture"):
-  v={"status":status,"email":email,"site_status":site_status,"qualification_scope":"law_no_owned_website_any_size","attorneys":attorneys,
+  v={"status":status,"email":email,"site_status":site_status,"qualification_scope":"law_no_owned_website_2_10_email","attorneys":attorneys,
      "phone":"3125552222","site_evidence":{"providers":[{"responded":True,"urls":[]},{"responded":True,"urls":[]}]},
      "checked_at":checked or datetime.now(timezone.utc).isoformat(),"email_source":email_source,"headcount_source":headcount_source}
   self.c.execute("INSERT INTO candidates VALUES(?,?,?,?,?,?,?)",("Fixture & Partners","3125552222","Chicago","IL","https://www.lawyers.com/firm/fixture",status,json.dumps(v)));self.c.commit()
@@ -25,13 +25,12 @@ class ExportTests(unittest.TestCase):
   self.assertEqual(campaign.strict_export(),1)
   with campaign.OUT.open() as fd:
    self.assertEqual(len(list(csv.DictReader(fd))),1)
- def test_email_verified_without_attorney_count(self):
+ def test_email_without_verified_attorney_count_is_excluded(self):
   self.add(attorneys=None)
-  self.assertEqual(campaign.strict_export(),1)
- def test_published_email_without_firm_size_directory_source(self):
-  # Any-size policy: source-verified email and phone/site gates suffice.
-  self.add(attorneys=None,headcount_source="")
-  self.assertEqual(campaign.strict_export(),1)
+  self.assertEqual(campaign.strict_export(),0)
+ def test_published_email_without_firm_size_source_is_excluded(self):
+  self.add(attorneys=5,headcount_source="")
+  self.assertEqual(campaign.strict_export(),0)
  def test_phone_only_excluded(self):
   self.add(status="call_qualified_no_email")
   self.assertEqual(campaign.strict_export(),0)

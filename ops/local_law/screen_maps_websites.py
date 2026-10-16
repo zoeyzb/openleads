@@ -61,20 +61,11 @@ def screen(db_path,limit=10,search=search_for_firm,health_ok=None,research_path=
     verdict={'status':status,'reason':'known_owned_website_positive_control_failed'}
    if status=='screened_no_site':
     stats['confirmed_no_site']+=1
-    candidate={'firm':lead['firm'],'phone':lead['phone'],'city':lead['city'],
-         'state':lead['state'],'source_url':lead['maps_url']}
-    db.add(candidate)
-    proof={'status':'call_qualified_no_email','firm':lead['firm'],'phone':lead['phone'],
-      'attorneys':None,'email':'','email_source':'',
-      'qualification_scope':'law_no_owned_website_any_size',
-      'maps_provenance':True,'headcount_source':lead['maps_url'],
-      'source_url':lead['maps_url'],'site_status':'screened_no_site',
-      'checked_at':utc_now(),
-      'site_evidence':{'providers':[{'responded':bool(p.get('responded')),
-          'urls':p.get('urls',[])[:10]} for p in sources[:2]]}}
-    before=db.counts()['calling_qualified']
-    db.record(candidate,proof)
-    stats['new_calling_qualified']+=max(0,db.counts()['calling_qualified']-before)
+    # Website clearance is only one gate. Preserve the Maps candidate for
+    # firmwide 2-10 + source-published usable-email research; never promote it
+    # directly into an eligible/calling-qualified record.
+    db.conn.execute("UPDATE maps_raw_candidates SET status='needs_firmwide_size_and_email' WHERE map_id=?",
+                    (lead['map_id'],))
    elif status=='review_website':stats['possible_owned_website']+=1
    else:stats['provider_degraded']+=1
    evidence={'status':status,'verdict':verdict,'providers':[
