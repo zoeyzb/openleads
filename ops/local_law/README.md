@@ -129,3 +129,7 @@ Existing catalog feeds a bounded 20-per-run candidate bridge without a second da
 ## 2026-10-16 — operator homepage consolidation
 - Removed equal-weight dashboard KPI cards and generic analytics layout. A single prominent call-ready counter, three supporting figures, two precise evidence blockers, a compact review status list, and real hourly activity now form the homepage. All remain sourced from the Mac feed.
 - Kept five existing navigation routes and source controls. Desktop (1440) and mobile (390) Chrome checks passed across 5 routes with no page exceptions or overflow. No Vercel deployment.
+
+## 2026-10-16 CSS corruption fix
+- Root cause of white unstyled localhost screenshot: `site/law-dashboard/style.css` accidentally contained a complete duplicate of the HTML document (served as `text/css`). Restored actual CSS and checked served bytes, computed styles, desktop/mobile browser render. Preserve CSS content checks in reviews.
+- No changes to the user's separate pending scraper work or Vercel deployment.
