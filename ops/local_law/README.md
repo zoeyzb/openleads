@@ -90,3 +90,8 @@ Existing catalog feeds a bounded 20-per-run candidate bridge without a second da
 - The verifier preflight remains visible in logs; known-owned-site controls are not bypassed. This avoids stalling source triage while external search is down; **it does not certify no website**.
 - Live bounded test against the Mac queue processed 2 sourced candidates (both inconclusive), no false qualified leads. 87 core tests passed, including outage no-search regression.
 - No new repository, hosted runtime, database, or worker service created.
+
+## 2026-10-16 — UI and portfolio branch (not deployed)
+- Actual GitHub branch includes a black/charcoal/red Law Operations skin plus a searchable and exportable **aggregate-only** CRM source explorer. This is not a fake row-level contacts table and does not expose personal leads to a public website.
+- Separate `site/marketing.html` is the portfolio/agency case-study landing page; primary hero leads to custom website / automation inquiries and the real dashboard. Local preview: `cd site && python3 -m http.server 8765`, then visit `/marketing.html` and `/law-dashboard/`. No hosted scraper, paid service or second website project.
+- Website-verification search providers are still degraded; firmwide count verification incomplete. Continue using source-based strict guards; never fabricate lead success or statistics. Production Vercel was **not deployed** at user request.
