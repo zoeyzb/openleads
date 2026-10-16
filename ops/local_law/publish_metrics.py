@@ -54,6 +54,12 @@ def api(args,body=None):
  if r.returncode:raise RuntimeError("GitHub Gist request failed: "+r.stderr[-350:])
  return json.loads(r.stdout)
 def publish():
+ # Rebuild private local CRM snapshot on the SAME publisher schedule.
+ # A failure here must not risk exposing contacts through public Gist data.
+ import sys
+ sys.path.insert(0,str(ROOT/"openleads"))
+ from ops.local_law.export_local_crm import main as export_private_crm
+ export_private_crm()
  data=snapshot()
  # Persist one aggregate sample per UTC hour; do not manufacture earlier history.
  try:

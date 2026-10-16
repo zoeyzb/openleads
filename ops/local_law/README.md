@@ -137,3 +137,7 @@ Existing catalog feeds a bounded 20-per-run candidate bridge without a second da
 ## 2026-10-16 — Private Mac candidate review table
 - Real, row-level local candidate data now powers Queue search, pagination and evidence inspection. The snapshot is generated from existing SQLite by `python3 ops/local_law/export_local_crm.py`, capped at 250 rows, and kept in gitignored `site/law-dashboard/local-queue.json` with 0600 permissions. The browser only loads private rows when running on localhost; public deployment retains aggregate-only information.
 - Candidate rows are **not** qualified lead claims; independent firm-wide 2–10 attorney evidence, no owned website and a published callable business phone remain hard gates; email is optional.
+
+## 2026-10-16 Mac and Sheet sync
+Existing 10-minute metrics launch agent now refreshes private local-queue.json from SQLite before publishing aggregate Gist metrics. Mac-local producer import path is fixed; live launchd kickstart produced a 176-row private snapshot and a successful aggregate Gist publication. No new services.
+Google Sheet Verified Calling Queue read succeeded with header-only data; latest strict calling export yielded 0 entries. Native Mac Sheets writer still lacks LAW_SHEETS_CREDENTIALS. Connected hourly task is enabled to perform verified source-backed idempotent Sheets upserts when qualifying rows exist. No unqualified candidate must ever be uploaded.
