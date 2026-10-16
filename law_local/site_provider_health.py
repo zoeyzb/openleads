@@ -1,7 +1,7 @@
 """Do not burn 200 source-backed leads on known-broken site-search providers.
 
 Probes with a KNOWN owned-website firm and a published exact phone, requires
-both search providers parseable and at least one known owned domain in returned
+both search providers parseable and each finding the known owned domain in returned
 results. A success never certifies that any OTHER firm has no website; it only
 permits the existing strict two-provider evidence audit to run.
 """
@@ -20,20 +20,24 @@ def audit_provider_health(lookups=None):
     lookups=lookups or worker.search_for_firm
     sources=lookups(CONTROL)
     both_ready=len(sources)>=2 and all(src.get("responded") is True for src in sources[:2])
-    relevant=False
-    if both_ready:
-        for s in sources[:2]:
-            for raw in s.get("urls",[]):
-                try:
-                    host=(urlparse(worker.search_target(raw)).hostname or "").lower()
-                except Exception:
-                    continue
-                if host==KNOWN_DOMAIN or host.endswith("."+KNOWN_DOMAIN):
-                    relevant=True
+    details=[]
+    for source in sources[:2]:
+        found=False
+        for raw in source.get("urls",[]):
+            try:
+                host=(urlparse(worker.search_target(raw)).hostname or "").lower()
+            except Exception:
+                continue
+            if host==KNOWN_DOMAIN or host.endswith("."+KNOWN_DOMAIN):
+                found=True
+        details.append({"responded":bool(source.get("responded")),
+                        "result_count":len(source.get("urls",[])),
+                        "positive_control_found":found})
+    relevant=len(details)==2 and all(d["positive_control_found"] for d in details)
     return {"status":"usable" if both_ready and relevant else "degraded",
             "responded":sum(bool(s.get("responded")) for s in sources[:2]),
-            "positive_control_found":bool(relevant),"provider_details":[{"responded":bool(v.get("responded")),"result_count":len(v.get("urls",[]))} for v in sources[:2]],
-            "reason":"site searches are not usable for strict negative evidence unless both answer and find a known positive site"}
+            "positive_control_found":relevant,"provider_details":details,
+            "reason":"Each independent provider must answer and find the known owned website"}
 
 def main():
     p=argparse.ArgumentParser()

@@ -34,10 +34,10 @@ class FloridaRosterTests(unittest.TestCase):
     def test_list_filters_first_without_page_guesses(self):
         a=listing_firms(LIST)
         self.assertEqual(a["all_profiles"],6)
-        self.assertEqual(len(a["candidates"]),4)
+        self.assertEqual(len(a["candidates"]),6)
         self.assertIn((URL,3),a["candidates"])
-        self.assertNotIn((ROOT+"/firm/solo-lawyer",1),a["candidates"])
-    def test_profile_needs_current_2_to_10_and_published_phone(self):
+        self.assertIn((ROOT+"/firm/solo-lawyer",1),a["candidates"])
+    def test_profile_accepts_solo_and_large_with_published_phone(self):
         lead,status=parse_roster_profile(PROFILE,URL)
         self.assertEqual(status,"size_phone_source_only")
         self.assertEqual((lead["firm"],lead["phone"],lead["published_active_attorneys"]),
@@ -46,7 +46,9 @@ class FloridaRosterTests(unittest.TestCase):
         self.assertEqual(d["attorneys"],3)
         self.assertEqual(d["attorney_range"],(3,3))
         bad,_=parse_roster_profile(PROFILE.replace("3 active","1 active"),URL)
-        self.assertIsNone(bad)
+        self.assertIsNotNone(bad)
+        large,_=parse_roster_profile(PROFILE.replace("3 active","55 active"),URL)
+        self.assertIsNotNone(large)
         none,status=parse_roster_profile(PROFILE.replace("Phone (813) 277-1144",""),URL)
         self.assertIsNone(none)
         self.assertEqual(status,"missing_business_phone")
@@ -87,7 +89,7 @@ class FloridaRosterTests(unittest.TestCase):
             self.assertTrue(robots_permits(fetch))
             report=run(Path(path)/"db.sqlite",max_pages=1,max_profiles=20,
                        seconds=90,fetch_fn=fetch)
-            self.assertEqual(report["fl_roster_listings"]["sized_2_to_10_listings"],4)
+            self.assertEqual(report["fl_roster_listings"]["active_practice_listings"],6)
             self.assertGreaterEqual(report["fl_roster_profiles"]["published_firm_size_phone"],1)
             self.assertEqual(report["counts"].get("pending"),1)
             self.assertEqual(report["counts"].get("calling_qualified"),0)

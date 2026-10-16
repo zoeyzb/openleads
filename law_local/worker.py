@@ -679,7 +679,7 @@ def _extract_directory_profile(url,html):
         if not phone:
             continue
         candidate={"firm":firm,"phone":phone,"city":"","state":"","source_url":url}
-        if 2<=evaluate_published_source(html,candidate)["attorneys"]<=10:
+        if firm_identity_matches(html,candidate):
             return candidate
     return None
 

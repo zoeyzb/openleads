@@ -33,6 +33,23 @@ class MapSiteScreeningTests(unittest.TestCase):
    self.assertEqual(queue.export('calling_qualified',exported),1)
    self.assertEqual(screen(db,5,search=lambda *_:GOOD,health_ok=True)['attempted'],0)
    queue.close()
+ def test_existing_candidate_gets_completed_evidence(self):
+  with tempfile.TemporaryDirectory() as directory:
+   db=self.seed(directory)
+   queue=SqliteQueue(db)
+   queue.add(dict(firm='Example Law Group',phone='3124221836',city='Chicago',state='IL',source_url=MAP))
+   queue.close()
+   self.assertEqual(screen(db,5,search=lambda *_:GOOD,health_ok=True)['new_calling_qualified'],1)
+ def test_old_owned_and_inactive_reviews_are_not_automatically_cleared(self):
+  for status in ('review_website','rejected_inactive'):
+   with tempfile.TemporaryDirectory() as directory:
+    db=self.seed(directory)
+    screen(db,1,search=lambda *_:GOOD,health_ok=False)
+    queue=SqliteQueue(db)
+    mid=queue.conn.execute('SELECT map_id FROM maps_raw_candidates').fetchone()[0]
+    queue.conn.execute('INSERT INTO maps_website_checks VALUES(?,?,?,?)',(mid,'2000-01-01T00:00:00Z',status,'{}'))
+    queue.conn.commit();queue.close()
+    self.assertEqual(screen(db,1,search=lambda *_:GOOD,health_ok=True)['attempted'],0)
  def test_detected_site_is_excluded_even_with_healthy_providers(self):
   with tempfile.TemporaryDirectory() as directory:
    db=self.seed(directory)

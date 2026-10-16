@@ -6,10 +6,17 @@ class SiteProviderHealthTests(unittest.TestCase):
     def test_both_providers_plus_known_owned_domain(self):
         ok=audit_provider_health(lambda control:[
             {"responded":True,"urls":["https://www.brevardtrialattorneys.com/"]},
-            {"responded":True,"urls":[]}
+            {"responded":True,"urls":["https://brevardtrialattorneys.com/"]}
         ])
         self.assertEqual(ok["status"],"usable")
         self.assertTrue(ok["positive_control_found"])
+    def test_one_control_pass_cannot_mask_other_provider_failure(self):
+        result=audit_provider_health(lambda control:[
+            {"responded":True,"urls":["https://brevardtrialattorneys.com/"]},
+            {"responded":True,"urls":[]}
+        ])
+        self.assertEqual(result["status"],"degraded")
+        self.assertFalse(result["provider_details"][1]["positive_control_found"])
     def test_both_http_ok_but_offtopic_invalid(self):
         result=audit_provider_health(lambda control:[
             {"responded":True,"urls":["https://dan.org/","https://reubensbrews.com/"]},

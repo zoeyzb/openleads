@@ -56,9 +56,8 @@ def extract_profile(url,source):
  if not valid_profile_url(url):return None,'invalid_profile_url'
  p=reader(source);plain=' '.join(p.parts)
  m=SIZE.search(plain)
- if not m:return None,'no_explicit_size'
- lo=int(m.group(1));hi=int(m.group(2)) if m.group(2) else lo
- if not 2<=lo<=hi<=10:return None,'outside_firm_size'
+ lo=int(m.group(1)) if m else None
+ hi=(int(m.group(2)) if m.group(2) else lo) if m else None
  headings=[]
  for raw in H_TAG.findall(source):
   title=' '.join(html.unescape(re.sub('<[^>]*>',' ',raw)).split())
@@ -87,6 +86,17 @@ def extract_profile(url,source):
 
 def ensure(con):
  con.executescript('''CREATE TABLE IF NOT EXISTS cc_law_profile_urls(url TEXT PRIMARY KEY,checked_at TEXT DEFAULT '',status TEXT DEFAULT 'pending',firm TEXT DEFAULT '',phone TEXT DEFAULT '',firm_size_low INTEGER,firm_size_high INTEGER,website TEXT DEFAULT ''); CREATE INDEX IF NOT EXISTS idx_cc_profile_status ON cc_law_profile_urls(status); CREATE TABLE IF NOT EXISTS cc_law_cursors(letter TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',completed_at TEXT NOT NULL DEFAULT ''); CREATE TABLE IF NOT EXISTS cc_law_index_cursors(crawl TEXT NOT NULL,letter TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',completed_at TEXT NOT NULL DEFAULT '',PRIMARY KEY(crawl,letter));''')
+ # Recover historical size-only rejections exactly once, preserving every
+ # prior verdict in an append-only policy migration table. Never reset owned
+ # website exclusions or provider failures.
+ con.execute("""CREATE TABLE IF NOT EXISTS cc_size_policy_rechecks(
+     url TEXT PRIMARY KEY, prior_status TEXT NOT NULL, reopened_at TEXT NOT NULL)""")
+ con.execute("""INSERT OR IGNORE INTO cc_size_policy_rechecks
+     SELECT url,status,? FROM cc_law_profile_urls
+     WHERE status IN ('outside_firm_size','no_explicit_size')""",(utc_now(),))
+ con.execute("""UPDATE cc_law_profile_urls SET status='needs_size_parser_recheck'
+     WHERE status IN ('outside_firm_size','no_explicit_size')
+     AND url IN (SELECT url FROM cc_size_policy_rechecks)""")
  # Migrate already completed letters from the original single-crawl cursor.
  # This is idempotent and prevents rerunning the same 64 known profiles.
  for letter,attempts,last_error,completed_at in con.execute(

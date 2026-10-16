@@ -18,4 +18,14 @@ class MapLeadResearchExportTests(unittest.TestCase):
    with out.open() as f: rows=list(csv.DictReader(f))
    self.assertEqual(rows[0]['Calling qualified'],'NO')
    self.assertEqual(rows[0]['Independent website status'],'not_checked')
+ def test_verified_and_inactive_records_are_not_research_exports(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);db=root/'law.db'
+   c=sqlite3.connect(db)
+   c.executescript('CREATE TABLE maps_raw_candidates(map_id TEXT PRIMARY KEY,firm TEXT,phone TEXT,city TEXT,state TEXT,maps_url TEXT,status TEXT); CREATE TABLE maps_website_checks(map_id TEXT PRIMARY KEY,checked_at TEXT,status TEXT,result_json TEXT);')
+   for i,status in enumerate(('screened_no_site','rejected_inactive','manual_followup_required')):
+    c.execute('INSERT INTO maps_raw_candidates VALUES(?,?,?,?,?,?,?)',(str(i),'Sample Law LLP','3124221836','Chicago','IL','https://google.com/maps','unverified_headcount'))
+    c.execute('INSERT INTO maps_website_checks VALUES(?,?,?,?)',(str(i),'2026-10-16T00:00:00Z',status,'{}'))
+   c.commit();c.close()
+   self.assertEqual(export(db,root/'out.csv')['research_prospects'],1)
 if __name__=='__main__':unittest.main()

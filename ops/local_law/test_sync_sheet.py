@@ -12,7 +12,7 @@ class SyncProofTests(unittest.TestCase):
     with p.open("w",newline="") as f:
      w=csv.DictWriter(f,fieldnames=fields);w.writeheader()
      row={"Firm":"Fixture & Partners","Phone":"3124221836","City":"Chicago","State":"IL",
-      "Attorneys":"4","Email":"","Headcount source":"https://directory.example/firm",
+      "Attorneys":"","Email":"","Headcount source":"https://directory.example/firm",
       "Email source":"","Website audit":"screened_no_site","Checked at":"2026-10-13"}
      w.writerow(row)
      w.writerow({**row,"Firm":"Unverified Source","Website audit":"inconclusive"})

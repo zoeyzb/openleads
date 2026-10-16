@@ -21,6 +21,7 @@ def screen(db_path,limit=10,search=search_for_firm,health_ok=None):
  rows=db.conn.execute('''SELECT m.* FROM maps_raw_candidates m
   LEFT JOIN maps_website_checks w ON m.map_id=w.map_id
   WHERE m.status IN ('unverified_headcount','pending_independent_site_audit')
+  AND COALESCE(w.status,'') NOT IN ('review_website','rejected_inactive')
   AND (w.map_id IS NULL OR w.status='inconclusive' OR w.checked_at < ?)
   ORDER BY m.added_at LIMIT ?''',(cutoff,limit)).fetchall()
  if health_ok is None:
@@ -46,18 +47,18 @@ def screen(db_path,limit=10,search=search_for_firm,health_ok=None):
     stats['confirmed_no_site']+=1
     candidate={'firm':lead['firm'],'phone':lead['phone'],'city':lead['city'],
          'state':lead['state'],'source_url':lead['maps_url']}
-    if db.add(candidate):
-     proof={'status':'call_qualified_no_email','firm':lead['firm'],'phone':lead['phone'],
-       'attorneys':None,'email':'','email_source':'',
-       'qualification_scope':'law_no_owned_website_any_size',
-       'maps_provenance':True,'headcount_source':lead['maps_url'],
-       'source_url':lead['maps_url'],'site_status':'screened_no_site',
-       'checked_at':utc_now(),
-       'site_evidence':{'providers':[{'responded':bool(p.get('responded')),
-           'urls':p.get('urls',[])[:10]} for p in sources[:2]]}}
-     before=db.counts()['calling_qualified']
-     db.record(candidate,proof)
-     stats['new_calling_qualified']+=max(0,db.counts()['calling_qualified']-before)
+    db.add(candidate)
+    proof={'status':'call_qualified_no_email','firm':lead['firm'],'phone':lead['phone'],
+      'attorneys':None,'email':'','email_source':'',
+      'qualification_scope':'law_no_owned_website_any_size',
+      'maps_provenance':True,'headcount_source':lead['maps_url'],
+      'source_url':lead['maps_url'],'site_status':'screened_no_site',
+      'checked_at':utc_now(),
+      'site_evidence':{'providers':[{'responded':bool(p.get('responded')),
+          'urls':p.get('urls',[])[:10]} for p in sources[:2]]}}
+    before=db.counts()['calling_qualified']
+    db.record(candidate,proof)
+    stats['new_calling_qualified']+=max(0,db.counts()['calling_qualified']-before)
    elif status=='review_website':stats['possible_owned_website']+=1
    else:stats['provider_degraded']+=1
    evidence={'status':status,'verdict':verdict,'providers':[

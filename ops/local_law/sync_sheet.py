@@ -12,7 +12,7 @@ def rows():
  p=subprocess.run(["/opt/homebrew/bin/python3.11",str(ROOT/"campaign.py"),"export"],capture_output=True,text=True,check=True)
  with (ROOT/"call-qualified-law.csv").open(newline="") as f:
   for r in csv.DictReader(f):
-   if not (r.get("Headcount source") and r.get("Website audit")=="screened_no_site" and 2<=int(r.get("Attorneys") or 0)<=10 and r.get("Phone")):continue
+   if not (r.get("Headcount source") and r.get("Website audit")=="screened_no_site" and r.get("Phone")):continue
    yield r
 def preview():
  batch=[]
