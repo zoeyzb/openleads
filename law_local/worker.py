@@ -15,6 +15,7 @@ import hashlib
 from html import unescape
 from html.parser import HTMLParser
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -306,7 +307,10 @@ class SqliteQueue:
     def pending(self,limit):
         rows=self.conn.execute("""SELECT * FROM candidates
              WHERE status='pending' OR (status='inconclusive' AND attempts < 3)
-             ORDER BY updated ASC LIMIT ?""",(int(limit),)).fetchall()
+             ORDER BY CASE WHEN source_url LIKE 'https://www.inbar.org/%' OR
+                                  source_url LIKE 'https://inbar.org/%' THEN 0 ELSE 1 END,
+                      CASE WHEN status='pending' THEN 0 ELSE 1 END,
+                      updated ASC LIMIT ?""",(int(limit),)).fetchall()
         return [dict(row) for row in rows]
     def record(self,lead,result):
         self.conn.execute("""UPDATE candidates
@@ -493,11 +497,18 @@ def search_for_firm(lead):
         "https://www.bing.com/search?format=rss&"+urlencode({"q":term}),
         "https://html.duckduckgo.com/html/?"+urlencode({"q":term})
     ]
+    # Prefer supported, structured Brave search when explicitly configured.
+    # It replaces only the flaky Bing leg; DuckDuckGo remains independent.
+    # A single provider is never enough to prove a firm lacks an owned site.
     out=[]
+    if os.environ.get("BRAVE_SEARCH_API_KEY"):
+        from law_local.structured_search import brave_search
+        out.append(brave_search(term))
+        queries=queries[1:]
     for index,url in enumerate(queries):
         try:
             page=fetch_public(url,timeout=8)
-            if index==0:
+            if index==0 and not os.environ.get("BRAVE_SEARCH_API_KEY"):
                 root=ET.fromstring(page)
                 items=root.findall(".//item")
                 responded=root.tag.lower().endswith("rss") or bool(items)

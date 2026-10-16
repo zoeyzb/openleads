@@ -21,6 +21,19 @@ LEAD = {
     "source_url": "https://www.lawyers.com/chicago/illinois/keystone-parker-law-group/"
 }
 
+class QueuePriorityTests(unittest.TestCase):
+    def test_official_firm_size_source_first(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue=SqliteQueue(Path(root)/"queue.sqlite")
+            try:
+                for firm,url,phone in [
+                    ("Example First Firm","https://www.floridalawdirectory.com/firm/example", "3124221836"),
+                    ("Evidence Firm", "https://www.inbar.org/member/real", "3177731974")]:
+                    self.assertTrue(queue.add({"firm":firm,"phone":phone,"city":"","state":"IN","source_url":url}))
+                self.assertEqual(queue.pending(1)[0]["firm"],"Evidence Firm")
+                self.assertEqual(queue.counts()["calling_qualified"],0)
+            finally:queue.close()
+
 class QualityTests(unittest.TestCase):
     def test_phone(self):
         self.assertEqual(normalize_phone("+1 (312) 422-1836"), "3124221836")

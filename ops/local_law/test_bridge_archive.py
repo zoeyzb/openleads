@@ -21,4 +21,21 @@ class BridgeTests(unittest.TestCase):
     self.assertEqual(q.counts().get("calling_qualified"),0)
     self.assertEqual(q.counts().get("pending"),6)
    finally:q.close()
+ def test_excludes_generic_and_government_employers(self):
+  with tempfile.TemporaryDirectory() as d:
+   catalog=Path(d)/"catalog.sqlite"; target=Path(d)/"queue.sqlite"
+   c=sqlite3.connect(catalog)
+   c.execute("CREATE TABLE source_research (lead_id TEXT,firm TEXT,phone TEXT,city TEXT,state TEXT,source_url TEXT,reported_attorneys INTEGER,proof_status TEXT,source TEXT)")
+   c.execute("CREATE TABLE source_triage (lead_id TEXT,status TEXT)")
+   names=("Attorney","State Attorney Office","Real Estate Holdings Inc","Miller & Reed Law, PLLC")
+   for idx,name in enumerate(names):
+    c.execute("INSERT INTO source_research VALUES (?,?,?,?,?,?,?,?,?)",(str(idx),name,f"312888{3000+idx}","Chicago","IL",f"https://lawyer.com/firm/{idx}.html",3,"needs_firmwide_size_and_owned_site","FL roster"))
+   c.commit();c.close()
+   q=SqliteQueue(target)
+   try:
+    result=bridge.bridge(catalog,q,10)
+    self.assertEqual(result["added_unverified"],1)
+    self.assertEqual(result["skipped"],3)
+   finally:q.close()
+
 if __name__=="__main__":unittest.main()

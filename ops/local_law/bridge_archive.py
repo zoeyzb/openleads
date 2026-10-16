@@ -10,7 +10,8 @@ from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 from law_local.worker import SqliteQueue, normalize_phone
-from law_local.florida_roster import clearly_non_law_employer
+from law_local.florida_roster import clearly_non_law_employer, ambiguous_employer_identity, NON_PRIVATE
+import re
 
 ROOT=Path.home()/"lead-workspace"
 def bridge(catalog,queue,limit=20):
@@ -31,10 +32,15 @@ def bridge(catalog,queue,limit=20):
                  r.lead_id LIMIT ?
     """,(max(1,limit*6),)).fetchall()
     inserted=0;checked=0;skipped=0
+    # Prioritize identifiable private-law practices; generic in-house employer
+    # and placeholder records should not monopolize the 100-row verifier queue.
+    obvious_nonfirm=re.compile(r"(?i)^(?:attorney|lawyer|counsel|law firm|legal services)$")
     for firm,phone,city,state,url,_ in selected:
         if inserted>=limit:break
         checked+=1
-        if clearly_non_law_employer(firm) or not normalize_phone(phone):
+        if (clearly_non_law_employer(firm) or NON_PRIVATE.search(firm)
+                or ambiguous_employer_identity(firm) or obvious_nonfirm.fullmatch(firm.strip())
+                or not normalize_phone(phone)):
             skipped+=1;continue
         if queue.add(dict(firm=firm,phone=phone,city=city,state=state,source_url=url)):
             inserted+=1
