@@ -17,7 +17,7 @@ from law_local.search_sources import real_profile_urls
 from law_local.maps_extract import COUNTRY_STATE
 from law_local.worker import (
     SqliteQueue, _extract_directory_profile, normalize_phone, norm,
-    fetch_public, utc_now, evaluate_published_source,
+    fetch_public, utc_now, evaluate_published_source, firm_identity_matches,
 )
 
 def ingest_maps_candidates(db,path):
@@ -44,7 +44,8 @@ def ingest_maps_candidates(db,path):
             city=(row.get("city") or "").strip()
             # Must come from a public Maps record whose site field was blank;
             # never infer website absence from missing or malformed metadata.
-            if not firm or not phone or row.get("website_status")!="no_maps_website_field_only":
+            if not firm or not phone or row.get("website_status") not in (
+                    "no_maps_website_field_only","social_only_no_owned_site_field"):
                 continue
             key=norm(firm)+"|"+phone
             inserted+=int(db.conn.execute(
@@ -149,7 +150,8 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
                       "city":record["city"],"state":record["state"],
                       "source_url":url}
                 evidence=evaluate_published_source(html,lead)
-                if 2<=evidence["attorneys"]<=10:
+                if (2<=evidence["attorneys"]<=10
+                        and firm_identity_matches(html,lead)):
                     candidate=lead
             status="not_matching_sourced_size_phone"
             if candidate:

@@ -37,6 +37,23 @@ NON_FIRM=re.compile(
     r"district attorneys?|state attorneys?|county attorneys?|public defenders?|"
     r"attorney general|bar associations?|real estate|title company)\b",re.I)
 EMPTY_WEB={"", "null", "none", "n/a", "na", "-", "no website"}
+# Reuse the plumbing classifier's distinction: public social/directory
+# profiles are not owned business domains. This is still NOT proof of no site.
+SOCIAL_ONLY_HOSTS=("facebook.com","instagram.com","linkedin.com","yelp.com",
+ "yellowpages.com","nextdoor.com","alignable.com","bbb.org",
+ "houzz.com","thumbtack.com","angi.com","homeadvisor.com",
+ "mapquest.com","linktr.ee","beacons.ai","google.com",
+ "maps.app.goo.gl","manta.com","chamberofcommerce.com",
+ "superpages.com","birdeye.com")
+def social_only_profile(url):
+    try:
+        p=urlparse(str(url).strip())
+        host=(p.hostname or "").lower().removeprefix("www.")
+        return p.scheme in ("http","https") and any(
+            host==domain or host.endswith("."+domain) for domain in SOCIAL_ONLY_HOSTS)
+    except ValueError:
+        return False
+
 
 def state_from_address(address):
     address=str(address or "").strip()
@@ -74,13 +91,14 @@ def maps_candidate(row):
     if not name or not phone or p.scheme!="https" or host not in (
         "www.google.com","google.com","maps.google.com"):
         return None,"no_source_identity_or_phone"
-    if website.lower() not in EMPTY_WEB:
+    social_only=social_only_profile(website)
+    if website.lower() not in EMPTY_WEB and not social_only:
         return None,"website_field_present"
     if not LAW_SIGNAL.search(name+" "+category) or NON_FIRM.search(name+" "+category):
         return None,"not_private_law_firm"
     return {
         "firm":name,"phone":phone,"city":city_from_address(address),"state":state_from_address(address),
-        "maps_source":link,"website_status":"no_maps_website_field_only",
+        "maps_source":link,"website_status":"social_only_no_owned_site_field" if social_only else "no_maps_website_field_only",
         "headcount_status":"unverified","email_status":"unverified",
         "original_address":address,
     },"candidate"

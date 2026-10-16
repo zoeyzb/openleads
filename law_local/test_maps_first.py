@@ -48,6 +48,20 @@ class MapsFirstTests(unittest.TestCase):
             self.assertEqual(ingest_maps_candidates(db,self.seed(d)),0)
             db.close()
 
+    def test_other_directory_needs_published_business_phone_match(self):
+        with tempfile.TemporaryDirectory() as d:
+            db=SqliteQueue(Path(d)/"db.sqlite")
+            ingest_maps_candidates(db,self.seed(d))
+            # A reliable size from an alternative directory must not advance
+            # when the published phone belongs to another firm.
+            wrong=HTML.replace("(815) 456-1820","(815) 456-1933")
+            stats=verify_map_headcounts(db,fetch_fn=lambda url,timeout=8:wrong,
+                source_resolver=lambda *a:{"urls":["https://www.floridabar.org/directories/find-mbr/profile/?num=366780"],"responded":1},
+                seconds=20,max_profiles=5)
+            self.assertEqual(stats["added_to_final_audit"],0)
+            self.assertEqual(db.counts()["calling_qualified"],0)
+            db.close()
+
     def test_phone_or_firm_mismatch_never_advances(self):
         with tempfile.TemporaryDirectory() as d:
             db=SqliteQueue(Path(d)/"db.sqlite")

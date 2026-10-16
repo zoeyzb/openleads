@@ -35,6 +35,15 @@ class MapsExtractTests(unittest.TestCase):
             candidate,why=maps_candidate(item)
             self.assertIsNone(candidate,reason:=why)
 
+    def test_social_profile_is_unverified_research_not_an_owned_site(self):
+        social=dict(GOOD,website="https://www.facebook.com/potterfinch")
+        candidate,reason=maps_candidate(social)
+        self.assertEqual(reason,"candidate")
+        self.assertEqual(candidate["website_status"],"social_only_no_owned_site_field")
+        self.assertEqual(candidate["headcount_status"],"unverified")
+        self.assertEqual(candidate["email_status"],"unverified")
+        self.assertIsNone(maps_candidate(dict(GOOD,website="https://firm.example"))[0])
+
     def test_csv_partial_results_dedupe_and_status(self):
         with tempfile.TemporaryDirectory() as folder:
             raw=Path(folder)/"results.csv"

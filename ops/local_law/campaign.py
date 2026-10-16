@@ -138,6 +138,16 @@ def cycle():
    except subprocess.TimeoutExpired:
     with (ROOT/"campaign-runs.log").open("a") as log:
      log.write(json.dumps(dict(time=now(),local_maps_import_error="timeout"))+"\n")
+  # Plumbing-style acquisition rotation: ONE bounded small-market Maps job,
+  # persisted and measured. Never a substitute for independent site/size proof.
+  try:
+   maps=command(["-m","ops.local_law.local_maps_controller"],30)
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),local_maps_cycle_exit=maps.returncode,
+                             output=(maps.stdout+maps.stderr)[-1000:]))+"\n")
+  except subprocess.TimeoutExpired:
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),local_maps_cycle_error="timeout"))+"\n")
   # Free, checkpointed directory discovery from Common Crawl's public index.
   # Real profile pages supply firm-size/phone and explicit owned-site links;
   # missing site link remains unverified and never auto-qualifies.
