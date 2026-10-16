@@ -53,6 +53,18 @@ class BarSourceTests(unittest.TestCase):
         self.assertIsNone(lead)
         self.assertEqual(reason,"no_published_professional_phone")
 
+    def test_failed_sources_pause_without_being_marked_qualified(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"research.sqlite")
+            def blocked(url,timeout=9):
+                raise PermissionError("HTTP 403")
+            result=bar_seed_harvest(db,urls=[URL],fetch_fn=blocked,max_pages=1)
+            self.assertEqual(result["fetch_failures"],1)
+            second=bar_seed_harvest(db,urls=[URL],fetch_fn=blocked,max_pages=1)
+            self.assertEqual(second["attempted"],0)
+            self.assertEqual(db.counts().get("calling_qualified"),0)
+            db.close()
+
     def test_checkpoint_and_unqualified_candidate_only(self):
         with tempfile.TemporaryDirectory() as folder:
             db=SqliteQueue(Path(folder)/"research.sqlite")

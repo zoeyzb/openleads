@@ -9,6 +9,7 @@ import argparse
 import json
 import re
 import time
+from datetime import datetime,timezone,timedelta
 from urllib.parse import urlparse
 
 from law_local.worker import (
@@ -18,6 +19,16 @@ from law_local.worker import (
 # Exact previously indexed public bar member profiles; no synthetic names,
 # invented contact details, fabricated URL IDs, or guessed websites.
 PUBLIC_BAR_SEEDS = (
+    # Indexed October 2026 official bar profiles with explicit 2-10 labels.
+    "https://www.inbar.org/members/?id=29044274",
+    "https://www.inbar.org/members/?id=29036570",
+    "https://www.inbar.org/members/?id=29034078",
+    "https://www.inbar.org/members/default.asp?id=66979996",
+    "https://www.inbar.org/members/?id=69025296",
+    "https://www.inbar.org/members/?id=29031901",
+    "https://www.inbar.org/members/?id=29032103",
+    "https://www.inbar.org/members/?id=29032900",
+    "https://www.inbar.org/members/default.asp?id=78416764",
     "https://www.inbar.org/members/Default.asp?id=29033429",
     "https://www.inbar.org/members/?id=29034873",
     "https://www.inbar.org/members/default.asp?id=80978621",
@@ -104,8 +115,17 @@ def bar_seed_harvest(db,urls=PUBLIC_BAR_SEEDS,fetch_fn=None,seconds=100,max_page
     for url in dict.fromkeys(urls):
         if time.monotonic()>=deadline or out["attempted"]>=max_pages:
             break
-        if db.conn.execute("SELECT 1 FROM bar_source_checks WHERE url=?",(url,)).fetchone():
-            continue
+        check=db.conn.execute("SELECT checked_at,reason FROM bar_source_checks WHERE url=?",(url,)).fetchone()
+        if check:
+            checked_at,previous_reason=check
+            if not previous_reason.startswith("fetch_failed:"):
+                continue
+            try:
+                checked=datetime.fromisoformat(checked_at.replace("Z","+00:00"))
+                if datetime.now(timezone.utc)-checked < timedelta(days=7):
+                    continue
+            except (ValueError,TypeError):
+                pass
         out["attempted"]+=1
         try:
             html=fetch_fn(url,timeout=9)
@@ -115,6 +135,11 @@ def bar_seed_harvest(db,urls=PUBLIC_BAR_SEEDS,fetch_fn=None,seconds=100,max_page
             lead,reason=extract_inbar_firm(url,html)
         except Exception as exc:
             out["fetch_failures"]+=1
+            # Persist temporary provider failures; retry after seven days,
+            # not on every hourly run. Does not imply a no-website finding.
+            code="fetch_failed:"+type(exc).__name__
+            db.conn.execute("INSERT INTO bar_source_checks VALUES(?,?,?,0) ON CONFLICT(url) DO UPDATE SET checked_at=excluded.checked_at,reason=excluded.reason,candidate_added=0",(url,utc_now(),code))
+            db.conn.commit()
             print(json.dumps({"event":"bar_source_failed","url":url,
                               "reason":str(exc)[:140]}),flush=True)
             continue
