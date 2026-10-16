@@ -12,7 +12,7 @@ class BridgeTests(unittest.TestCase):
    c.execute("CREATE TABLE source_triage (lead_id TEXT,status TEXT)")
    for n in range(6):
     c.execute("INSERT INTO source_research VALUES (?,?,?,?,?,?,?,?,?)",(str(n),f"Example Law Firm {n}",f"312888{2000+n}","Chicago","IL",f"https://lawyer.com/firm/firm-{n}.html",4,"needs_firmwide_size_and_owned_site","FL roster"))
-   c.execute("INSERT INTO source_research VALUES (?,?,?,?,?,?,?,?,?)",("bad","Big Office","3128889000","Chicago","IL","https://lawyer.com/firm/big.html",40,"needs_firmwide_size_and_owned_site","FL roster"))
+   c.execute("INSERT INTO source_research VALUES (?,?,?,?,?,?,?,?,?)",("bad","Big Office Law LLP","3128889000","Chicago","IL","https://lawyer.com/firm/big.html",40,"needs_firmwide_size_and_owned_site","FL roster"))
    c.commit();c.close()
    q=SqliteQueue(db)
    try:
@@ -20,6 +20,7 @@ class BridgeTests(unittest.TestCase):
     self.assertEqual(bridge.bridge(catalog,q,3)["added_unverified"],3)
     self.assertEqual(q.counts().get("calling_qualified"),0)
     self.assertEqual(q.counts().get("pending"),6)
+    self.assertEqual(bridge.bridge(catalog,q,3)["added_unverified"],1)
    finally:q.close()
  def test_excludes_generic_and_government_employers(self):
   with tempfile.TemporaryDirectory() as d:

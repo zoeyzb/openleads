@@ -25,6 +25,9 @@ class ExportTests(unittest.TestCase):
   self.assertEqual(campaign.strict_export(),1)
   with campaign.OUT.open() as fd:
    self.assertEqual(len(list(csv.DictReader(fd))),1)
+ def test_email_verified_without_attorney_count(self):
+  self.add(attorneys=None)
+  self.assertEqual(campaign.strict_export(),1)
  def test_phone_only_excluded(self):
   self.add(status="call_qualified_no_email")
   self.assertEqual(campaign.strict_export(),0)

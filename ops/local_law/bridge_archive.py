@@ -24,9 +24,8 @@ def bridge(catalog,queue,limit=20):
         SELECT r.firm,r.phone,r.city,r.state,r.source_url,r.reported_attorneys
         FROM source_research r
         LEFT JOIN source_triage t ON t.lead_id=r.lead_id
-        WHERE r.reported_attorneys BETWEEN 2 AND 10
-          AND r.proof_status='needs_firmwide_size_and_owned_site'
-          AND (t.status IS NULL OR t.status='needs_independent_firmwide_size_and_site')
+        WHERE r.proof_status='needs_firmwide_size_and_owned_site'
+          AND (t.status IS NULL OR t.status IN ('needs_independent_firmwide_size_and_site','needs_independent_site_audit'))
           AND length(r.phone)>=10
         ORDER BY CASE WHEN t.status='needs_independent_firmwide_size_and_site' THEN 0 ELSE 1 END,
                  r.lead_id LIMIT ?

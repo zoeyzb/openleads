@@ -39,7 +39,7 @@ def strict_export():
    checked=datetime.fromisoformat(ev["checked_at"].replace("Z","+00:00"))
    if checked.tzinfo is None or not timedelta(0)<=datetime.now(timezone.utc)-checked<=timedelta(days=30):continue
    qualified.append(dict(firm=row["firm"],phone=row["phone"],city=row["city"],state=row["state"],
-     attorneys=ev["attorneys"],email=email,headcount_source=ev["headcount_source"],
+     attorneys=ev.get("attorneys"),email=email,headcount_source=ev["headcount_source"],
      email_source=ev["email_source"],site_status=ev["site_status"],checked_at=ev["checked_at"]))
   except (ValueError,TypeError,KeyError,AttributeError): continue
  cols=["firm","phone","city","state","attorneys","email","headcount_source","email_source","site_status","checked_at"]

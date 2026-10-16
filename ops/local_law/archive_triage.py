@@ -18,7 +18,6 @@ def run(limit=30):
  rows=c.execute("""SELECT r.lead_id,r.firm,r.phone,r.city,r.state,r.source_url
  FROM source_research r
  WHERE r.source IN ('FL roster','NY registrations')
-   AND r.reported_attorneys BETWEEN 2 AND 10
    AND length(r.phone)>=10
    AND NOT EXISTS (SELECT 1 FROM source_triage t WHERE t.lead_id=r.lead_id)
  ORDER BY CASE WHEN r.source='FL roster' THEN 0 ELSE 1 END, r.lead_id
@@ -38,7 +37,7 @@ def run(limit=30):
                (lead_id,email,url,worker.utc_now()))
     if source["website_candidates"]:
      status="owned_site_hint";website=";".join(source["website_candidates"][:3])
-    else:status="needs_independent_firmwide_size_and_site"
+    else:status="needs_independent_site_audit"
   except Exception as exc:error=type(exc).__name__+":"+str(exc)[:100]
   c.execute("INSERT OR REPLACE INTO source_triage VALUES (?,?,?,?,?)",(lead_id,status,website,worker.utc_now(),error));c.commit()
   counts[status]=counts.get(status,0)+1
