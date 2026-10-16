@@ -339,7 +339,7 @@ class SqliteQueue:
                 return False
             if not normalize_phone(row["phone"]) or normalize_phone(row["phone"])!=normalize_phone(evidence.get("phone")):
                 return False
-            identity_source=evidence.get("headcount_source","")
+            identity_source=evidence.get("headcount_source") or row["source_url"]
             if not identity_source:
                 return False
             if not _third_party(urlparse(identity_source).hostname or ""):
@@ -368,7 +368,7 @@ class SqliteQueue:
     def counts(self):
         totals=dict(self.conn.execute("SELECT status,COUNT(*) FROM candidates GROUP BY status").fetchall())
         totals["calling_qualified"]=sum(
-            1 for row in self.conn.execute("SELECT phone,status,result_json FROM candidates WHERE status IN ('strict_eligible','call_qualified_no_email')")
+            1 for row in self.conn.execute("SELECT phone,status,source_url,result_json FROM candidates WHERE status IN ('strict_eligible','call_qualified_no_email')")
             if self._verified_for_export(row,json.loads(row["result_json"]),row["status"]))
         return totals
     def export(self,status,path):
@@ -802,11 +802,11 @@ def main(argv=None):
             print(json.dumps({"imported":import_csv(db,args.csv),"counts":db.counts()}))
         elif args.cmd=="run":
             pending=db.pending(args.max)
-            needs_site_provider=any(
-                (urlparse(str(row.get("source_url",""))).hostname or "").lower().removeprefix("www.")
-                !="floridalawdirectory.com" for row in pending
-            )
-            if pending and needs_site_provider and not args.skip_provider_preflight:
+            # Every source, including Florida roster profiles, requires the
+            # independent owned-site positive control before site clearance.
+            # A roster profile's published phone is NOT website-absence proof.
+            needs_site_provider=bool(pending)
+            if needs_site_provider and not args.skip_provider_preflight:
                 from law_local.site_provider_health import audit_provider_health
                 health=audit_provider_health()
                 site_usable=health["status"]=="usable"
@@ -816,7 +816,7 @@ def main(argv=None):
             else:
                 site_usable=True
             print(json.dumps({"batch":run_batch(db,args.max,args.workers,args.seconds,site_search_usable=site_usable),
-                              "site_provider_health":health if pending and needs_site_provider and not args.skip_provider_preflight else None,
+                              "site_provider_health":health if needs_site_provider and not args.skip_provider_preflight else None,
                               "counts":db.counts()}))
         elif args.cmd=="discover":
             states=[s.strip().upper() for s in args.states.split(",") if s.strip()]

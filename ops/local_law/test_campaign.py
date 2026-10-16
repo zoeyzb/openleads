@@ -28,6 +28,10 @@ class ExportTests(unittest.TestCase):
  def test_email_verified_without_attorney_count(self):
   self.add(attorneys=None)
   self.assertEqual(campaign.strict_export(),1)
+ def test_published_email_without_firm_size_directory_source(self):
+  # Any-size policy: source-verified email and phone/site gates suffice.
+  self.add(attorneys=None,headcount_source="")
+  self.assertEqual(campaign.strict_export(),1)
  def test_phone_only_excluded(self):
   self.add(status="call_qualified_no_email")
   self.assertEqual(campaign.strict_export(),0)

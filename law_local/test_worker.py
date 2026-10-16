@@ -304,6 +304,28 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(record["attempts"],0)  # provider outage is not a firm failure
             db.close()
 
+    def test_florida_roster_only_batch_requires_known_owned_site_control(self):
+        from law_local.worker import main
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"law.sqlite3"
+            lead={**LEAD,"source_url":"https://floridalawdirectory.com/firm/example-law/"}
+            db=SqliteQueue(path)
+            self.assertTrue(db.add(lead))
+            db.close()
+            with patch("law_local.site_provider_health.audit_provider_health",
+                       return_value={"status":"degraded","responded":0,
+                                     "positive_control_found":False}) as health:
+                with patch("law_local.worker.fetch_public",return_value=PROFILE):
+                    with patch("law_local.worker.search_for_firm",side_effect=AssertionError("no site search without positive control")):
+                        main(["--db",str(path),"run","--max","1"])
+            health.assert_called_once()
+            db=SqliteQueue(path)
+            row=db.conn.execute("SELECT status,attempts FROM candidates").fetchone()
+            self.assertEqual(row["status"],"inconclusive")
+            self.assertEqual(row["attempts"],0)
+            self.assertEqual(db.counts()["calling_qualified"],0)
+            db.close()
+
     def test_import_process_export_source_provenance(self):
         with tempfile.TemporaryDirectory() as folder:
             db=SqliteQueue(Path(folder)/"law.sqlite3")
