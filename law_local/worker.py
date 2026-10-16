@@ -527,7 +527,7 @@ def domain_has_mail(domain):
     except (OSError,subprocess.TimeoutExpired):
         return False
 
-def process_candidate(lead):
+def process_candidate(lead,site_search_usable=True):
     try:
         html=fetch_public(lead["source_url"])
         if not firm_identity_matches(html,lead):
@@ -536,12 +536,12 @@ def process_candidate(lead):
         # A state-only count is not firm-wide size proof; do not issue wasted
         # site-search calls for a record that cannot pass size qualification.
         local_count_only=(urlparse(str(lead.get("source_url",""))).hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com"
-        search=search_for_firm(lead) if 2<=source["attorneys"]<=10 and not source["website_candidates"] and not local_count_only else []
+        search=search_for_firm(lead) if site_search_usable and 2<=source["attorneys"]<=10 and not source["website_candidates"] and not local_count_only else []
         return evaluate_candidate(lead,html,search,mx_check=domain_has_mail)
     except Exception as exc:
         return {"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
 
-def run_batch(db,max_rows=100,workers=4,seconds=600):
+def run_batch(db,max_rows=100,workers=4,seconds=600,site_search_usable=True):
     deadline=time.monotonic()+max(1,int(seconds))
     total={}
     concurrency=max(1,min(8,int(workers)))
@@ -553,7 +553,7 @@ def run_batch(db,max_rows=100,workers=4,seconds=600):
             if time.monotonic()>=deadline:
                 break
             batch=candidates[offset:offset+concurrency]
-            future_to_lead={pool.submit(process_candidate,row):row for row in batch}
+            future_to_lead={pool.submit(process_candidate,row,site_search_usable):row for row in batch}
             for future in as_completed(future_to_lead):
                 lead=future_to_lead[future]
                 try:
@@ -774,12 +774,15 @@ def main(argv=None):
             if pending and needs_site_provider and not args.skip_provider_preflight:
                 from law_local.site_provider_health import audit_provider_health
                 health=audit_provider_health()
-                if health["status"]!="usable":
-                    print(json.dumps({"batch":{"status":"blocked_website_provider",
-                                               "pending_untouched":len(pending)},
-                                      "site_provider_health":health,"counts":db.counts()}))
-                    raise SystemExit(3)
-            print(json.dumps({"batch":run_batch(db,args.max,args.workers,args.seconds),"counts":db.counts()}))
+                site_usable=health["status"]=="usable"
+                if not site_usable:
+                    print(json.dumps({"warning":"website_provider_degraded_source_checks_only",
+                                      "site_provider_health":health}),flush=True)
+            else:
+                site_usable=True
+            print(json.dumps({"batch":run_batch(db,args.max,args.workers,args.seconds,site_search_usable=site_usable),
+                              "site_provider_health":health if pending and needs_site_provider and not args.skip_provider_preflight else None,
+                              "counts":db.counts()}))
         elif args.cmd=="discover":
             states=[s.strip().upper() for s in args.states.split(",") if s.strip()]
             print(json.dumps({"discovery":discover_candidates(db,states,args.max_queries,args.max_pages,

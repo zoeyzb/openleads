@@ -84,3 +84,9 @@ Fresh Mac provider preflight: DEGRADED (0/2 usable; known-positive owned domain 
 ## 2026-10-16 archive reuse
 Old Railway snapshot (Oct 2): 177 call-ready, ~1608 size-verified; not evidence of 10000 qualified law/hour. Plumbing rates should not be counted as law.
 Existing catalog feeds a bounded 20-per-run candidate bridge without a second database or new service. SQLite dedupes and caps pending queue at 100. Ten sourced research candidates imported during test. They are NOT qualified leads. Firm-wide 2-10 and independently checked no-owned-site remain required, phone is mandatory, published email bonus only.
+
+## 2026-10-16 — remove all-or-nothing verifier outage
+- Previous controller skipped the entire 20-row verification batch when website provider preflight failed. Now the verifier continues accessible source/identity/headcount/positive-owned-site checks without calling unhealthy site search adapters. Any firm requiring independent negative website proof remains inconclusive; no email required for calling eligibility.
+- The verifier preflight remains visible in logs; known-owned-site controls are not bypassed. This avoids stalling source triage while external search is down; **it does not certify no website**.
+- Live bounded test against the Mac queue processed 2 sourced candidates (both inconclusive), no false qualified leads. 87 core tests passed, including outage no-search regression.
+- No new repository, hosted runtime, database, or worker service created.

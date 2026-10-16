@@ -220,7 +220,7 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(db.conn.execute("SELECT attempts FROM candidates").fetchone()[0],1)
             db.close()
 
-    def test_cli_provider_outage_does_not_consume_candidate_attempt(self):
+    def test_cli_outage_still_checks_source_but_never_qualifies(self):
         from law_local.worker import main
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/"law.sqlite3"
@@ -228,13 +228,15 @@ class EndToEndTests(unittest.TestCase):
             self.assertTrue(db.add(LEAD))
             db.close()
             with patch("law_local.site_provider_health.audit_provider_health",
-                       return_value={"status":"degraded","responded":1,
+                       return_value={"status":"degraded","responded":0,
                                      "positive_control_found":False}):
-                with self.assertRaises(SystemExit) as blocked:
-                    main(["--db",str(path),"run","--max","1"])
-            self.assertEqual(blocked.exception.code,3)
+                with patch("law_local.worker.fetch_public",return_value=PROFILE):
+                    with patch("law_local.worker.search_for_firm",side_effect=AssertionError("site provider should not run")):
+                        main(["--db",str(path),"run","--max","1"])
             db=SqliteQueue(path)
-            self.assertEqual(db.conn.execute("SELECT attempts FROM candidates").fetchone()[0],0)
+            record=db.conn.execute("SELECT status,attempts FROM candidates").fetchone()
+            self.assertNotIn(record["status"],("strict_eligible","call_qualified_no_email"))
+            self.assertEqual(record["attempts"],1)
             db.close()
 
     def test_import_process_export_source_provenance(self):

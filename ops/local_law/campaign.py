@@ -139,13 +139,15 @@ def cycle():
   except subprocess.TimeoutExpired:
    health=None
    site_state="timeout"
-  if health is None or health.returncode!=0 or site_state!="usable":
-   verify_exit=3
-   verify_output="blocked_website_provider: known-owned-site control failed; no candidate requests spent"
-  else:
-   pending=command(["law_local/worker.py","--db",str(DB),"run","--max","20","--workers","2","--seconds","90"],120)
+  # Source/identity and owned-site positive checks are still useful during
+  # a search-provider outage; the worker itself suppresses negative site audits.
+  try:
+   pending=command(["law_local/worker.py","--db",str(DB),"run","--max","20","--workers","2","--seconds","90"],140)
    verify_exit=pending.returncode
    verify_output=(pending.stdout+pending.stderr)[-5000:]
+  except subprocess.TimeoutExpired:
+   verify_exit=124
+   verify_output="source_verifier_timeout"
   (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),verify_exit=verify_exit,site_status=site_state,output=verify_output))+"\n")
   phone_count=calling_export()
   count=strict_export()
