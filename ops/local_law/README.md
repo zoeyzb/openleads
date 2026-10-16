@@ -125,3 +125,7 @@ Existing catalog feeds a bounded 20-per-run candidate bridge without a second da
 - Added real-history chart for source-triage totals (24h/3d/7d, only captured snapshots) and ranked candidate-status distribution with no fabricated conversion percentages or lead success.
 - Queue now has real pending/needs-proof status filters, Sources has category controls, full-text filtering and verified aggregate CSV download. These views do not publish private individual contacts.
 - Local Chrome regression: all five views at 1440 and 390 without JS errors or horizontal overflow; extra click tests validated history period, queue filters, Sources category/search and actual CSV download. No Vercel deployment.
+
+## 2026-10-16 — operator homepage consolidation
+- Removed equal-weight dashboard KPI cards and generic analytics layout. A single prominent call-ready counter, three supporting figures, two precise evidence blockers, a compact review status list, and real hourly activity now form the homepage. All remain sourced from the Mac feed.
+- Kept five existing navigation routes and source controls. Desktop (1440) and mobile (390) Chrome checks passed across 5 routes with no page exceptions or overflow. No Vercel deployment.
