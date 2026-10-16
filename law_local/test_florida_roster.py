@@ -52,6 +52,13 @@ class FloridaRosterTests(unittest.TestCase):
         none,status=parse_roster_profile(PROFILE.replace("Phone (813) 277-1144",""),URL)
         self.assertIsNone(none)
         self.assertEqual(status,"missing_business_phone")
+    def test_missing_size_is_optional_and_explicit_inactive_is_rejected(self):
+        lead,_=parse_roster_profile(PROFILE.replace('Attorneys 3 active','').replace('Active attorneys (3)',''),URL)
+        self.assertIsNotNone(lead)
+        self.assertIsNone(lead['published_active_attorneys'])
+        inactive,status=parse_roster_profile(PROFILE.replace('3 active','0 active'),URL)
+        self.assertIsNone(inactive)
+        self.assertEqual(status,'no_active_attorneys')
     def test_non_law_employers_are_not_private_law_practices(self):
         for name in ("A. Duda & Sons, Inc.", "Bayshore Realty Inc",
                      "Orange County Hospital", "Fortune Financial Services"):

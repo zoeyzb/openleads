@@ -29,7 +29,7 @@ The main eligibility code had been updated but discovery still excluded solos an
 - Local Maps container running. Completed recorded market jobs: Galesburg 23, Burlington 20, Cedar Falls 21, Ottumwa 21, Keokuk 9 = 94 raw listings. New Ottumwa and Keokuk research additions are never qualified by missing metadata. Existing hourly launchd job remains interval 3,600 seconds; last observed exit code 0. Mac sleep still pauses work.
 - Automated Mac Bing/DDG preflight remains degraded, 0/2. Assisted search channels both returned Kirkland's owned site as positive controls, but relevance varies and the Mac scheduler cannot call the ChatGPT search tools. Hybrid manifests are an operator workflow, not unattended website verification. Do not promise automatic progress to 1,000.
 - Sheets row 2 of Verified Calling Queue was written and read back. Removed 171 obsolete main-sheet status labels and refreshed the dated hidden pipeline snapshot. Scheduled Sheets sync remains blocked: LAW_SHEETS_CREDENTIALS is not configured. Connector sync succeeded in-session only. Manual notes were preserved.
-- Verification: 99 law_local tests + 51 ops/local_law tests passed; git diff --check passed. No prospect records, database files, private manifests, credentials or local queue JSON are committed. No Vercel deployment.
+- Verification: 100 law_local tests + 51 ops/local_law tests passed; git diff --check passed. No prospect records, database files, private manifests, credentials or local queue JSON are committed. No Vercel deployment.
 - Existing aggregate Gist was refreshed; private local queue regenerated. Original schema/API compatibility retained where used; the obsolete Florida listing aggregate name now accurately says active_practice_listings.
 
 ## Lessons and next execution
@@ -41,3 +41,10 @@ The main eligibility code had been updated but discovery still excluded solos an
 
 ## Source influence
 Applied addyosmani-style systematic debugging/specification and regression verification through installed skills; Understand-Anything-style dependency inspection through the codebase skill; browser-use-style provenance, retries, bounded acquisition and checkpoints through the scraping skill. Reused this repository's actual plumbing Gosom/identity/coverage patterns through existing local controllers. No reference-repository code was copied and no new libraries or hosted services were added.
+
+## Final runtime update
+The restarted scheduler retained 1 calling-qualified record on its fresh preflight. It is running the bounded existing backlog. Disk free space fell to about 5.0 GiB, so Maps correctly returned paused_low_disk under the existing 6 GiB guard. Inspection found only 4 MiB of Maps data and no /tmp browser cache in the collector; this is not fixable by deleting disposable project files. Free at least 1 GiB elsewhere before new Maps jobs resume; no unrelated user data/services were modified. Automated independent search remains degraded.
+
+Commit 42b70e1 was successfully pushed to recover-scrape-mcp. This follow-up also removes missing-size rejection from the Florida source while retaining explicit zero-active/inactive rejection. Current backlog counts can change during the active scheduler run; the dated Sheet snapshot is labeled accordingly.
+
+Final fresh scheduler audit at 10:50:54 UTC: run 9 completed with exit 0; interval remains 3,600 seconds. Queue has 1 verified, 214 pending, 40 inconclusive, 12 website-review and 2 nonlaw-review (269 total). Calling CSV re-exported exactly 1 record. Reopened Common Crawl backlog is now 199, after the bounded six-profile manual test plus the scheduled 12-profile cycle. The current unresolved main verification queue is exactly 254 records. Disk guard remains paused at approximately 5 GiB; no disposable collector cache was present. Final tests: 151 passed.

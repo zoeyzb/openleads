@@ -88,11 +88,9 @@ def listing_firms(html):
         all_links+=1
         text=" ".join((label or "").split())
         m=COUNT_LIST.search(text)
-        if not m:
-            continue
-        count=int(m.group(1))
-        if count>=1:
-            qualifying.append((target,count))
+        count=int(m.group(1)) if m else None
+        if count is None or count>=1:
+            qualifying.append((target,count or 0))
     # Distinct profile hrefs are authoritative; ignore duplicates in nav/footer.
     return {"all_profiles":all_links,"candidates":list(dict.fromkeys(qualifying))}
 
@@ -109,10 +107,8 @@ def parse_roster_profile(html,url):
         return None,"not_private_firm"
     text=" ".join(reader(html).parts)
     m=COUNT_PROFILE.search(text)
-    if not m:
-        return None,"missing_current_active_count"
-    count=int(m.group(1))
-    if count<1:
+    count=int(m.group(1)) if m else None
+    if count is not None and count<1:
         return None,"no_active_attorneys"
     top=text.split("Active attorneys (",1)[0]
     phone_match=PHONE_PROFILE.search(top)
