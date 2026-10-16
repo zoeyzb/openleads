@@ -1,4 +1,6 @@
 import csv, importlib.util, json, sqlite3, tempfile, unittest
+from unittest.mock import patch
+from subprocess import CompletedProcess
 from pathlib import Path
 from datetime import datetime,timezone,timedelta
 SPEC=importlib.util.spec_from_file_location("campaign",str(Path(__file__).parent/"campaign.py"))
@@ -35,4 +37,30 @@ class ExportTests(unittest.TestCase):
  def test_stale_evidence_excluded(self):
   self.add(checked=(datetime.now(timezone.utc)-timedelta(days=40)).isoformat())
   self.assertEqual(campaign.strict_export(),0)
+class SchedulerTests(unittest.TestCase):
+ def test_no_geography_due_still_services_verification_backlog(self):
+  with tempfile.TemporaryDirectory() as root:
+   root=Path(root)
+   # A job with all regions cooling down must still process recovered leads.
+   with (patch.object(campaign,"ROOT",root),
+         patch.object(campaign,"SRC",root/"openleads"),
+         patch.object(campaign,"STATES",[]),
+         patch.object(campaign,"command",return_value=CompletedProcess([],0,"{}","")),
+         patch.object(campaign,"process_backlog",return_value=0) as verify,
+         patch.object(campaign,"calling_export",return_value=0) as calling,
+         patch.object(campaign,"strict_export",return_value=0) as strict):
+    self.assertEqual(campaign.cycle(),0)
+    verify.assert_called_once_with()
+    calling.assert_called_once_with()
+    strict.assert_called_once_with()
+
+ def test_verifier_runs_as_importable_python_module(self):
+  with tempfile.TemporaryDirectory() as root:
+   with (patch.object(campaign,"ROOT",Path(root)),
+         patch.object(campaign,"command",return_value=CompletedProcess([],0,'{"counts":{}}','')) as run):
+    self.assertEqual(campaign.process_backlog(),0)
+    args=run.call_args.args[0]
+    self.assertEqual(args[:2],["-m","law_local.worker"])
+    self.assertNotIn("law_local/worker.py",args)
+
 if __name__=="__main__":unittest.main()

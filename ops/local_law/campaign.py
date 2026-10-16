@@ -80,6 +80,34 @@ def discovery_result(exit_code,output):
             return "candidates_added" if int(r.get("added",0))>0 else "zero_source_yield"
     return "no_machine_readable_yield"
 
+def process_backlog():
+    """Service pending candidates without ever bypassing site-proof gates.
+
+    The worker performs its own provider preflight. A degraded search provider
+    permits source-only research, never negative site certification.
+    """
+    try:
+        result=command(["-m","law_local.worker","--db",str(DB),"run",
+                        "--max","20","--workers","2","--seconds","90"],140)
+        code=result.returncode
+        output=(result.stdout+result.stderr)[-5000:]
+    except subprocess.TimeoutExpired:
+        code=124
+        output="source_verifier_timeout"
+    site_status="unknown"
+    for line in output.splitlines():
+        try:
+            payload=json.loads(line)
+        except (TypeError,ValueError):
+            continue
+        health=payload.get("site_provider_health")
+        if isinstance(health,dict) and health.get("status"):
+            site_status=health["status"]
+    record=dict(time=now(),verify_exit=code,site_status=site_status,output=output)
+    with (ROOT/"campaign-runs.log").open("a") as log:
+        log.write(json.dumps(record)+"\n")
+    return code
+
 def cycle():
  import fcntl
  ROOT.mkdir(exist_ok=True)
@@ -108,10 +136,13 @@ def cycle():
    cov.commit()
    rows=cov.execute("SELECT state FROM areas WHERE source='directory' AND state IN (" + ",".join("?" for _ in STATES) + ") AND (next_retry IS NULL OR next_retry <= ?) ORDER BY coalesce(last_attempt,'') LIMIT 1",(*STATES,now())).fetchall()
   if not rows:
-   print("no area due; calling and strict exports only");calling_export();strict_export();return 0
+   print("no area due; processing existing verification queue")
+   verify_exit=process_backlog()
+   calling_export();strict_export()
+   return 0 if verify_exit==0 else 1
   st=rows[0][0]
   started=now()
-  args=(["-m","law_local.florida_roster","--db",str(DB),"--max-pages","3","--max-profiles","50","--seconds","90"] if st=="FL" else ["law_local/worker.py","--db",str(DB),"discover","--states",st,"--max-queries","5","--max-pages","25","--seconds","100","--delay","2"])
+  args=(["-m","law_local.florida_roster","--db",str(DB),"--max-pages","3","--max-profiles","50","--seconds","90"] if st=="FL" else ["-m","law_local.worker","--db",str(DB),"discover","--states",st,"--max-queries","5","--max-pages","25","--seconds","100","--delay","2"])
   error=""
   try:
    r=command(args,130);rc=r.returncode
@@ -129,35 +160,15 @@ def cycle():
   for city,state in sqlite3.connect(DB).execute("SELECT DISTINCT city,state FROM candidates WHERE state=? AND trim(city)!=''",(st,)):
    cov.execute("INSERT OR IGNORE INTO areas(state,city,source,last_attempt) VALUES(?,?,'candidate_observed',?)",(state,city,now()))
   cov.commit()
-  # Never spend verifier requests while the known-owned-site positive control fails.
-  try:
-   health=command(["-m","law_local.site_provider_health","--ready-flag",str(ROOT/"site-ready.flag")],45)
-   try:
-    site_state=json.loads((health.stdout.strip().splitlines() or ["{}"])[-1]).get("website_search_provider_health",{}).get("status")
-   except (ValueError,IndexError):
-    site_state="unavailable"
-  except subprocess.TimeoutExpired:
-   health=None
-   site_state="timeout"
-  # Source/identity and owned-site positive checks are still useful during
-  # a search-provider outage; the worker itself suppresses negative site audits.
-  try:
-   pending=command(["law_local/worker.py","--db",str(DB),"run","--max","20","--workers","2","--seconds","90"],140)
-   verify_exit=pending.returncode
-   verify_output=(pending.stdout+pending.stderr)[-5000:]
-  except subprocess.TimeoutExpired:
-   verify_exit=124
-   verify_output="source_verifier_timeout"
-  (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),verify_exit=verify_exit,site_status=site_state,output=verify_output))+"\n")
+  # A failed site provider still permits safe source-only processing.
+  verify_exit=process_backlog()
   phone_count=calling_export()
   count=strict_export()
   if os.environ.get("LAW_SHEETS_CREDENTIALS"):
    sync=subprocess.run([str(ROOT/".venv/bin/python"),str(ROOT/"sync_sheet.py")],capture_output=True,text=True,timeout=120)
    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),sync_exit=sync.returncode,output=(sync.stdout+sync.stderr)[-1500:]))+"\n")
   print(json.dumps(dict(state=st,discovery_exit=rc,verification_exit=verify_exit,calling_qualified=phone_count,strict_qualified=count)))
-  # Provider outages are expected controlled blocks, not scheduler crashes.
-  # Keep the true verification_exit=3 and failed discovery in the run log.
-  return 0 if rc==0 and verify_exit in (0,3) else 1
+  return 0 if rc==0 and verify_exit==0 else 1
 if __name__=="__main__":
  if len(sys.argv)>1 and sys.argv[1]=="export": calling_export();strict_export()
  elif len(sys.argv)>1 and sys.argv[1]=="coverage":
