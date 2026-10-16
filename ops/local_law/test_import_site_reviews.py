@@ -74,4 +74,20 @@ class ReviewTests(unittest.TestCase):
                 else:bad["operator_review"]["providers"][0]["results"][0]["disposition"]="owned"
                 self.assertFalse(q._verified_for_export(row,bad,"call_qualified_no_email"))
             q.close()
+    def test_new_or_replayed_no_site_review_cannot_requalify_inactive_practice(self):
+        with tempfile.TemporaryDirectory() as d:
+            db=Path(d)/"q.db";r=fixture()
+            import_reviews(db,[r])
+            q=SqliteQueue(db)
+            q.record(r["lead"],{"status":"rejected_inactive","eligibility_hold":{
+                "reason":"retired","source_url":"https://registry.example/retired"}})
+            q.close()
+            self.assertEqual(import_reviews(db,[r])["replayed"],1)
+            new=copy.deepcopy(r);new["notes"]="New dated review of website absence only"
+            with self.assertRaisesRegex(ValueError,"inactive-practice hold"):
+                import_reviews(db,[new])
+            q=SqliteQueue(db)
+            self.assertEqual(q.export("calling_qualified",Path(d)/"calls.csv"),0)
+            self.assertEqual(q.conn.execute("SELECT status FROM candidates").fetchone()[0],"rejected_inactive")
+            q.close()
 if __name__=="__main__":unittest.main()

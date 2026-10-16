@@ -81,6 +81,8 @@ def import_reviews(db_path,reviews):
             cid=db._id(lead)
             existing=db.conn.execute("SELECT result_json FROM candidates WHERE id=?",(cid,)).fetchone()
             prior=json.loads(existing[0] or "{}")
+            if prior.get("eligibility_hold") or prior.get("status") in ("rejected_inactive","review_inactive"):
+                raise ValueError("existing inactive-practice hold requires explicit resolution")
             flagged=[h for p in review["providers"] for h in p["results"] if h["disposition"] in ("owned","uncertain")]
             # Existing conclusive owned-site evidence cannot be erased by a
             # new negative search. Explicitly resolve it outside this importer.
