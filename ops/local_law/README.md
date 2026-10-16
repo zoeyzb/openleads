@@ -120,3 +120,8 @@ Existing catalog feeds a bounded 20-per-run candidate bridge without a second da
 - Replaced the old layered law-dashboard markup, charts, and CSS rather than appending overrides. Five focused tabs: Dashboard, Queue, Sources, Coverage, System. Consistent deep black / gray / restrained red with 13–15px readable operational text.
 - Real Mac aggregate feed powers four KPIs, candidate breakdown, searchable source/status table, state coverage, and diagnostics. Phone is required, email optional. No invented leads or fake time-series. Source CSV exports are aggregate-only; firm contacts stay in authorized local/Sheet storage.
 - Mac Chrome Playwright checks: 5/5 views at desktop 1440 and mobile 390, no JS page errors or horizontal viewport overflow. No Vercel deployment.
+
+## 2026-10-16 — operator CRM functional upgrade
+- Added real-history chart for source-triage totals (24h/3d/7d, only captured snapshots) and ranked candidate-status distribution with no fabricated conversion percentages or lead success.
+- Queue now has real pending/needs-proof status filters, Sources has category controls, full-text filtering and verified aggregate CSV download. These views do not publish private individual contacts.
+- Local Chrome regression: all five views at 1440 and 390 without JS errors or horizontal overflow; extra click tests validated history period, queue filters, Sources category/search and actual CSV download. No Vercel deployment.
