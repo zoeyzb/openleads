@@ -107,3 +107,7 @@ Existing catalog feeds a bounded 20-per-run candidate bridge without a second da
 - Consolidated navigation from six sections to Dashboard, Queue, Sources, Coverage and System. Reduced the oversized hero and metric-card heights, elevated meaningful next actions and preserved real-only charts and local source details.
 - Dashboard's action block directs operators to the queue and provider diagnostics; existing calling rule remains firm-wide 2–10, no owned site, published business phone, email bonus only. No invented blockers counts or qualified data.
 - Local headless Chrome verified all five views at 1440px and 390px: no JS errors and no horizontal overflow. Static site stays on localhost; no Vercel deployment.
+
+## 2026-10-16 Deep black readability pass
+- Overrode old green/yellow/cream UI treatments with near-black, neutral gray, white and restrained red for brand and genuine critical blocks. Increased small operational copy to readable 13px+ and reduced visual bulk. Replaced unclear research/queue KPI labels with concise descriptions; retained real metrics and the five-view navigation.
+- Browser validation on 1440px and 390px, existing local browser smoke and 87 core tests. Production Vercel not deployed by request.

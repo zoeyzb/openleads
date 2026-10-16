@@ -90,3 +90,47 @@ body.workspace-tab[data-current-view="overview"] .geography{display:none}
 body.workspace-tab[data-current-view="overview"] #pipeline,body.workspace-tab[data-current-view="overview"] #systems{display:block}
 @media(max-width:950px){.headline-stats{grid-template-columns:repeat(2,minmax(0,1fr))!important}.operator-actions{flex-direction:column;align-items:flex-start}.two-column{grid-template-columns:1fr!important}}
 @media(max-width:560px){.headline-stats{grid-template-columns:1fr!important}.hero-stat,.plain-stat{min-height:145px!important}}
+
+/* Final deep-black high-contrast override, purposely no green or yellow */
+:root{--bg:#050505!important;--paper:#0b0b0c!important;--dark:#050505!important;--ink:#f6f6f7!important;--muted:#b4b4b8!important;--line:#232326!important;--green:#a4a4a8!important;--amber:#aaaab0!important;--accent:#ff424e!important}
+html,body{background:#050505!important;color:#f6f6f7!important}
+.rail{background:#070707!important;border-right:1px solid #222!important;box-shadow:none!important}
+.content{background:#050505!important}
+.plain-stat,.hero-stat,.panel,.operator-actions,.crm-console,.area,.crm-item,.lead-empty,.blocking{background:#0c0c0e!important;background-image:none!important;box-shadow:none!important;border:1px solid #242428!important;color:#f5f5f7!important}
+.hero-stat{border-color:#64262e!important}
+.hero-stat:after{display:none!important}
+.heading h1{font-size:clamp(27px,2.7vw,39px)!important;color:#fff!important}.heading h1 em{color:#f04955!important}
+.hero-number,.plain-stat strong{color:#fff!important}
+.overline{color:#ef6a74!important}
+.stat-title,.plain-stat .stat-title,.hero-stat .stat-title{color:#e2dfe2!important;font-size:12px!important;letter-spacing:.4px!important}
+.hero-sub,.plain-stat>p:nth-of-type(2),.stat-foot,.panel-description,.intro,.stage-copy small,.checks small,.area p,.area small,.trend-foot{color:#b5b5bc!important;font-size:13px!important;line-height:1.5!important}
+.area strong,.stage-copy strong,.checks strong{color:#f3f3f5!important;font-size:14px!important}
+.heading{padding:15px 0 16px!important}
+.headline-stats{gap:10px!important}
+.hero-stat,.plain-stat{min-height:150px!important;border-radius:11px!important;padding:16px!important}
+.hero-number{font-size:47px!important}
+.plain-stat strong{font-size:36px!important}
+.panel,.operator-actions,.crm-console{border-radius:12px!important}
+.stage-mark,.check-icon{background:#242427!important;color:#e5e5e8!important}
+.stage-mark.completed,.stage-mark.finish,.check-icon.healthy,.stage-mark.review,.check-icon.caution{background:#242427!important;color:#ededf0!important}
+.stage-mark.blocked,.check-icon.failure{background:#3b1d22!important;color:#ff737c!important}
+.flag-checked,.flag-low,.flag-not,.stage-status,.check-label,.check-label.bad{color:#d0d0d5!important}
+.red-text,.bad{color:#ff5661!important}
+.small-dot,.green-signal,.live-indicator span,.live-led{background:#98989d!important;box-shadow:none!important}
+.chart-switch button.active{background:#a82835!important}
+.chart-plot *{--green:#ff515c;--accent:#ff515c}
+.chart-legend .green,.chart-legend .blue,.chart-legend .amber{background:#8d8d93!important}
+.topline{border-color:#242427!important}
+.operator-actions{padding:16px!important;margin:10px 0!important}
+.operator-actions h2{font-size:16px!important}
+.operator-actions p{font-size:13px!important}
+.stages .stage,.checks .check{padding:12px 0!important}
+.heading h1,.panel h2{letter-spacing:-.7px!important}
+.rail nav a.selected{background:#291215!important;border:1px solid #633139!important}
+.geography .area,.coverage-list .area{background:#0e0e10!important;border-color:#2e2e32!important}
+.area-head .flag-low,.area-head .flag-checked{color:#dddde0!important}
+.operator-actions-right a,.refresh{background:#211417!important;border:1px solid #5a2930!important;color:#fff!important}
+.status-label.online,.live-indicator{background:#1c1c1e!important;border-color:#343437!important;color:#dddde0!important}
+.heart,.check-icon{box-shadow:none!important}
+@media(max-width:1050px){.headline-stats{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media(max-width:580px){.headline-stats{grid-template-columns:1fr!important}}
