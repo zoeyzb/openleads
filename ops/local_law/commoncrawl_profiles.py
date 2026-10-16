@@ -15,10 +15,14 @@ from law_local.worker import SqliteQueue,fetch_public,reader,normalize_phone,nor
 from law_local.florida_roster import clearly_non_law_employer
 
 CC_INDEX='https://index.commoncrawl.org/CC-MAIN-2026-39-index'
+# Rotate a handful of nonconsecutive crawls; fresh and archived URLs overlap.
+CC_INDEXES=tuple('https://index.commoncrawl.org/'+item+'-index' for item in (
+ 'CC-MAIN-2026-39','CC-MAIN-2026-30','CC-MAIN-2026-21',
+ 'CC-MAIN-2025-51','CC-MAIN-2025-38'))
 INDEX_PATTERN='lawyer.com/firm/a*'
 FIRM_PATH=re.compile(r'^/firm/[a-z0-9-]+\.html$',re.I)
 H_TAG=re.compile(r'<h[1-3]\b[^>]*>(.*?)</h[1-3]>',re.I|re.S)
-SIZE=re.compile(r'\bFirm\s+Size\s*:\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\b',re.I)
+SIZE=re.compile(r'\bFirm\s+Size\s*:\s*(\d{1,2})(?:\s*(?:-|–|to)\s*(\d{1,2}))?(?!\s*(?:\+|[-–]|to\b|employees?))\b',re.I)
 PHONE=re.compile(r'\bCall\s+([\d().\s-]{10,24})\b',re.I)
 URL_ALLOWED_HOSTS={'lawyer.com','www.lawyer.com'}
 
@@ -52,8 +56,8 @@ def extract_profile(url,source):
  if not valid_profile_url(url):return None,'invalid_profile_url'
  p=reader(source);plain=' '.join(p.parts)
  m=SIZE.search(plain)
- if not m:return None,'no_explicit_size_range'
- lo,hi=map(int,m.groups())
+ if not m:return None,'no_explicit_size'
+ lo=int(m.group(1));hi=int(m.group(2)) if m.group(2) else lo
  if not 2<=lo<=hi<=10:return None,'outside_firm_size'
  headings=[]
  for raw in H_TAG.findall(source):
@@ -82,7 +86,13 @@ def extract_profile(url,source):
  return lead,'has_owned_website' if owned else 'candidate_needs_site_audit'
 
 def ensure(con):
- con.executescript('''CREATE TABLE IF NOT EXISTS cc_law_profile_urls(url TEXT PRIMARY KEY,checked_at TEXT DEFAULT '',status TEXT DEFAULT 'pending',firm TEXT DEFAULT '',phone TEXT DEFAULT '',firm_size_low INTEGER,firm_size_high INTEGER,website TEXT DEFAULT ''); CREATE INDEX IF NOT EXISTS idx_cc_profile_status ON cc_law_profile_urls(status); CREATE TABLE IF NOT EXISTS cc_law_cursors(letter TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',completed_at TEXT NOT NULL DEFAULT '');''')
+ con.executescript('''CREATE TABLE IF NOT EXISTS cc_law_profile_urls(url TEXT PRIMARY KEY,checked_at TEXT DEFAULT '',status TEXT DEFAULT 'pending',firm TEXT DEFAULT '',phone TEXT DEFAULT '',firm_size_low INTEGER,firm_size_high INTEGER,website TEXT DEFAULT ''); CREATE INDEX IF NOT EXISTS idx_cc_profile_status ON cc_law_profile_urls(status); CREATE TABLE IF NOT EXISTS cc_law_cursors(letter TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',completed_at TEXT NOT NULL DEFAULT ''); CREATE TABLE IF NOT EXISTS cc_law_index_cursors(crawl TEXT NOT NULL,letter TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',completed_at TEXT NOT NULL DEFAULT '',PRIMARY KEY(crawl,letter));''')
+ # Migrate already completed letters from the original single-crawl cursor.
+ # This is idempotent and prevents rerunning the same 64 known profiles.
+ for letter,attempts,last_error,completed_at in con.execute(
+     "SELECT letter,attempts,last_error,completed_at FROM cc_law_cursors"):
+  con.execute("INSERT OR IGNORE INTO cc_law_index_cursors VALUES(?,?,?,?,?)",
+              (CC_INDEX,letter,attempts,last_error,completed_at))
  con.commit()
 
 def run(db_path,catalog_path,max_fetch=35,seed_urls=None,fetch=fetch_public,delay=0.5):
@@ -92,29 +102,34 @@ def run(db_path,catalog_path,max_fetch=35,seed_urls=None,fetch=fetch_public,dela
   index_report={}
   if seed_urls is None:
    import string
-   # Cover new alphabetical regions incrementally; retry failed indexes later.
-   history={r[0]:r[1] for r in con.execute("SELECT letter,attempts FROM cc_law_cursors WHERE completed_at = ''")}
-   done={r[0] for r in con.execute("SELECT letter FROM cc_law_cursors WHERE completed_at != ''")}
-   remaining=[x for x in string.ascii_lowercase if x not in done]
-   due=min(remaining,key=lambda letter:(history.get(letter,0),letter)) if remaining else None
+   # A checkpoint per crawl+letter, not a single global a-z cursor. This
+   # discovers previously unseen archived public profiles without duplicates.
+   completed={(r[0],r[1]) for r in con.execute(
+       "SELECT crawl,letter FROM cc_law_index_cursors WHERE completed_at != ''")}
+   failed={(r[0],r[1]):r[2] for r in con.execute(
+       "SELECT crawl,letter,attempts FROM cc_law_index_cursors WHERE completed_at = ''")}
+   due=min(((index,letter) for index in CC_INDEXES
+            for letter in string.ascii_lowercase if (index,letter) not in completed),
+           key=lambda pair:(failed.get(pair,0),pair[1],CC_INDEXES.index(pair[0])),default=None)
    if due:
+    index,letter=due
     try:
-     seed_urls=index_urls(pattern=f'lawyer.com/firm/{due}*')
-     con.execute("INSERT INTO cc_law_cursors(letter,attempts,completed_at,last_error) VALUES(?,1,?,'') ON CONFLICT(letter) DO UPDATE SET attempts=attempts+1,completed_at=excluded.completed_at,last_error=''",(due,utc_now()))
+     seed_urls=index_urls(index=index,pattern=f'lawyer.com/firm/{letter}*')
+     con.execute("INSERT INTO cc_law_index_cursors(crawl,letter,attempts,completed_at,last_error) VALUES(?,?,1,?,'') ON CONFLICT(crawl,letter) DO UPDATE SET attempts=attempts+1,completed_at=excluded.completed_at,last_error=''",(index,letter,utc_now()))
      con.commit()
-     index_report={'partition':due,'index_urls':len(seed_urls),'index_status':'ok'}
+     index_report={'crawl':index.rsplit('/',1)[-1],'partition':letter,'index_urls':len(seed_urls),'index_status':'ok'}
     except Exception as exc:
-     con.execute("INSERT INTO cc_law_cursors(letter,attempts,last_error) VALUES(?,1,?) ON CONFLICT(letter) DO UPDATE SET attempts=attempts+1,last_error=excluded.last_error",(due,type(exc).__name__))
+     con.execute("INSERT INTO cc_law_index_cursors(crawl,letter,attempts,last_error) VALUES(?,?,1,?) ON CONFLICT(crawl,letter) DO UPDATE SET attempts=attempts+1,last_error=excluded.last_error",(index,letter,type(exc).__name__))
      con.commit()
      seed_urls=[]
-     index_report={'partition':due,'index_status':'unavailable','reason':type(exc).__name__}
+     index_report={'crawl':index.rsplit('/',1)[-1],'partition':letter,'index_status':'unavailable','reason':type(exc).__name__}
    else:
     seed_urls=[]
   added=0
   for url in seed_urls:
    if valid_profile_url(url):added+=int(con.execute('INSERT OR IGNORE INTO cc_law_profile_urls(url) VALUES(?)',(url,)).rowcount>0)
   con.commit()
-  items=[row[0] for row in con.execute("SELECT url FROM cc_law_profile_urls WHERE status='pending' ORDER BY url LIMIT ?",(max_fetch,))]
+  items=[row[0] for row in con.execute("SELECT url FROM cc_law_profile_urls WHERE status IN ('pending','needs_size_parser_recheck') ORDER BY CASE WHEN status='needs_size_parser_recheck' THEN 0 ELSE 1 END,url LIMIT ?",(max_fetch,))]
   counts={'index':index_report,'urls_newly_indexed':added,'attempted':0,'candidates_added':0,'website_excluded':0,'fetch_failures':0,'not_qualified':0}
   for url in items:
    counts['attempted']+=1

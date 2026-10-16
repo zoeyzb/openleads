@@ -29,7 +29,7 @@ class CommonCrawlProfileTests(unittest.TestCase):
    self.assertEqual(result['index']['index_status'],'unavailable')
    self.assertEqual(result['calling_qualified'],0)
    c=sqlite3.connect(base/'catalog.sqlite')
-   self.assertEqual(c.execute("select last_error from cc_law_cursors where letter='a'").fetchone()[0],'TimeoutError')
+   self.assertEqual(c.execute("select last_error from cc_law_index_cursors where letter='a'").fetchone()[0],'TimeoutError')
    c.close()
  def test_skips_failed_partition_without_blocking_next(self):
   from unittest.mock import patch
@@ -38,7 +38,31 @@ class CommonCrawlProfileTests(unittest.TestCase):
    with patch.object(m,'index_urls',side_effect=TimeoutError('index unavailable')):
     m.run(base/'queue.sqlite',base/'catalog.sqlite',max_fetch=1,delay=0)
     result=m.run(base/'queue.sqlite',base/'catalog.sqlite',max_fetch=1,delay=0)
-   self.assertEqual(result['index']['partition'],'b')
+   self.assertEqual(result['index']['partition'],'a')
+   self.assertNotEqual(result['index']['crawl'],m.CC_INDEX.rsplit('/',1)[-1])
+ def test_same_letter_across_distinct_crawls(self):
+  from unittest.mock import patch
+  with tempfile.TemporaryDirectory() as root:
+   base=Path(root)
+   with patch.object(m,'CC_INDEXES',('https://index.commoncrawl.org/AA-index','https://index.commoncrawl.org/BB-index')):
+    with patch.object(m,'index_urls',return_value=[]) as find:
+     m.run(base/'queue.sqlite',base/'catalog.sqlite',max_fetch=0,delay=0)
+     # Mark letters b-z on first crawl done: the next eligible is a on second.
+     con=sqlite3.connect(base/'catalog.sqlite')
+     for x in 'bcdefghijklmnopqrstuvwxyz':
+      con.execute("INSERT INTO cc_law_index_cursors(crawl,letter,attempts,completed_at) VALUES(?,?,1,'done')",('https://index.commoncrawl.org/AA-index',x))
+     con.commit();con.close()
+     next_run=m.run(base/'queue.sqlite',base/'catalog.sqlite',max_fetch=0,delay=0)
+     self.assertEqual(next_run['index']['crawl'],'BB-index')
+     self.assertEqual(next_run['index']['partition'],'a')
+ def test_exact_firm_size_passes_as_unverified_candidate(self):
+  page='<h2>Miller & Stone LLP</h2><h2>Miller & Stone LLP</h2><div>Firm Size: 4</div><div>Call 312-422-1836</div>'
+  lead,status=m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)
+  self.assertEqual(status,'candidate_needs_site_audit')
+  self.assertEqual((lead['firm_size_low'],lead['firm_size_high']),(4,4))
+ def test_one_attorney_exact_size_is_not_qualified(self):
+  page='<h2>Miller & Stone LLP</h2><h2>Miller & Stone LLP</h2><div>Firm Size: 1</div><div>Call 312-422-1836</div>'
+  self.assertEqual(m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)[1],'outside_firm_size')
  def test_out_of_range_excluded(self):
   page='<h2>Miller & Stone LLP</h2><h2>Miller & Stone LLP</h2>Firm Size: 2-25 Attorneys Call 312-422-1836'
   self.assertEqual(m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)[1],'outside_firm_size')
