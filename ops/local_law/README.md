@@ -95,3 +95,10 @@ Existing catalog feeds a bounded 20-per-run candidate bridge without a second da
 - Actual GitHub branch includes a black/charcoal/red Law Operations skin plus a searchable and exportable **aggregate-only** CRM source explorer. This is not a fake row-level contacts table and does not expose personal leads to a public website.
 - Separate `site/marketing.html` is the portfolio/agency case-study landing page; primary hero leads to custom website / automation inquiries and the real dashboard. Local preview: `cd site && python3 -m http.server 8765`, then visit `/marketing.html` and `/law-dashboard/`. No hosted scraper, paid service or second website project.
 - Website-verification search providers are still degraded; firmwide count verification incomplete. Continue using source-based strict guards; never fabricate lead success or statistics. Production Vercel was **not deployed** at user request.
+
+## 2026-10-16 CRM experience and accessibility pass
+- Converted the existing static operations page into six working hash-addressable views (Overview, Qualification, Coverage, System Health, Lead Workspace, Sources/Exports). This is navigational state on **one static page**, not extra services or fake data.
+- Fixed white-on-white state-card contrast with consistent graphite surfaces and readable labels, and normalized warning/success/blocked accents.
+- Added a private-by-design calling lead workspace: it displays the genuine qualified count and opens the existing authorized Google Sheet. Contact details and evidence are intentionally **not** published in the anonymous Gist or static Vercel page.
+- Source explorer still searches real aggregate source and queue counts and exports its CSV. No invented trends, new source records, or qualified leads.
+- Headless Chrome validated all six views at 1440 and 390 pixels, zero horizontal overflow and no page JS exceptions. Website and firmwide verification bottlenecks remain unresolved; UI work does not change the qualification rule. No Vercel deploy requested.

@@ -114,3 +114,13 @@ function drawCRM(d){const target=get('crm-items');if(!target)return;target.repla
 get('crm-search')?.addEventListener('input',()=>{if(lastMetrics)drawCRM(lastMetrics)});
 get('crm-download')?.addEventListener('click',()=>{if(!lastMetrics)return;const rows=[['type','name','count'],...Object.entries(lastMetrics.sourceBreakdown||{}).map(([k,v])=>['source',k,v]),...Object.entries(lastMetrics.candidateStatuses||{}).map(([k,v])=>['queue',k,v])];const csv=rows.map(r=>r.map(v=>'"'+String(v).replaceAll('"','""')+'"').join(',')).join('\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));const a=document.createElement('a');a.href=url;a.download='law-research-aggregates.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)});
 const previousRender=render;render=function(d){previousRender(d);drawCRM(d)};
+
+function setWorkspaceView(){
+ const valid=new Set(['overview','pipeline','coverage','systems','leads','sources']);
+ const name=location.hash.replace('#','');
+ const chosen=valid.has(name)?name:'overview';
+ document.body.classList.add('workspace-tab');document.body.dataset.currentView=chosen;
+ document.querySelectorAll('[data-view-tab]').forEach(link=>{const active=link.dataset.viewTab===chosen;link.classList.toggle('selected',active);link.setAttribute('aria-current',active?'page':'false')});
+ window.scrollTo({top:0,behavior:'instant'});
+}
+window.addEventListener('hashchange',setWorkspaceView);setWorkspaceView();
