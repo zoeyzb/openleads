@@ -66,3 +66,11 @@ Verified in Chrome at 1440px and 390px with no overflow, including bar/donut swi
 ### Website search provider diagnostics (2026-10-16)
 Live Mac probes show Bing RSS serving unrelated Wikipedia, Microsoft and gaming links to firm-name/domain queries; DuckDuckGo HTML is blocked. Do not permit irrelevant HTTP 200 payloads to certify website absence. The site preflight now emits per-provider responded/result_count diagnostics; the fail-closed behavior remains intact.
 The calling verifier still classifies no-email firms as `call_qualified_no_email` after all firm-size, website and phone gates pass. Published email harvesting is a bonus.
+
+## Current audit — 2026-10-16
+
+**Eligibility source of truth:** phone-first; firm-wide 2–10, genuinely no owned website, published and matching business phone, real law practice. Email enriches, but never gates phone qualification.
+
+Fresh Mac provider preflight: DEGRADED (0/2 usable; known-positive owned domain unrecovered). Verified zero calling/exported and zero strict-email rows. Active DB: 11 pending / 47 scope review / 2 non-law. Historic research: 9,037 FL+NY. Source triage: 281 requiring independent proof, 9 identity/phone mismatch, 7 unavailable, 1 owned-site exclusion; counts are **research** not call-ready. Recent macOS scheduler exited 0 while verifier_exit 3 remained blocked: do not equate launcher success to verification health. Sheet exists and is header-only; local service-account authentication remains missing and connected hourly task has no verified writes yet.
+
+**Do not hide the missing source problem with UI, more workers, or zero-yield discovery loops.** Require a validated firm-wide size source plus *two genuinely independent* healthy owned-site searches, demonstrated on known-owned controls and ordinary firms; archive and cite each evidence URL. Preserve optional email discovery. Follow the prioritized remediation and acceptance tests in the repository root README.

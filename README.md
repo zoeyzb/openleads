@@ -16,6 +16,40 @@
 
 </div>
 
+## Law-firm lead pipeline — verified operational audit (2026-10-16)
+
+> **Actual outcome: 0 qualified calling leads.** This section describes the separate Mac-local Recover Revenue law-firm prospecting workflow on branch `recover-scrape-mcp`, not a claim that the broader OpenLeads product has been validated end to end. **Email is optional for phone-first qualification**, but published emails remain a bonus enrichment target.
+
+**Strict calling rule:** real private US law firm; independent, source-backed **firm-wide 2–10 attorneys** (not local office staff and not one-state bar registrants); **no owned website**, with meaningful, independent completed checks that pass known-positive controls; **matching published usable business phone**. Evidence must be current, attributable to the same firm, and exportable. Email is not required.
+
+| Live evidence | Audited state |
+| --- | --- |
+| Research inventory | 9,037 deduplicated source/phone records: FL 5,575; NY 3,462. **Research only**, not eligible calls. |
+| Active local candidate queue | 60: 11 pending, 47 state-scope headcount review, 2 non-law employers. |
+| Archived triage | 298 records: 281 still need independent firm-wide size and no-site evidence, 9 unmatched identity/phone, 7 unavailable sources, 1 proven owned website. These are checkpoints, not qualified leads. |
+| Phone-qualified export | **0** rows; email-strict export also **0**. |
+| Website preflight, freshly run October 16 | **DEGRADED**: 0/2 providers returned usable firm-specific evidence, known-owned-site control not found. A Bing HTTP 200 with irrelevant Wikipedia/Microsoft/game results is **not** successful website screening. DDG HTML was unavailable. |
+| Headcount | FL roster counts Florida-active lawyers; NY group counts NY registrants; neither proves **firm-wide** attorney count. Bar/profile sources tested on Mac returned 403, so no automated firm-wide confirmation. |
+| macOS controller | Last observed scheduled run completed exit 0, but verification exit 3 is a deliberate **blocked** status; exit 0 is *not* proof of qualified leads. |
+| Google Sheets | Existing `Verified Calling Queue` tab is connected and header-only. Hourly connected task configured, but no qualified-row upsert has been demonstrated. Local authenticated service-account sync remains unconfigured. |
+| Dashboard | Static Vercel frontend reading aggregate-only public-by-URL Gist published by Mac every 10 minutes. This does not repair scraping/verification. |
+
+### Root causes, ordered by impact
+
+1. **Website search recall/availability, critical.** Two current provider adapters (Bing RSS / DuckDuckGo HTML) are unable to retrieve a known owned domain consistently. Search indexes sometimes return unrelated results, so clean-looking empty searches cannot prove no website. The verifier must fail closed; do **not** lower its gate to increase counts.
+2. **Firm-wide attorney evidence, critical.** Bulk state bar/employer records provide *state-scoped counts*, not firm size. Some are large national firms or non-law employers. Explicit third-party firm size and matching identity/phone are required. Office-size phrasing and state-active counts cannot substitute.
+3. **Source access and discovery quality, high.** Tested official/member bar and legal directory pages can reply 403; generic discovery queries frequently add zero actual candidates. More requests or workers against the same endpoints will not solve this.
+4. **Research-to-qualified gap, high.** Archival triage classifies thousands of records but does not find independent firm size or independently usable website evidence. A source-triaged record is not a call-ready lead.
+5. **Delivery, secondary.** Local Sheets API writer needs credentials; connected ChatGPT Sheets task is enabled but has no eligible leads to write. Metrics dashboard can display counts even when qualification is blocked.
+
+### Next engineering steps and acceptance tests
+
+- Find **authorized, independently usable** firm-size directories/bar profiles that expose explicit *firm-wide* 2–10 count plus verifiable business identity/phone. Test a sample of ordinary and national/multi-office law firms; record URL, exact size claim, timestamp, and evidence scope.
+- Replace/augment broken website adapters only after they **retrieve known-positive owned sites** and return firm-specific results, and verify negatives with two genuinely independent, completed sources. Track provider recall and errors separately; never classify a challenge, irrelevant links, timeout, or blank directory field as evidence of absence.
+- Join identity + size + source-published phone + two healthy owned-site checks; export only records whose evidence passes the existing verified export contract. Enrich public email and MX separately as **bonus**, preserving phone-only leads.
+- Run a real end-to-end batch with counts for each rejection reason, test false positives, and verify that *at least one* real, source-backed lead reaches `call-qualified-law.csv` **before** claiming the lead pipeline works. Independently verify Google Sheets receives and preserves that row.
+- Keep Mac worker + local SQLite + source adapters; do not add Railway/Render/multiple always-on services. For code, tests, and details see [local law README](ops/local_law/README.md).
+
 ---
 
 Apollo, Hunter, RocketReach, and ZoomInfo sell the same two things: **a contact database** and **email verification** — then upsell you the sending. **OpenLeads is the whole stack, inverted and free.**
