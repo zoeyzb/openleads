@@ -48,3 +48,41 @@ function paintInsights(d){
  const list=$('status-mix');list.replaceChildren();const statuses=Object.entries(d.candidateStatuses||{}).sort((a,b)=>b[1]-a[1]);const total=statuses.reduce((a,b)=>a+Number(b[1]),0);
  for(const [key,value] of statuses){const row=document.createElement('div');row.className='mix-row';const label=document.createElement('div');const title=document.createElement('span');title.textContent=key.replaceAll('_',' ');const count=document.createElement('b');count.textContent=format(value);label.append(title,count);const track=document.createElement('div');track.className='mix-track';const fill=document.createElement('div');fill.style.width=(total?value/total*100:0)+'%';track.append(fill);row.append(label,track);list.append(row)}
 }
+let localCandidates=[],candidatePage=0;
+function visibleCandidates(){
+ const term=($('candidate-search')?.value||'').toLowerCase();
+ return localCandidates.filter(x=>[x.firm,x.city,x.state,x.status].join(' ').toLowerCase().includes(term));
+}
+function showEvidence(row){
+ const area=$('candidate-detail');area.hidden=false;area.replaceChildren();
+ const h=document.createElement('h3');h.textContent=row.firm;
+ const p=document.createElement('p');p.textContent=[row.city,row.state,row.phone,row.status].filter(Boolean).join(' · ');
+ const warning=document.createElement('p');warning.textContent='Candidate only. Verify total attorneys, no owned website and business phone independently before calling.';
+ const src=document.createElement('a');src.href=row.source_url;src.target='_blank';src.rel='noopener noreferrer';src.textContent='Published source ↗';
+ const code=document.createElement('pre');code.textContent=JSON.stringify(row.evidence||{},null,2);
+ area.append(h,p,warning,src,code);
+ area.scrollIntoView({block:'nearest',behavior:'smooth'});
+}
+function renderCandidates(){
+ const body=$('candidate-rows');body.replaceChildren();
+ const matches=visibleCandidates();const pages=Math.max(1,Math.ceil(matches.length/12));candidatePage=Math.max(0,Math.min(candidatePage,pages-1));
+ for(const record of matches.slice(candidatePage*12,candidatePage*12+12)){
+  const tr=document.createElement('tr');
+  for(const value of [record.firm,[record.city,record.state].filter(Boolean).join(', '),record.status.replaceAll('_',' ')]){
+   const td=document.createElement('td');td.textContent=value;tr.append(td);
+  }
+  const td=document.createElement('td'),b=document.createElement('button');b.className='evidence-button';b.textContent='View evidence';b.addEventListener('click',()=>showEvidence(record));td.append(b);tr.append(td);body.append(tr);
+ }
+ if(!matches.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=4;td.textContent='No matching local candidates';tr.append(td);body.append(tr)}
+ $('candidate-page-summary').textContent=matches.length+' candidates · '+(candidatePage+1)+' / '+pages;
+ $('candidate-prev').disabled=candidatePage===0;$('candidate-next').disabled=candidatePage>=pages-1;
+}
+async function loadCandidates(){
+ if(!['localhost','127.0.0.1'].includes(location.hostname))return;
+ try{const response=await fetch('./local-queue.json',{cache:'no-store'});if(!response.ok)throw Error('Missing local snapshot');const payload=await response.json();localCandidates=payload.entries||[];renderCandidates()}
+ catch(e){$('candidate-rows').textContent='Local candidate snapshot unavailable. Run python3 ops/local_law/export_local_crm.py on your Mac.'}
+}
+$('candidate-search').addEventListener('input',()=>{candidatePage=0;renderCandidates()});
+$('candidate-prev').addEventListener('click',()=>{candidatePage--;renderCandidates()});
+$('candidate-next').addEventListener('click',()=>{candidatePage++;renderCandidates()});
+loadCandidates();

@@ -133,3 +133,7 @@ Existing catalog feeds a bounded 20-per-run candidate bridge without a second da
 ## 2026-10-16 CSS corruption fix
 - Root cause of white unstyled localhost screenshot: `site/law-dashboard/style.css` accidentally contained a complete duplicate of the HTML document (served as `text/css`). Restored actual CSS and checked served bytes, computed styles, desktop/mobile browser render. Preserve CSS content checks in reviews.
 - No changes to the user's separate pending scraper work or Vercel deployment.
+
+## 2026-10-16 — Private Mac candidate review table
+- Real, row-level local candidate data now powers Queue search, pagination and evidence inspection. The snapshot is generated from existing SQLite by `python3 ops/local_law/export_local_crm.py`, capped at 250 rows, and kept in gitignored `site/law-dashboard/local-queue.json` with 0600 permissions. The browser only loads private rows when running on localhost; public deployment retains aggregate-only information.
+- Candidate rows are **not** qualified lead claims; independent firm-wide 2–10 attorney evidence, no owned website and a published callable business phone remain hard gates; email is optional.

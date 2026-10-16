@@ -37,3 +37,6 @@ Thumbs.db
 *.swp
 *.log
 /tmp/
+
+# Private browser queue — generated on the authorized Mac only
+/site/law-dashboard/local-queue.json
