@@ -1,4 +1,5 @@
 import csv,tempfile,unittest
+from datetime import datetime,timezone,timedelta
 from pathlib import Path
 from law_local.worker import SqliteQueue
 from law_local.maps_first import ingest_maps_candidates
@@ -57,4 +58,20 @@ class MapSiteScreeningTests(unittest.TestCase):
    result=screen(db,5,search=lambda *_:found,health_ok=True)
    self.assertEqual(result['possible_owned_website'],1)
    self.assertEqual(result['calling_qualified_total'],0)
+ def test_recent_inconclusive_waits_six_hours_before_retry(self):
+  with tempfile.TemporaryDirectory() as directory:
+   db=self.seed(directory)
+   screen(db,1,search=lambda *_:GOOD,health_ok=False)
+   queue=SqliteQueue(db)
+   mid=queue.conn.execute('SELECT map_id FROM maps_raw_candidates').fetchone()[0]
+   recent=datetime.now(timezone.utc).isoformat()
+   queue.conn.execute('INSERT INTO maps_website_checks VALUES(?,?,?,?)',(mid,recent,'inconclusive','{}'))
+   queue.conn.commit();queue.close()
+   self.assertEqual(screen(db,1,search=lambda *_:GOOD,health_ok=True)['attempted'],0)
+   queue=SqliteQueue(db)
+   old=(datetime.now(timezone.utc)-timedelta(hours=7)).isoformat()
+   queue.conn.execute('UPDATE maps_website_checks SET checked_at=? WHERE map_id=?',(old,mid))
+   queue.conn.commit();queue.close()
+   self.assertEqual(screen(db,1,search=lambda *_:GOOD,health_ok=True)['attempted'],1)
+
 if __name__=='__main__':unittest.main()

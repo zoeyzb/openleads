@@ -25,6 +25,10 @@ def screen(db_path,limit=10,search=search_for_firm,health_ok=None,research_path=
   # Ambiguous owned-site evidence must also block automatic clearance. It
   # remains research/review evidence, never negative website proof.
   exclusion=" AND NOT EXISTS (SELECT 1 FROM research.external_evidence e WHERE e.lead_id='maps:'||lower(m.map_id) AND e.kind IN ('owned_website','possible_owned_website','owned_website_candidate'))"
+ # A provider failure or inconclusive result must not be retried every
+ # hourly cycle. Revisit it after six hours; recheck other completed audits
+ # after seven days. This is only scheduling, never negative site proof.
+ inconclusive_cutoff=(datetime.now(timezone.utc)-timedelta(hours=6)).isoformat()
  cutoff=(datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
  rows=db.conn.execute('''SELECT m.* FROM maps_raw_candidates m
   LEFT JOIN maps_website_checks w ON m.map_id=w.map_id
@@ -32,8 +36,10 @@ def screen(db_path,limit=10,search=search_for_firm,health_ok=None,research_path=
   AND m.firm GLOB '*[A-Za-z]*'
   AND lower(trim(m.firm)) NOT IN ('attorney','lawyer','law firm','law office','legal services')
   AND COALESCE(w.status,'') NOT IN ('review_website','rejected_inactive','manual_followup_required')
-  AND (w.map_id IS NULL OR w.status='inconclusive' OR w.checked_at < ?)
-  '''+exclusion+''' ORDER BY m.added_at LIMIT ?''',(cutoff,limit)).fetchall()
+  AND (w.map_id IS NULL OR
+       (w.status='inconclusive' AND w.checked_at < ?) OR
+       w.checked_at < ?)
+  '''+exclusion+''' ORDER BY m.added_at LIMIT ?''',(inconclusive_cutoff,cutoff,limit)).fetchall()
  if health_ok is None:
   health_ok=audit_provider_health()['status']=='usable'
  stats={'site_provider_usable':health_ok,'attempted':0,'confirmed_no_site':0,'possible_owned_website':0,
