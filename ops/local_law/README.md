@@ -102,3 +102,8 @@ Existing catalog feeds a bounded 20-per-run candidate bridge without a second da
 - Added a private-by-design calling lead workspace: it displays the genuine qualified count and opens the existing authorized Google Sheet. Contact details and evidence are intentionally **not** published in the anonymous Gist or static Vercel page.
 - Source explorer still searches real aggregate source and queue counts and exports its CSV. No invented trends, new source records, or qualified leads.
 - Headless Chrome validated all six views at 1440 and 390 pixels, zero horizontal overflow and no page JS exceptions. Website and firmwide verification bottlenecks remain unresolved; UI work does not change the qualification rule. No Vercel deploy requested.
+
+## 2026-10-16 — minimal operator-first dashboard
+- Consolidated navigation from six sections to Dashboard, Queue, Sources, Coverage and System. Reduced the oversized hero and metric-card heights, elevated meaningful next actions and preserved real-only charts and local source details.
+- Dashboard's action block directs operators to the queue and provider diagnostics; existing calling rule remains firm-wide 2–10, no owned site, published business phone, email bonus only. No invented blockers counts or qualified data.
+- Local headless Chrome verified all five views at 1440px and 390px: no JS errors and no horizontal overflow. Static site stays on localhost; no Vercel deployment.

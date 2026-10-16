@@ -116,10 +116,10 @@ get('crm-download')?.addEventListener('click',()=>{if(!lastMetrics)return;const 
 const previousRender=render;render=function(d){previousRender(d);drawCRM(d)};
 
 function setWorkspaceView(){
- const valid=new Set(['overview','pipeline','coverage','systems','leads','sources']);
+ const valid=new Set(['overview','coverage','systems','leads','sources']);
  const name=location.hash.replace('#','');
  const chosen=valid.has(name)?name:'overview';
- document.body.classList.add('workspace-tab');document.body.dataset.currentView=chosen;
+ document.body.classList.add('workspace-tab');document.body.dataset.currentView=chosen;const labels={overview:'Dashboard',leads:'Queue',sources:'Sources',coverage:'Coverage',systems:'System'};if(get('current-view-label'))get('current-view-label').textContent=labels[chosen];
  document.querySelectorAll('[data-view-tab]').forEach(link=>{const active=link.dataset.viewTab===chosen;link.classList.toggle('selected',active);link.setAttribute('aria-current',active?'page':'false')});
  window.scrollTo({top:0,behavior:'instant'});
 }
