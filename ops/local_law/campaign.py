@@ -139,6 +139,16 @@ def cycle():
    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),bridge_exit=moved.returncode,output=(moved.stdout+moved.stderr)[-500:]))+"\n")
   except subprocess.TimeoutExpired:
    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),bridge_error="timeout"))+"\n")
+  # Keep a diverse private 1,000-row unverified research queue refreshed from
+  # the existing 9,037 source-linked records. This is NOT the calling export.
+  try:
+   research=command(["-m","ops.local_law.export_review_shortlist"],35)
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),research_queue_exit=research.returncode,
+                             output=(research.stdout+research.stderr)[-1000:]))+"\n")
+  except subprocess.TimeoutExpired:
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),research_queue_error="timeout"))+"\n")
   cov=connect()
   rows=cov.execute("SELECT state FROM areas WHERE source='directory' AND state IN (" + ",".join("?" for _ in STATES) + ") AND (next_retry IS NULL OR next_retry <= ?) ORDER BY coalesce(last_attempt,'') LIMIT 1",(*STATES,now())).fetchall()
   if not rows:
