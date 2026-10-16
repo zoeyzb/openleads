@@ -328,8 +328,23 @@ class SqliteQueue:
                 return False
             if not normalize_phone(row["phone"]) or normalize_phone(row["phone"])!=normalize_phone(evidence.get("phone")):
                 return False
-            if not evidence.get("headcount_source") or not _third_party(urlparse(evidence["headcount_source"]).hostname or ""):
+            identity_source=evidence.get("headcount_source","")
+            if not identity_source:
                 return False
+            if not _third_party(urlparse(identity_source).hostname or ""):
+                # Operator reviews may use a client's public publication to
+                # bind identity/phone. Revalidate the complete review rather
+                # than treating arbitrary public URLs as trusted directories.
+                from ops.local_law.import_site_reviews import validate
+                review=evidence.get("operator_review",{})
+                lead=validate(review)
+                if (evidence.get("review_method")!="operator_two_provider_review"
+                    or lead.get("source_url")!=identity_source
+                    or norm(lead.get("firm"))!=norm(evidence.get("firm"))
+                    or normalize_phone(lead.get("phone"))!=normalize_phone(row["phone"])
+                    or any(h.get("disposition") in ("owned","uncertain")
+                           for p in review["providers"] for h in p["results"])):
+                    return False
             if status=="strict_eligible" and (not EMAIL_RE.fullmatch(evidence.get("email","")) or
                       not evidence.get("email_source")):
                 return False

@@ -57,4 +57,21 @@ class ReviewTests(unittest.TestCase):
             db=Path(d)/"q.db";r=fixture();q=SqliteQueue(db)
             q.add(r["lead"]);q.close()
             self.assertEqual(import_reviews(db,[r])["new_verified"],1)
+    def test_public_client_publication_survives_export_only_with_complete_review(self):
+        with tempfile.TemporaryDirectory() as d:
+            db=Path(d)/"q.db";r=fixture()
+            r["lead"]["source_url"]="https://client-publication.example/auction-brochure"
+            self.assertEqual(import_reviews(db,[r])["new_verified"],1)
+            q=SqliteQueue(db)
+            self.assertEqual(q.export("calling_qualified",Path(d)/"calls.csv"),1)
+            row=q.conn.execute("SELECT * FROM candidates").fetchone()
+            import json
+            evidence=json.loads(row["result_json"])
+            for defect in ("missing_review","wrong_phone","owned_link"):
+                bad=copy.deepcopy(evidence)
+                if defect=="missing_review":bad.pop("operator_review")
+                elif defect=="wrong_phone":bad["operator_review"]["lead"]["phone"]="3124229999"
+                else:bad["operator_review"]["providers"][0]["results"][0]["disposition"]="owned"
+                self.assertFalse(q._verified_for_export(row,bad,"call_qualified_no_email"))
+            q.close()
 if __name__=="__main__":unittest.main()

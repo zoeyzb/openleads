@@ -39,3 +39,36 @@ class LocalControllerTests(unittest.TestCase):
    with sqlite3.connect(Path(td)/'research_catalog.sqlite3') as db:
     self.assertEqual(db.execute('select count(*) from local_maps_jobs where status="working"').fetchone()[0],0)
 if __name__=='__main__':unittest.main()
+
+class RecoveryTests(unittest.TestCase):
+ def test_empty_finished_job_is_retired_then_market_advances(self):
+  with tempfile.TemporaryDirectory() as td:
+   old='12345678-1234-1234-1234-123456789abc'
+   new='22345678-1234-1234-1234-123456789abc'
+   m.run_once(td,fetch=lambda *a,**k:{'id':old},free_bytes=12*1024**3)
+   def fetch(url,request=None):return {'id':new} if request else {'Status':'ok'}
+   with patch.object(m,'ingest',side_effect=m.EmptyMapsResult('empty artifact')):
+    result=m.run_cycle(root=td,fetch=fetch,free_bytes=12*1024**3)
+   self.assertEqual(result['action'],'empty_result')
+   self.assertEqual(result['next']['action'],'submitted')
+   with sqlite3.connect(Path(td)/'research_catalog.sqlite3') as db:
+    self.assertEqual(db.execute('select status from local_maps_jobs where job_id=?',(old,)).fetchone()[0],'empty_result')
+ def test_transient_import_failures_stop_after_three_without_erasing_job(self):
+  with tempfile.TemporaryDirectory() as td:
+   job='12345678-1234-1234-1234-123456789abc'
+   m.run_once(td,fetch=lambda *a,**k:{'id':job},free_bytes=12*1024**3)
+   with patch.object(m,'ingest',side_effect=TimeoutError('unavailable')):
+    results=[m.run_once(td,fetch=lambda *a,**k:{'Status':'ok'},free_bytes=12*1024**3) for _ in range(3)]
+   self.assertEqual([r['action'] for r in results],['import_retry','import_retry','import_failed'])
+
+ def test_three_failed_artifacts_pause_without_consuming_another_market(self):
+  with tempfile.TemporaryDirectory() as td:
+   with sqlite3.connect(Path(td)/'research_catalog.sqlite3') as db:
+    m.initialize(db)
+    for n in range(3):
+     db.execute("INSERT INTO local_maps_jobs(job_id,market,state,submitted_at,status) VALUES(?,?,?,?,?)",(str(n),str(n),'IL',str(n),'empty_result'))
+    db.commit()
+   result=m.run_cycle(root=td,fetch=lambda *a,**k:self.fail('provider called while paused'),free_bytes=12*1024**3)
+   self.assertEqual(result['action'],'paused_provider_failures')
+   with sqlite3.connect(Path(td)/'research_catalog.sqlite3') as db:
+    self.assertEqual(db.execute('SELECT COUNT(*) FROM local_maps_jobs').fetchone()[0],3)

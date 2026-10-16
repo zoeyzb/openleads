@@ -1,7 +1,7 @@
 import csv,io,json,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
-from ops.local_law.ingest_local_maps import ingest
+from ops.local_law.ingest_local_maps import ingest,EmptyMapsResult
 class FakeResponse:
  def __init__(self,body):self.body=body
  def __enter__(self):return self
@@ -27,3 +27,11 @@ class IngestSelfHostedMapsTests(unittest.TestCase):
    self.assertEqual(b['new_unverified_queue_rows'],0)
    self.assertEqual(a['qualified_calling_leads_created'],0)
 if __name__=='__main__':unittest.main()
+
+class EmptyResultTests(unittest.TestCase):
+ def test_success_status_with_empty_artifact_is_not_zero_lead_success(self):
+  with tempfile.TemporaryDirectory() as folder:
+   def fetch(url,timeout):return FakeResponse(b'{"Status":"ok"}' if not url.endswith('/download') else b'')
+   with patch('ops.local_law.ingest_local_maps.urllib.request.urlopen',side_effect=fetch):
+    with self.assertRaises(EmptyMapsResult):ingest('f38d9f47-61cc-42fb-b039-a7750fce8b30',folder)
+   self.assertFalse((Path(folder)/'law-leads.sqlite3').exists())

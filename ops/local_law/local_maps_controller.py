@@ -6,7 +6,7 @@ No Redis, paid APIs, proxies, unrestricted cycles or external service exposure.
 from __future__ import annotations
 import json, shutil, sqlite3, time, urllib.request
 from pathlib import Path
-from ops.local_law.ingest_local_maps import HOST, ingest
+from ops.local_law.ingest_local_maps import HOST, ingest, EmptyMapsResult
 
 MARKETS=(
  ('Galesburg','IL'),('Burlington','IA'),('Cedar Falls','IA'),
@@ -35,6 +35,9 @@ def initialize(db):
  imported_count INTEGER NOT NULL DEFAULT 0,
  last_checked TEXT NOT NULL DEFAULT '');
  CREATE INDEX IF NOT EXISTS idx_local_maps_market ON local_maps_jobs(market,state);''')
+ columns={r[1] for r in db.execute('PRAGMA table_info(local_maps_jobs)')}
+ for name,definition in [('import_attempts','INTEGER NOT NULL DEFAULT 0'),('last_error',"TEXT NOT NULL DEFAULT ''")]:
+  if name not in columns:db.execute(f'ALTER TABLE local_maps_jobs ADD COLUMN {name} {definition}')
  db.commit()
 
 def get_json(url,request=None):
@@ -68,7 +71,14 @@ def run_once(root=None,fetch=get_json,free_bytes=None,clock=None):
    if status in ('ok','done','completed','success','finished'):
     try:result=ingest(job_id,root=root)
     except Exception as exc:
-     return {'action':'import_failed','job_id':job_id,'reason':type(exc).__name__}
+     attempts=db.execute('SELECT import_attempts FROM local_maps_jobs WHERE job_id=?',(job_id,)).fetchone()[0]+1
+     terminal=isinstance(exc,EmptyMapsResult) or attempts>=3
+     failure='empty_result' if isinstance(exc,EmptyMapsResult) else 'import_failed'
+     reason=type(exc).__name__+': '+str(exc)[:180]
+     db.execute('UPDATE local_maps_jobs SET import_attempts=?,last_error=?,last_checked=?,status=? WHERE job_id=?',
+                (attempts,reason,now,failure if terminal else 'working',job_id))
+     db.commit()
+     return {'action':failure if terminal else 'import_retry','job_id':job_id,'reason':reason,'attempts':attempts}
     db.execute('''UPDATE local_maps_jobs SET status='completed',raw_count=?,candidate_count=?,imported_count=?,last_checked=? WHERE job_id=?''',(
      result['raw_listings'],result['maps_no_site_phone_candidates'],result['new_unverified_queue_rows'],now,job_id))
     db.commit()
@@ -77,6 +87,11 @@ def run_once(root=None,fetch=get_json,free_bytes=None,clock=None):
     db.execute("UPDATE local_maps_jobs SET status=?,last_checked=? WHERE job_id=?",(status,now,job_id));db.commit()
     return {'action':'job_failed','job_id':job_id,'status':status}
    return {'action':'in_progress','job_id':job_id,'status':status}
+  # Repeated empty/error artifacts indicate provider failure, not exhausted
+  # markets. Stop consuming fresh localities until an operator restores health.
+  recent=db.execute("SELECT status FROM local_maps_jobs WHERE status!='historical' ORDER BY submitted_at DESC,rowid DESC LIMIT 3").fetchall()
+  if len(recent)==3 and all(row[0] in ('empty_result','import_failed','failed','cancelled','canceled','error') for row in recent):
+   return {'action':'paused_provider_failures','consecutive_failures':3}
   free=free_bytes if free_bytes is not None else shutil.disk_usage(root).free
   if free < 6*1024**3:
    return {'action':'paused_low_disk','free_gb':round(free/1024**3,2)}
@@ -101,5 +116,12 @@ def run_once(root=None,fetch=get_json,free_bytes=None,clock=None):
   return {'action':'submitted','job_id':jobid,'market':city,'state':state,'qualified_created':0}
  finally:db.close()
 
+def run_cycle(**kwargs):
+ """Finalize at most one job and submit at most one successor per tick."""
+ result=run_once(**kwargs)
+ if result['action'] in ('imported','job_failed','empty_result','import_failed'):
+  result['next']=run_once(**kwargs)
+ return result
+
 if __name__=='__main__':
- print(json.dumps(run_once()))
+ print(json.dumps(run_cycle()))

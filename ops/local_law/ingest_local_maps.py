@@ -11,6 +11,10 @@ from law_local.maps_first import ingest_maps_candidates
 from law_local.worker import SqliteQueue
 HOST='http://127.0.0.1:18080'
 
+class EmptyMapsResult(ValueError):
+    """A finished job returned no artifact; this is not a zero-lead success."""
+
+
 def ingest(job_id,root=None,api=HOST):
     root=Path(root or Path.home()/'lead-workspace')
     if not (isinstance(job_id,str) and len(job_id)==36 and all(c in 'abcdef0123456789-' for c in job_id.lower())):
@@ -28,7 +32,8 @@ def ingest(job_id,root=None,api=HOST):
     if not raw.exists():
         with urllib.request.urlopen(f'{base}/api/v1/jobs/{job_id}/download',timeout=30) as response:
             content=response.read(20000000)
-        if not content or b',' not in content[:500]:raise ValueError('Maps job CSV empty or invalid')
+        if not content:raise EmptyMapsResult('Completed Maps job returned an empty CSV artifact')
+        if b',' not in content[:500]:raise ValueError('Maps job CSV invalid')
         raw.write_bytes(content)
     cleaned=mapsdir/f'{job_id}-research-only.csv'
     result=extract(raw,cleaned)
