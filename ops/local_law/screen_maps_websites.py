@@ -11,19 +11,25 @@ from urllib.parse import urlparse
 from law_local.worker import SqliteQueue,search_for_firm,classify_search_results,utc_now
 from law_local.site_provider_health import audit_provider_health
 
-def screen(db_path,limit=10,search=search_for_firm,health_ok=None):
+def screen(db_path,limit=10,search=search_for_firm,health_ok=None,research_path=None):
  db=SqliteQueue(db_path)
  db.conn.execute('''CREATE TABLE IF NOT EXISTS maps_website_checks(
      map_id TEXT PRIMARY KEY, checked_at TEXT NOT NULL, status TEXT NOT NULL,
      result_json TEXT NOT NULL)''')
  db.conn.commit()
+ # Never clear a candidate with already-confirmed owned-site evidence.
+ research=Path(research_path) if research_path is not None else Path(db_path).parent/'research_catalog.sqlite3'
+ exclusion=''
+ if research.is_file():
+  db.conn.execute('ATTACH DATABASE ? AS research',(str(research),))
+  exclusion=" AND NOT EXISTS (SELECT 1 FROM research.external_evidence e WHERE e.lead_id='maps:'||lower(m.map_id) AND e.kind='owned_website')"
  cutoff=(datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
  rows=db.conn.execute('''SELECT m.* FROM maps_raw_candidates m
   LEFT JOIN maps_website_checks w ON m.map_id=w.map_id
   WHERE m.status IN ('unverified_headcount','pending_independent_site_audit')
   AND COALESCE(w.status,'') NOT IN ('review_website','rejected_inactive')
   AND (w.map_id IS NULL OR w.status='inconclusive' OR w.checked_at < ?)
-  ORDER BY m.added_at LIMIT ?''',(cutoff,limit)).fetchall()
+  '''+exclusion+''' ORDER BY m.added_at LIMIT ?''',(cutoff,limit)).fetchall()
  if health_ok is None:
   health_ok=audit_provider_health()['status']=='usable'
  stats={'site_provider_usable':health_ok,'attempted':0,'confirmed_no_site':0,'possible_owned_website':0,

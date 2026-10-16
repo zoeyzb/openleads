@@ -3,16 +3,24 @@ import argparse,csv,json,sqlite3
 from pathlib import Path
 FIELDS=('Firm','Phone','City','State','Maps source','Maps website field','Independent website status','Calling qualified','Last website check')
 
-def export(db_path,out_path):
+def export(db_path,out_path,research_path=None):
  con=sqlite3.connect(db_path);con.row_factory=sqlite3.Row
  try:
   con.execute('''CREATE TABLE IF NOT EXISTS maps_website_checks(map_id TEXT PRIMARY KEY,checked_at TEXT,status TEXT,result_json TEXT)''')
+  # Research evidence is private and lives in a separate SQLite database.
+  # A confirmed owned site must remove a Maps record from the UNVERIFIED
+  # outreach-research shortlist even before Maps checks are reconciled.
+  research=Path(research_path) if research_path is not None else Path(db_path).parent/'research_catalog.sqlite3'
+  exclusion=''
+  if research.is_file():
+   con.execute('ATTACH DATABASE ? AS research',(str(research),))
+   exclusion=" AND NOT EXISTS (SELECT 1 FROM research.external_evidence e WHERE e.lead_id='maps:'||lower(m.map_id) AND e.kind='owned_website')"
   rows=con.execute('''SELECT m.firm,m.phone,m.city,m.state,m.maps_url,
     CASE WHEN m.status='unverified_headcount' THEN 'blank-or-social-only' ELSE m.status END AS maps_status,
     COALESCE(w.status,'not_checked') AS website_status,COALESCE(w.checked_at,'') AS checked_at
     FROM maps_raw_candidates m LEFT JOIN maps_website_checks w ON w.map_id=m.map_id
     WHERE COALESCE(w.status,'not_checked') IN ('not_checked','inconclusive','manual_followup_required')
-    ORDER BY m.state,m.city,m.firm''').fetchall()
+    '''+exclusion+''' ORDER BY m.state,m.city,m.firm''').fetchall()
   path=Path(out_path);path.parent.mkdir(parents=True,exist_ok=True)
   tmp=path.with_suffix('.tmp')
   with tmp.open('w',newline='',encoding='utf-8') as fd:
