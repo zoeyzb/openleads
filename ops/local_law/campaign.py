@@ -114,6 +114,18 @@ def cycle():
  with (ROOT/"campaign.lock").open("w") as lock:
   try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
   except BlockingIOError: print('another run is active');return 2
+  # Restore saved historical raw Maps discoveries idempotently, avoiding a
+  # second disconnected CSV queue. Old metadata is never evidence of no site.
+  archived=ROOT/"research_archives/fl/maps/no-site-phone-candidates.csv"
+  if archived.exists():
+   try:
+    restored=command(["-m","ops.local_law.restore_archived_maps","--csv",str(archived)],20)
+    with (ROOT/"campaign-runs.log").open("a") as log:
+     log.write(json.dumps(dict(time=now(),archived_maps_restore_exit=restored.returncode,
+                              output=(restored.stdout+restored.stderr)[-700:]))+"\n")
+   except subprocess.TimeoutExpired:
+    with (ROOT/"campaign-runs.log").open("a") as log:
+     log.write(json.dumps(dict(time=now(),archived_maps_restore_error="timeout"))+"\n")
   # Recover finished LOCAL Maps jobs into a separate unverified research queue.
   # No paid network services or Redis; site absence is never inferred from Maps.
   local_job=ROOT/"local-maps-pilot-job.json"
