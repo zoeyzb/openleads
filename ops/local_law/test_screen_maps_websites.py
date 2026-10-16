@@ -33,7 +33,7 @@ class MapSiteScreeningTests(unittest.TestCase):
    exported=Path(directory)/'call.csv'
    self.assertEqual(queue.export('calling_qualified',exported),0)
    self.assertEqual(queue.conn.execute("SELECT status FROM maps_raw_candidates").fetchone()[0],
-                    'needs_firmwide_size_and_email')
+                    'needs_identity_phone_review')
    self.assertEqual(screen(db,5,search=lambda *_:GOOD,health_ok=True)['attempted'],0)
    queue.close()
  def test_existing_candidate_gets_completed_evidence(self):

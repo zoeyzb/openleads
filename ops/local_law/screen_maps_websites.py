@@ -32,7 +32,7 @@ def screen(db_path,limit=10,search=search_for_firm,health_ok=None,research_path=
  cutoff=(datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
  rows=db.conn.execute('''SELECT m.* FROM maps_raw_candidates m
   LEFT JOIN maps_website_checks w ON m.map_id=w.map_id
-  WHERE m.status IN ('unverified_headcount','pending_independent_site_audit')
+  WHERE m.status IN ('unverified_headcount','pending_independent_site_audit','needs_firmwide_size_and_email','needs_identity_phone_review')
   AND m.firm GLOB '*[A-Za-z]*'
   AND lower(trim(m.firm)) NOT IN ('attorney','lawyer','law firm','law office','legal services')
   AND COALESCE(w.status,'') NOT IN ('review_website','rejected_inactive','manual_followup_required')
@@ -61,10 +61,10 @@ def screen(db_path,limit=10,search=search_for_firm,health_ok=None,research_path=
     verdict={'status':status,'reason':'known_owned_website_positive_control_failed'}
    if status=='screened_no_site':
     stats['confirmed_no_site']+=1
-    # Website clearance is only one gate. Preserve the Maps candidate for
-    # firmwide 2-10 + source-published usable-email research; never promote it
-    # directly into an eligible/calling-qualified record.
-    db.conn.execute("UPDATE maps_raw_candidates SET status='needs_firmwide_size_and_email' WHERE map_id=?",
+    # Independent site screening alone does not verify a separate identity
+    # source. Preserve as research for phone/identity corroboration; no size
+    # or email requirement applies to phone calling eligibility.
+    db.conn.execute("UPDATE maps_raw_candidates SET status='needs_identity_phone_review' WHERE map_id=?",
                     (lead['map_id'],))
    elif status=='review_website':stats['possible_owned_website']+=1
    else:stats['provider_degraded']+=1

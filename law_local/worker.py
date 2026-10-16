@@ -30,7 +30,7 @@ DIRECTORY_DOMAINS = (
     "lawyers.com", "lawyer.com", "avvo.com", "justia.com", "inbar.org",
     "findthelawfirms.com", "findthelawyers.com", "floridalawdirectory.com",
     "findlaw.com", "martindale.com", "superlawyers.com",
-    "floridabar.org", "americanbar.org", "lawinfo.com",
+    "floridabar.org", "mywsba.org", "americanbar.org", "lawinfo.com",
     "facebook.com", "linkedin.com", "instagram.com", "youtube.com",
     "yelp.com", "google.com", "bing.com", "duckduckgo.com",
     "mapquest.com", "yellowpages.com", "chamberofcommerce.com",
@@ -219,12 +219,9 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
     if source["website_candidates"]:
         return {**evidence,"status":"review_website","website_candidates":source["website_candidates"]}
 
-    # Campaign invariant: only firmwide 2-10 attorney firms can become eligible.
-    # The same identity-matched public source must explicitly support that size.
-    if not (2 <= int(source.get("attorneys") or 0) <= 10):
-        return {**evidence,"status":"review_headcount_scope",
-                "reason":"firmwide_2_10_not_verified"}
-    evidence["qualification_scope"]="law_no_owned_website_2_10_email"
+    # Firm size is not an outreach criterion. Keep the identity and phone
+    # source checks and independent owned-website verification unchanged.
+    evidence["qualification_scope"]="law_no_owned_website_any_size"
     if (urlparse(str(lead.get("source_url",""))).hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com":
         from law_local.florida_roster import clearly_non_law_employer
         if clearly_non_law_employer(lead.get("firm","")):
@@ -238,8 +235,8 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
         for r in search_results[:2]]}
     if site["status"]!="screened_no_site":
         return {**evidence,"status":site["status"],"site_evidence":site}
-    # Source-published usable email is a hard eligibility gate. Never guess an
-    # address and never promote a phone-only record into the eligible pool.
+    # Email is optional for calling; only a source-published MX-checked email
+    # permits promotion to the separate strict email-qualified pool.
     for email in source["emails"]:
         domain=email.rsplit("@",1)[-1]
         try:
@@ -250,9 +247,7 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
             evidence["email"]=email
             evidence["email_source"]=lead.get("source_url","")
             break
-    if not evidence["email"]:
-        return {**evidence,"status":"research_missing_verified_email"}
-    return {**evidence,"status":"strict_eligible"}
+    return {**evidence,"status":"strict_eligible" if evidence["email"] else "call_qualified_no_email"}
 
 class SqliteQueue:
     def __init__(self,path):
@@ -276,11 +271,10 @@ class SqliteQueue:
             );
             CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status);
         """)
-        # Re-evaluate legacy phone-only statuses under the current hard gates:
-        # firmwide 2-10 + independent no-owned-site + source-verified usable email.
-        self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status IN ('call_ready_no_email','call_qualified_no_email')")
-        # Keep unresolved firmwide-size records in research. They are not
-        # eligible until a firm-specific public source proves 2-10 attorneys.
+        # Only migrate obsolete statuses that were blocked by size or missing
+        # email. Never demote already verified phone-qualified candidates.
+        self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status='call_ready_no_email'")
+        self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status='review_headcount_scope'" )
         self.conn.commit()
     @staticmethod
     def _id(lead):
@@ -331,14 +325,14 @@ class SqliteQueue:
                 return False
             if evidence.get("status")!=status or evidence.get("site_status")!="screened_no_site":
                 return False
-            if evidence.get("qualification_scope")!="law_no_owned_website_2_10_email":
-                return False
-            attorneys=int(evidence.get("attorneys") or 0)
-            if not (2 <= attorneys <= 10):
+            # Historical fully verified 2-10 records remain valid; new records
+            # do not need a size value or a firmwide count source.
+            if evidence.get("qualification_scope") not in (
+                    "law_no_owned_website_any_size", "law_no_owned_website_2_10_email"):
                 return False
             if not normalize_phone(row["phone"]) or normalize_phone(row["phone"])!=normalize_phone(evidence.get("phone")):
                 return False
-            identity_source=evidence.get("headcount_source")
+            identity_source=evidence.get("headcount_source") or row["source_url"]
             if not identity_source:
                 return False
             if not _third_party(urlparse(identity_source).hostname or ""):
@@ -367,11 +361,11 @@ class SqliteQueue:
     def counts(self):
         totals=dict(self.conn.execute("SELECT status,COUNT(*) FROM candidates GROUP BY status").fetchall())
         totals["calling_qualified"]=sum(
-            1 for row in self.conn.execute("SELECT phone,status,source_url,result_json FROM candidates WHERE status='strict_eligible'")
-            if self._verified_for_export(row,json.loads(row["result_json"]),"strict_eligible"))
+            1 for row in self.conn.execute("SELECT phone,status,source_url,result_json FROM candidates WHERE status IN ('strict_eligible','call_qualified_no_email')")
+            if self._verified_for_export(row,json.loads(row["result_json"]),row["status"]))
         return totals
     def export(self,status,path):
-        statuses=("strict_eligible",) if status=="calling_qualified" else (status,)
+        statuses=("strict_eligible","call_qualified_no_email") if status=="calling_qualified" else (status,)
         placeholders=",".join("?" for _ in statuses)
         rows=self.conn.execute(f"""SELECT firm,phone,city,state,source_url,result_json
              FROM candidates WHERE status IN ({placeholders}) ORDER BY state,firm""",statuses).fetchall()
@@ -383,7 +377,7 @@ class SqliteQueue:
             w.writeheader()
             for row in rows:
                 evidence=json.loads(row["result_json"])
-                candidate_status="strict_eligible"
+                candidate_status=evidence.get("status")
                 if not self._verified_for_export(row,evidence,candidate_status):
                     continue
                 w.writerow({
@@ -457,10 +451,10 @@ def apply_verified_bar_contact_proof(db,lead,result):
                     "email":"","email_source":"",
                     "website_candidates":[website],
                     "website_evidence_source":proof["email_source"]}
-    if (result.get("status")!="research_missing_verified_email"
+    if (result.get("status")!="call_qualified_no_email"
             or result.get("site_status")!="screened_no_site"
-            or result.get("qualification_scope")!="law_no_owned_website_2_10_email"
-            or not (2 <= int(result.get("attorneys") or 0) <= 10)
+            or result.get("qualification_scope") not in (
+                "law_no_owned_website_any_size", "law_no_owned_website_2_10_email")
             or normalize_phone(result.get("phone"))!=expected_phone):
         return result
     for proof in supported:

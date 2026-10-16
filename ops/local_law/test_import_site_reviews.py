@@ -19,11 +19,11 @@ class ReviewTests(unittest.TestCase):
     def test_import_replay_and_fresh_export(self):
         with tempfile.TemporaryDirectory() as d:
             db=Path(d)/"q.db";review=fixture()
-            self.assertEqual(import_reviews(db,[review])["new_verified"],0)
+            self.assertEqual(import_reviews(db,[review])["new_verified"],1)
             self.assertEqual(import_reviews(db,[review])["replayed"],1)
             q=SqliteQueue(db)
-            self.assertEqual(q.export("calling_qualified",Path(d)/"calls.csv"),0)
-            self.assertEqual(q.conn.execute("SELECT status FROM candidates").fetchone()[0],"review_headcount_scope")
+            self.assertEqual(q.export("calling_qualified",Path(d)/"calls.csv"),1)
+            self.assertEqual(q.conn.execute("SELECT status FROM candidates").fetchone()[0],"call_qualified_no_email")
             self.assertEqual(q.conn.execute("select count(*) from operator_site_reviews").fetchone()[0],1)
             q.close()
     def test_missing_and_unhealthy_control_rejected(self):
@@ -57,14 +57,14 @@ class ReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             db=Path(d)/"q.db";r=fixture();q=SqliteQueue(db)
             q.add(r["lead"]);q.close()
-            self.assertEqual(import_reviews(db,[r])["new_verified"],0)
+            self.assertEqual(import_reviews(db,[r])["new_verified"],1)
     def test_public_client_publication_survives_export_only_with_complete_review(self):
         with tempfile.TemporaryDirectory() as d:
             db=Path(d)/"q.db";r=fixture()
             r["lead"]["source_url"]="https://client-publication.example/auction-brochure"
-            self.assertEqual(import_reviews(db,[r])["new_verified"],0)
+            self.assertEqual(import_reviews(db,[r])["new_verified"],1)
             q=SqliteQueue(db)
-            self.assertEqual(q.export("calling_qualified",Path(d)/"calls.csv"),0)
+            self.assertEqual(q.export("calling_qualified",Path(d)/"calls.csv"),1)
             row=q.conn.execute("SELECT * FROM candidates").fetchone()
             import json
             evidence=json.loads(row["result_json"])

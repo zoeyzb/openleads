@@ -81,9 +81,9 @@ class FinalGateIntegrationTests(unittest.TestCase):
 
     @staticmethod
     def screened_no_email():
-        return {"status":"research_missing_verified_email","attorneys":2,
+        return {"status":"call_qualified_no_email","attorneys":2,
                 "phone":"8134221960","site_status":"screened_no_site",
-                "qualification_scope":"law_no_owned_website_2_10_email",
+                "qualification_scope":"law_no_owned_website_any_size",
                 "headcount_source":"https://www.floridalawdirectory.com/firm/murray-shepard-law-llc",
                 "email":"","email_source":""}
 
@@ -135,7 +135,7 @@ class FinalGateIntegrationTests(unittest.TestCase):
             db.conn.execute("UPDATE fl_bar_contact_proofs SET phone='8139999999' ")
             db.conn.commit()
             result=apply_verified_bar_contact_proof(db,lead,self.screened_no_email())
-            self.assertEqual(result["status"],"research_missing_verified_email")
+            self.assertEqual(result["status"],"call_qualified_no_email")
             db.close()
 
     def test_no_contact_table_does_not_break_existing_verification(self):
@@ -143,7 +143,7 @@ class FinalGateIntegrationTests(unittest.TestCase):
             db=SqliteQueue(Path(d)/"leads.sqlite")
             lead=self.lead();db.add(lead)
             result=apply_verified_bar_contact_proof(db,lead,self.screened_no_email())
-            self.assertEqual(result["status"],"research_missing_verified_email")
+            self.assertEqual(result["status"],"call_qualified_no_email")
             db.close()
 
 if __name__=="__main__":

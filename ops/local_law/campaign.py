@@ -148,7 +148,7 @@ def cycle():
   except subprocess.TimeoutExpired:
    with (ROOT/"campaign-runs.log").open("a") as log:
     log.write(json.dumps(dict(time=now(),local_maps_cycle_error="timeout"))+"\n")
-  # Size is no longer a campaign requirement. Screen Maps phone leads directly
+  # Any firm size is eligible. Screen Maps phone leads directly
   # against independently functioning website-search providers; fail closed.
   try:
    screened=command(["-m","ops.local_law.screen_maps_websites","--max","12"],120)
