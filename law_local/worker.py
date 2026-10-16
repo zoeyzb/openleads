@@ -30,7 +30,7 @@ DIRECTORY_DOMAINS = (
     "lawyers.com", "lawyer.com", "avvo.com", "justia.com", "inbar.org",
     "findthelawfirms.com", "findthelawyers.com", "floridalawdirectory.com",
     "findlaw.com", "martindale.com", "superlawyers.com",
-    "floridabar.org", "americanbar.org", "lawinfo.com",
+    "floridabar.org", "mywsba.org", "americanbar.org", "lawinfo.com",
     "facebook.com", "linkedin.com", "instagram.com", "youtube.com",
     "yelp.com", "google.com", "bing.com", "duckduckgo.com",
     "mapquest.com", "yellowpages.com", "chamberofcommerce.com",
