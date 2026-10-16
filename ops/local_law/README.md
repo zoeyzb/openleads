@@ -115,3 +115,8 @@ Existing catalog feeds a bounded 20-per-run candidate bridge without a second da
 ## 2026-10-16 chart rendering regression fix
 - Found directly hard-coded green and yellow in JavaScript donut gradients and bar/queue CSS. Replaced with restrained red and graphite, explicitly overriding bar classes rather than relying on unused theme variables. Removed the redundant giant qualification/system panels from the Overview layout, retaining System diagnostics in its separate tab.
 - Verified all five local views at 1440px and 390px without JavaScript exceptions or horizontal overflow; 87 core tests pass. No changes to lead counts or source-validation rules. No Vercel deployment.
+
+## 2026-10-16 — actual minimal CRM rebuild
+- Replaced the old layered law-dashboard markup, charts, and CSS rather than appending overrides. Five focused tabs: Dashboard, Queue, Sources, Coverage, System. Consistent deep black / gray / restrained red with 13–15px readable operational text.
+- Real Mac aggregate feed powers four KPIs, candidate breakdown, searchable source/status table, state coverage, and diagnostics. Phone is required, email optional. No invented leads or fake time-series. Source CSV exports are aggregate-only; firm contacts stay in authorized local/Sheet storage.
+- Mac Chrome Playwright checks: 5/5 views at desktop 1440 and mobile 390, no JS page errors or horizontal viewport overflow. No Vercel deployment.
