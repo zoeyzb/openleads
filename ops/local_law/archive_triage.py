@@ -12,7 +12,17 @@ def run(limit=30):
   lead_id TEXT NOT NULL,email TEXT NOT NULL,source_url TEXT NOT NULL, checked_at TEXT NOT NULL,
   PRIMARY KEY(lead_id,email))""")
  c.commit()
- rows=c.execute("""SELECT lead_id,firm,phone,city,state,source_url FROM source_research WHERE source IN ('FL roster','NY registrations') AND lead_id NOT IN (SELECT lead_id FROM source_triage) ORDER BY CASE source WHEN 'NY registrations' THEN 0 ELSE 1 END, lead_id LIMIT ?""",(limit,)).fetchall()
+ # Research-only triage. Prioritize state-reported 2-10 and a valid-looking
+ # business phone to reduce wasted requests; NEVER treat that count as firmwide.
+ c.execute("CREATE INDEX IF NOT EXISTS idx_triage_status ON source_triage(status)")
+ rows=c.execute("""SELECT r.lead_id,r.firm,r.phone,r.city,r.state,r.source_url
+ FROM source_research r
+ WHERE r.source IN ('FL roster','NY registrations')
+   AND r.reported_attorneys BETWEEN 2 AND 10
+   AND length(r.phone)>=10
+   AND NOT EXISTS (SELECT 1 FROM source_triage t WHERE t.lead_id=r.lead_id)
+ ORDER BY CASE WHEN r.source='FL roster' THEN 0 ELSE 1 END, r.lead_id
+ LIMIT ?""",(limit,)).fetchall()
  counts={}
  for lead_id,firm,phone,city,state,url in rows:
   status="source_unavailable"; website=""; error=""
