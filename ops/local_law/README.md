@@ -111,3 +111,7 @@ Existing catalog feeds a bounded 20-per-run candidate bridge without a second da
 ## 2026-10-16 Deep black readability pass
 - Overrode old green/yellow/cream UI treatments with near-black, neutral gray, white and restrained red for brand and genuine critical blocks. Increased small operational copy to readable 13px+ and reduced visual bulk. Replaced unclear research/queue KPI labels with concise descriptions; retained real metrics and the five-view navigation.
 - Browser validation on 1440px and 390px, existing local browser smoke and 87 core tests. Production Vercel not deployed by request.
+
+## 2026-10-16 chart rendering regression fix
+- Found directly hard-coded green and yellow in JavaScript donut gradients and bar/queue CSS. Replaced with restrained red and graphite, explicitly overriding bar classes rather than relying on unused theme variables. Removed the redundant giant qualification/system panels from the Overview layout, retaining System diagnostics in its separate tab.
+- Verified all five local views at 1440px and 390px without JavaScript exceptions or horizontal overflow; 87 core tests pass. No changes to lead counts or source-validation rules. No Vercel deployment.

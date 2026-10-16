@@ -134,3 +134,26 @@ html,body{background:#050505!important;color:#f6f6f7!important}
 .heart,.check-icon{box-shadow:none!important}
 @media(max-width:1050px){.headline-stats{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
 @media(max-width:580px){.headline-stats{grid-template-columns:1fr!important}}
+
+/* Explicit chart overrides — not just theme variables. */
+.bar-fill.fl,.bar-fill.ny{background:#e84551!important;box-shadow:none!important}
+.bar-fill.ny{background:#77777d!important}
+.legend-dot.legend-fl{background:#e84551!important}.legend-dot.legend-ny{background:#77777d!important}
+.queue-track{background:#222226!important;border:none!important}
+.queue-fill.pending,.queue-fill.size,.queue-fill.reject,.queue-fill.other{background:#747479!important}
+.queue-fill.size{background:#f04d59!important}
+.queue-item .queue-top span{color:#d5d5da!important;font-size:14px!important}
+.queue-item .queue-top b{color:#fff!important;font-size:15px!important}
+.chart-plot{background:transparent!important}
+.chart-bars{border-color:#303034!important}
+.chart-legend{color:#bdbdc4!important}
+.analytics-main,.analytics-side{min-height:260px!important;padding:18px!important}
+.analytics{grid-template-columns:1.1fr .9fr!important}
+.two-column{display:none!important}
+body.workspace-tab[data-current-view="overview"] .content>.two-column{display:none!important}
+body.workspace-tab[data-current-view="overview"] .content>.trend-panel{display:none!important}
+body.workspace-tab[data-current-view="overview"] .content>.analytics{display:grid!important}
+body.workspace-tab[data-current-view="overview"] .content>.operator-actions{display:flex!important}
+body.workspace-tab[data-current-view="systems"] .content>.two-column{display:grid!important}
+body.workspace-tab[data-current-view="systems"] #pipeline{display:none!important}
+@media(max-width:900px){.analytics{grid-template-columns:1fr!important}}

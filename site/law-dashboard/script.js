@@ -41,7 +41,7 @@ function drawCharts(d){
  if(!total){chart.textContent="No source breakdown published yet";return}
  if(chartMode==="donut"){
   const shape=document.createElement("div");shape.className="donut";
-  shape.style.background="conic-gradient(#395e46 0 "+(fl/total*100)+"%,#b9dd80 "+(fl/total*100)+"% 100%)";
+  shape.style.background="conic-gradient(#ef4654 0 "+(fl/total*100)+"%,#77777d "+(fl/total*100)+"% 100%)";
   const mid=document.createElement("div");mid.className="donut-center";
   const big=document.createElement("strong");big.textContent=fmt(total);
   const sub=document.createElement("small");sub.textContent="research records";mid.append(big,sub);shape.append(mid);chart.append(shape);
