@@ -2,7 +2,7 @@
 
 This is NOT the historical Redis daemon. It will not import Redis queues
 magically or assert that absent search results prove a website cannot exist.
-Only records with a published firm/phone/size source plus two independent
+Only records with a published firm/phone source plus two independent
 successful negative web searches may enter its screened lists.
 """
 from __future__ import annotations
@@ -222,8 +222,9 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
         return {**evidence,"status":"owned_site_or_untrusted_source"}
     if not firm_identity_matches(source_html,lead):
         return {**evidence,"status":"unverified_identity"}
-    if source["attorneys"]<2 or source["attorneys"]>10:
-        return {**evidence,"status":"unverified_size"}
+    # Campaign policy: any private law-firm size is acceptable. Firm name and
+    # published phone must match, and owned-site verification is still required.
+    evidence["qualification_scope"]="law_no_owned_website_any_size"
     if (urlparse(str(lead.get("source_url",""))).hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com":
         from law_local.florida_roster import clearly_non_law_employer
         if clearly_non_law_employer(lead.get("firm","")):
@@ -231,14 +232,6 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
                     "reason":"Roster lists an in-house or non-law business employer"}
     if source["website_candidates"]:
         return {**evidence,"status":"review_website","website_candidates":source["website_candidates"]}
-    # FloridaLawDirectory reports ACTIVE FL BAR-LICENSED lawyers under an employer.
-    # This is NOT necessarily the employer's firm-wide headcount. A national firm
-    # can have five locally registered attorneys and dozens elsewhere. The roster
-    # is valid discovery evidence, not conclusive 2-10 firm-size evidence.
-    if (urlparse(str(lead.get("source_url",""))).hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com":
-        return {**evidence,"status":"review_headcount_scope",
-                "headcount_scope":"florida_active_attorneys_only",
-                "reason":"Needs independent evidence of total firm size 2-10"}
     site=classify_search_results(search_results)
     evidence["site_status"]=site["status"]
     evidence["site_evidence"]={"checked_at":utc_now(),"providers":[
@@ -249,7 +242,7 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
         return {**evidence,"status":site["status"],"site_evidence":site}
     # PHONE-FIRST CONTRACT: email is an optional, source-published bonus.
     # Missing/invalid email never disqualifies an independently verified
-    # law firm with 2-10 attorneys, a published phone, and no owned site.
+    # law firm with a published phone and no owned site (any attorney count).
     for email in source["emails"]:
         domain=email.rsplit("@",1)[-1]
         try:
@@ -260,7 +253,7 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
             evidence["email"]=email
             evidence["email_source"]=lead.get("source_url","")
             break
-    # The calling list requires published phone, size and no owned site.
+    # The calling list requires a published business phone and no owned site.
     # Preserve separate stricter eligibility for source-published usable email.
     return {**evidence,"status":"strict_eligible" if evidence["email"] else "call_qualified_no_email"}
 
@@ -288,6 +281,10 @@ class SqliteQueue:
         """)
         # Re-evaluate old records previously rejected solely for no email.
         self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status='call_ready_no_email'")
+        # Migration: firmwide attorney count is no longer an outreach criterion.
+        # Prior size-only reviews must get website screening; neither this
+        # migration nor any empty Maps website field grants eligibility.
+        self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status='review_headcount_scope'")
         self.conn.commit()
     @staticmethod
     def _id(lead):
@@ -327,12 +324,7 @@ class SqliteQueue:
                 return False
             if evidence.get("status")!=status or evidence.get("site_status")!="screened_no_site":
                 return False
-            if evidence.get("headcount_scope")=="florida_active_attorneys_only":
-                return False
-            head_host=(urlparse(str(evidence.get("headcount_source",""))).hostname or "").lower().removeprefix("www.")
-            if head_host=="floridalawdirectory.com" and not evidence.get("firmwide_size_source"):
-                return False
-            if not 2<=int(evidence.get("attorneys") or 0)<=10:
+            if evidence.get("qualification_scope")!="law_no_owned_website_any_size":
                 return False
             if not normalize_phone(row["phone"]) or normalize_phone(row["phone"])!=normalize_phone(evidence.get("phone")):
                 return False
@@ -390,7 +382,7 @@ def apply_verified_bar_contact_proof(db,lead,result):
     """Join published/matched Florida Bar contacts only after site clearance.
 
     This is strictly a final evidence join, NOT a shortcut around the
-    independent 2–10 firm-size, phone and no-owned-site checks.
+    independent phone and no-owned-site checks; firm size is unrestricted.
     An attributed owned site always revokes calling/strict eligibility.
     """
     lead_id=db._id(lead)
@@ -442,7 +434,7 @@ def apply_verified_bar_contact_proof(db,lead,result):
                     "website_evidence_source":proof["email_source"]}
     if (result.get("status")!="call_qualified_no_email"
             or result.get("site_status")!="screened_no_site"
-            or not 2<=int(result.get("attorneys") or 0)<=10
+            or result.get("qualification_scope")!="law_no_owned_website_any_size"
             or normalize_phone(result.get("phone"))!=expected_phone):
         return result
     for proof in supported:
@@ -544,10 +536,7 @@ def process_candidate(lead,site_search_usable=True):
         if not firm_identity_matches(html,lead):
             return {"status":"unverified_identity","source_url":lead["source_url"],"checked_at":utc_now()}
         source=evaluate_published_source(html,lead)
-        # A state-only count is not firm-wide size proof; do not issue wasted
-        # site-search calls for a record that cannot pass size qualification.
-        local_count_only=(urlparse(str(lead.get("source_url",""))).hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com"
-        search=search_for_firm(lead) if site_search_usable and 2<=source["attorneys"]<=10 and not source["website_candidates"] and not local_count_only else []
+        search=search_for_firm(lead) if site_search_usable and not source["website_candidates"] else []
         return evaluate_candidate(lead,html,search,mx_check=domain_has_mail)
     except Exception as exc:
         return {"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}

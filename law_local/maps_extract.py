@@ -134,7 +134,7 @@ def extract(raw_path,out_path,summary_path=None):
             "maps_no_site_phone_candidates":len(rows),
             "strict_eligible_verified":0,
             "reason_counts":dict(counts),
-            "note":"Candidate stage only. Requires separate published 2-10 attorney, independent no-owned-website and source-verified email checks."}
+            "note":"Candidate stage only. Requires identity-matched phone and independent no-owned-website checks; attorney count not required."}
     if summary_path:
         path=Path(summary_path)
         path.parent.mkdir(parents=True,exist_ok=True)

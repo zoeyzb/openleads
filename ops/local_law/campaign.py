@@ -139,7 +139,7 @@ def cycle():
     with (ROOT/"campaign-runs.log").open("a") as log:
      log.write(json.dumps(dict(time=now(),local_maps_import_error="timeout"))+"\n")
   # Plumbing-style acquisition rotation: ONE bounded small-market Maps job,
-  # persisted and measured. Never a substitute for independent site/size proof.
+  # persisted and measured. Website verification is still independent.
   try:
    maps=command(["-m","ops.local_law.local_maps_controller"],30)
    with (ROOT/"campaign-runs.log").open("a") as log:
@@ -148,8 +148,28 @@ def cycle():
   except subprocess.TimeoutExpired:
    with (ROOT/"campaign-runs.log").open("a") as log:
     log.write(json.dumps(dict(time=now(),local_maps_cycle_error="timeout"))+"\n")
+  # Size is no longer a campaign requirement. Screen Maps phone leads directly
+  # against independently functioning website-search providers; fail closed.
+  try:
+   screened=command(["-m","ops.local_law.screen_maps_websites","--max","12"],120)
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),maps_site_screen_exit=screened.returncode,
+                             output=(screened.stdout+screened.stderr)[-1400:]))+"\n")
+  except subprocess.TimeoutExpired:
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),maps_site_screen_error="timeout"))+"\n")
+  # Publicly listed phone + no owned site field: a research prospect only.
+  # Separate file so it cannot inflate qualified calls or email campaigns.
+  try:
+   exported=command(["-m","ops.local_law.export_maps_no_listed_site"],25)
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),maps_research_export_exit=exported.returncode,
+                             output=(exported.stdout+exported.stderr)[-600:]))+"\n")
+  except subprocess.TimeoutExpired:
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),maps_research_export_error="timeout"))+"\n")
   # Free, checkpointed directory discovery from Common Crawl's public index.
-  # Real profile pages supply firm-size/phone and explicit owned-site links;
+  # Real profile pages supply business phone and explicit owned-site links;
   # missing site link remains unverified and never auto-qualifies.
   try:
    cc=command(["-m","ops.local_law.commoncrawl_profiles","--max","12"],105)

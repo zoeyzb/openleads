@@ -16,7 +16,7 @@ class ExportTests(unittest.TestCase):
  def tearDown(self):
   self.c.close();campaign.DB,campaign.OUT=self.orig;self.t.cleanup()
  def add(self,status="strict_eligible",email="info@sample-law.test",site_status="screened_no_site",attorneys=5,checked=None,email_source="https://www.lawyers.com/firm/fixture",headcount_source="https://www.lawyers.com/firm/fixture"):
-  v={"status":status,"email":email,"site_status":site_status,"attorneys":attorneys,
+  v={"status":status,"email":email,"site_status":site_status,"qualification_scope":"law_no_owned_website_any_size","attorneys":attorneys,
      "phone":"3125552222","site_evidence":{"providers":[{"responded":True,"urls":[]},{"responded":True,"urls":[]}]},
      "checked_at":checked or datetime.now(timezone.utc).isoformat(),"email_source":email_source,"headcount_source":headcount_source}
   self.c.execute("INSERT INTO candidates VALUES(?,?,?,?,?,?,?)",("Fixture & Partners","3125552222","Chicago","IL","https://www.lawyers.com/firm/fixture",status,json.dumps(v)));self.c.commit()
