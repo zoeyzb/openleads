@@ -80,3 +80,7 @@ Fresh Mac provider preflight: DEGRADED (0/2 usable; known-positive owned domain 
 - Keep plumbing and law independently configured; no new Railway/Render, Redis daemon, hosted worker, or second canonical lead database.
 - Archive triage now uses a single SQLite indexed query, prioritizing records with state-reported 2-10 attorney *hints* and an existing published phone. The state count is strictly scheduling metadata, **not firmwide eligibility proof**.
 - Records processed in source_triage are checkpointed; no duplicate full copy of the 9,037 records is created. The prerequisite independent website and firmwide evidence remains blocked; this does not raise verified qualified counts.
+
+## 2026-10-16 archive reuse
+Old Railway snapshot (Oct 2): 177 call-ready, ~1608 size-verified; not evidence of 10000 qualified law/hour. Plumbing rates should not be counted as law.
+Existing catalog feeds a bounded 20-per-run candidate bridge without a second database or new service. SQLite dedupes and caps pending queue at 100. Ten sourced research candidates imported during test. They are NOT qualified leads. Firm-wide 2-10 and independently checked no-owned-site remain required, phone is mandatory, published email bonus only.

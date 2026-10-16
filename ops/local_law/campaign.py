@@ -94,6 +94,13 @@ def cycle():
     (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),archive_triage_exit=triage.returncode,output=(triage.stdout+triage.stderr)[-1200:]))+"\n")
    except subprocess.TimeoutExpired:
     (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),archive_triage_error="timeout"))+"\n")
+  # Reuse historic source records in the original Mac verifier; bounded, no
+  # duplicated archive or new service. Candidate import is NOT qualification.
+  try:
+   moved=command(["ops/local_law/bridge_archive.py","--max","20"],25)
+   (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),bridge_exit=moved.returncode,output=(moved.stdout+moved.stderr)[-500:]))+"\n")
+  except subprocess.TimeoutExpired:
+   (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),bridge_error="timeout"))+"\n")
   cov=connect()
   rows=cov.execute("SELECT state FROM areas WHERE source='directory' AND state IN (" + ",".join("?" for _ in STATES) + ") AND (next_retry IS NULL OR next_retry <= ?) ORDER BY coalesce(last_attempt,'') LIMIT 1",(*STATES,now())).fetchall()
   if not rows:
