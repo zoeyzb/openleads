@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
 from html import unescape
 from html.parser import HTMLParser
@@ -302,18 +302,29 @@ class SqliteQueue:
         self.conn.commit()
         return cur.rowcount>0
     def pending(self,limit):
+        # Retry inconclusive sources after a cooldown, not on every hourly
+        # campaign. Pending new firms remain eligible immediately.
+        cutoff=(datetime.now(timezone.utc)-timedelta(hours=6)).isoformat(timespec="seconds")
         rows=self.conn.execute("""SELECT * FROM candidates
-             WHERE status='pending' OR (status='inconclusive' AND attempts < 3)
+             WHERE status='pending' OR
+                   (status='inconclusive' AND attempts < 3 AND updated <= ?)
              ORDER BY CASE WHEN source_url LIKE 'https://www.inbar.org/%' OR
                                   source_url LIKE 'https://inbar.org/%' THEN 0 ELSE 1 END,
                       CASE WHEN status='pending' THEN 0 ELSE 1 END,
-                      updated ASC LIMIT ?""",(int(limit),)).fetchall()
+                      updated ASC LIMIT ?""",(cutoff,int(limit))).fetchall()
         return [dict(row) for row in rows]
     def record(self,lead,result):
+        site=result.get("site_evidence")
+        # A broken search provider is not a failed firm. Preserve its retry
+        # budget until independent website checks are available again.
+        provider_outage=(result.get("status")=="inconclusive" and
+            (result.get("reason")=="search_provider_unavailable" or
+             (isinstance(site,dict) and site.get("reason")=="search_provider_unavailable")))
         self.conn.execute("""UPDATE candidates
-             SET status=?, attempts=attempts+1,result_json=?,updated=?
+             SET status=?, attempts=attempts+?,result_json=?,updated=?
              WHERE id=?""",
-             (result["status"],json.dumps(result,sort_keys=True),utc_now(),self._id(lead)))
+             (result["status"],0 if provider_outage else 1,
+              json.dumps(result,sort_keys=True),utc_now(),self._id(lead)))
         self.conn.commit()
     @staticmethod
     def _verified_for_export(row,evidence,status):
@@ -474,18 +485,41 @@ def fetch_public(url,timeout=9):
         data=response.read(450000)
         return data.decode("utf-8",errors="replace")
 
-def _links_from_html(html):
-    p=reader(html)
+def _ddg_result_links(html,lead):
+    """Parse actual DuckDuckGo result anchors, never navigation or query echoes.
+
+    A search-page HTTP 200 or text containing the requested firm name is not
+    proof that a search result exists. Blocked/changed layouts fail closed.
+    """
+    class Results(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.current=None
+            self.parts=[]
+            self.results=[]
+        def handle_starttag(self,tag,attrs):
+            if tag.lower()!='a' or self.current is not None:return
+            attrs=dict(attrs)
+            classes=str(attrs.get('class','')).split()
+            if 'result__a' in classes:
+                self.current=attrs.get('href','')
+                self.parts=[]
+        def handle_data(self,data):
+            if self.current is not None:self.parts.append(data)
+        def handle_endtag(self,tag):
+            if tag.lower()=='a' and self.current is not None:
+                self.results.append((self.current,' '.join(self.parts)))
+                self.current=None
+                self.parts=[]
+    parser=Results()
+    parser.feed(str(html or '')[:450000])
     links=[]
-    for u,label in p.links:
-        try:
-            parsed=urlparse(u)
-            if parsed.scheme in ("http","https") and parsed.hostname:
-                links.append(u)
-            elif parsed.hostname:
-                links.append(u)
-        except ValueError:
-            pass
+    for href,title in parser.results:
+        if not search_result_relevant(title,'',lead):continue
+        if href.startswith('//'):href='https:'+href
+        url=search_target(href)
+        if _public_http_url(url) and url not in links:
+            links.append(url)
     return links[:35]
 
 def search_result_relevant(title,description,lead):
@@ -500,39 +534,25 @@ def search_result_relevant(title,description,lead):
 
 def search_for_firm(lead):
     term='"'+str(lead["firm"]).replace('"',"")+'"'+" law firm "+str(lead.get("city") or "")+" "+str(lead.get("state") or "")
-    queries=[
-        "https://www.bing.com/search?format=rss&"+urlencode({"q":term}),
-        "https://html.duckduckgo.com/html/?"+urlencode({"q":term})
-    ]
-    # Prefer supported, structured Brave search when explicitly configured.
-    # It replaces only the flaky Bing leg; DuckDuckGo remains independent.
-    # A single provider is never enough to prove a firm lacks an owned site.
-    out=[]
+    # Public Brave HTML currently provides actual result cards where Bing RSS
+    # redirects to its homepage. This leg is positive discovery only: one
+    # provider cannot establish the absence of a firm's owned website.
     if os.environ.get("BRAVE_SEARCH_API_KEY"):
         from law_local.structured_search import brave_search
-        out.append(brave_search(term))
-        queries=queries[1:]
-    for index,url in enumerate(queries):
-        try:
-            page=fetch_public(url,timeout=8)
-            if index==0 and not os.environ.get("BRAVE_SEARCH_API_KEY"):
-                root=ET.fromstring(page)
-                items=root.findall(".//item")
-                responded=root.tag.lower().endswith("rss") or bool(items)
-                links=[(item.findtext("link") or "").strip() for item in items
-                       if search_result_relevant(item.findtext("title"),item.findtext("description"),lead)]
-                # A valid RSS envelope full of irrelevant suggestions is not
-                # firm-specific negative website evidence.
-                responded=bool(responded and links)
-            else:
-                responded="duckduckgo" in page.lower() and (
-                    "result__a" in page.lower() or "no results" in page.lower()
-                )
-                links=_links_from_html(page)
-                responded=bool(responded and search_result_relevant(page,"",lead) and links)
-            out.append({"responded":bool(responded),"urls":[v for v in links if _public_http_url(v)]})
-        except Exception:
-            out.append({"responded":False,"urls":[]})
+        out=[brave_search(term)]
+    else:
+        from law_local.public_brave import brave_public_search
+        out=[brave_public_search(lead,search_result_relevant)]
+    url="https://html.duckduckgo.com/html/?"+urlencode({"q":term})
+    try:
+        page=fetch_public(url,timeout=8)
+        links=_ddg_result_links(page,lead)
+        # A no-results page may be a challenge or changed search layout.
+        responded=bool("duckduckgo" in page.lower() and links)
+        out.append({"provider":"duckduckgo","responded":responded,
+                    "urls":[v for v in links if _public_http_url(v)]})
+    except Exception:
+        out.append({"provider":"duckduckgo","responded":False,"urls":[]})
     return out
 
 def domain_has_mail(domain):

@@ -102,6 +102,16 @@ class QualityTests(unittest.TestCase):
         self.assertTrue(search_result_relevant("Keystone & Parker Law Group profile",
                                                "Chicago attorneys", LEAD))
 
+    def test_ddg_query_echo_and_navigation_never_count_as_results(self):
+        from law_local.worker import _ddg_result_links
+        html='<html>duckduckgo Keystone & Parker Law Group <a href="https://random-lawyer.com">Keystone & Parker Law Group</a><div class="result__a">Keystone & Parker Law Group</div></html>'
+        self.assertEqual(_ddg_result_links(html,LEAD),[])
+
+    def test_ddg_real_result_requires_matching_title_and_unwraps_redirect(self):
+        from law_local.worker import _ddg_result_links
+        html='<html>duckduckgo <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fkeystoneparker.org%2Fcontact">Keystone &amp; Parker Law Group</a><a class="result__a" href="https://unrelated.example.org/">Unrelated Lawyers</a></html>'
+        self.assertEqual(_ddg_result_links(html,LEAD),['https://keystoneparker.org/contact'])
+
     def test_search_outage_does_not_certify_absence(self):
         found=classify_search_results([{"responded":False,"urls":[]},{"responded":True,"urls":[]}])
         self.assertEqual(found["status"],"inconclusive")
@@ -197,6 +207,25 @@ class QualityTests(unittest.TestCase):
             self.assertEqual(db.counts()["strict_eligible"],1)
             db.close()
 
+    def test_provider_outage_preserves_retry_budget_and_cools_down(self):
+        from datetime import datetime, timezone, timedelta
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"law.sqlite3")
+            db.add(LEAD)
+            outage={"status":"inconclusive","site_evidence":
+                    {"status":"inconclusive","reason":"search_provider_unavailable"}}
+            db.record(LEAD,outage)
+            row=db.conn.execute("SELECT attempts FROM candidates").fetchone()
+            self.assertEqual(row["attempts"],0)
+            self.assertEqual(db.pending(10),[])
+            old=(datetime.now(timezone.utc)-timedelta(hours=7)).isoformat(timespec="seconds")
+            db.conn.execute("UPDATE candidates SET updated=?",(old,))
+            db.conn.commit()
+            self.assertEqual(len(db.pending(10)),1)
+            db.record(LEAD,{"status":"inconclusive","reason":"source_fetch_failed"})
+            self.assertEqual(db.conn.execute("SELECT attempts FROM candidates").fetchone()["attempts"],1)
+            db.close()
+
     def test_calling_target_counts_both_optional_email_cases(self):
         with tempfile.TemporaryDirectory() as folder:
             db=SqliteQueue(Path(folder)/"law.sqlite3")
@@ -272,7 +301,7 @@ class EndToEndTests(unittest.TestCase):
             db=SqliteQueue(path)
             record=db.conn.execute("SELECT status,attempts FROM candidates").fetchone()
             self.assertNotIn(record["status"],("strict_eligible","call_qualified_no_email"))
-            self.assertEqual(record["attempts"],1)
+            self.assertEqual(record["attempts"],0)  # provider outage is not a firm failure
             db.close()
 
     def test_import_process_export_source_provenance(self):

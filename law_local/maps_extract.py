@@ -88,8 +88,13 @@ def maps_candidate(row):
     link=str(row.get("link") or "").strip()
     p=urlparse(link)
     host=(p.hostname or "").lower()
-    if not name or not phone or p.scheme!="https" or host not in (
-        "www.google.com","google.com","maps.google.com"):
+    # Collector category may say 'Law firm' even when the Maps title is a
+    # placeholder (observed title '0') or an unidentifiable generic label.
+    # Keep the raw artifact, but never create a callable research identity.
+    generic={"attorney","lawyer","law firm","law office","legal services"}
+    if (not re.search(r"[A-Za-z]{2}",name) or norm(name) in generic or
+            not phone or p.scheme!="https" or host not in (
+                "www.google.com","google.com","maps.google.com")):
         return None,"no_source_identity_or_phone"
     social_only=social_only_profile(website)
     if website.lower() not in EMPTY_WEB and not social_only:

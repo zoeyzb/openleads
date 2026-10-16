@@ -35,6 +35,14 @@ class MapsExtractTests(unittest.TestCase):
             candidate,why=maps_candidate(item)
             self.assertIsNone(candidate,reason:=why)
 
+    def test_collector_placeholder_is_not_a_law_practice_identity(self):
+        for title in ('0', 'Attorney', 'Law Firm', '1234'):
+            candidate,reason=maps_candidate(dict(GOOD,title=title))
+            self.assertIsNone(candidate)
+            self.assertEqual(reason,'no_source_identity_or_phone')
+        # Solo practices with personal names remain eligible for research.
+        self.assertEqual(maps_candidate(dict(GOOD,title='Mary L. Wolfe'))[1],'candidate')
+
     def test_social_profile_is_unverified_research_not_an_owned_site(self):
         social=dict(GOOD,website="https://www.facebook.com/potterfinch")
         candidate,reason=maps_candidate(social)

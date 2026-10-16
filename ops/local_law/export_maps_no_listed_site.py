@@ -20,6 +20,8 @@ def export(db_path,out_path,research_path=None):
     COALESCE(w.status,'not_checked') AS website_status,COALESCE(w.checked_at,'') AS checked_at
     FROM maps_raw_candidates m LEFT JOIN maps_website_checks w ON w.map_id=m.map_id
     WHERE COALESCE(w.status,'not_checked') IN ('not_checked','inconclusive','manual_followup_required')
+    AND m.firm GLOB '*[A-Za-z]*'
+    AND lower(trim(m.firm)) NOT IN ('attorney','lawyer','law firm','law office','legal services')
     '''+exclusion+''' ORDER BY m.state,m.city,m.firm''').fetchall()
   path=Path(out_path);path.parent.mkdir(parents=True,exist_ok=True)
   tmp=path.with_suffix('.tmp')

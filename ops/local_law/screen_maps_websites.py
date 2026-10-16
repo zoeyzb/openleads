@@ -27,6 +27,8 @@ def screen(db_path,limit=10,search=search_for_firm,health_ok=None,research_path=
  rows=db.conn.execute('''SELECT m.* FROM maps_raw_candidates m
   LEFT JOIN maps_website_checks w ON m.map_id=w.map_id
   WHERE m.status IN ('unverified_headcount','pending_independent_site_audit')
+  AND m.firm GLOB '*[A-Za-z]*'
+  AND lower(trim(m.firm)) NOT IN ('attorney','lawyer','law firm','law office','legal services')
   AND COALESCE(w.status,'') NOT IN ('review_website','rejected_inactive')
   AND (w.map_id IS NULL OR w.status='inconclusive' OR w.checked_at < ?)
   '''+exclusion+''' ORDER BY m.added_at LIMIT ?''',(cutoff,limit)).fetchall()

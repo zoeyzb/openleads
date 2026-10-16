@@ -12,9 +12,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 from law_local import worker
 
-CONTROL={"firm":"Culmer & Davidson","phone":"3216382002",
-         "city":"Rockledge","state":"FL"}
-KNOWN_DOMAIN="brevardtrialattorneys.com"
+CONTROL={"firm":"AXS Law Group","phone":"3057030274",
+         "city":"Miami","state":"FL"}
+KNOWN_DOMAIN="axslawgroup.com"
 
 def audit_provider_health(lookups=None):
     lookups=lookups or worker.search_for_firm

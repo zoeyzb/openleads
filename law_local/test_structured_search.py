@@ -19,11 +19,13 @@ class IntegratedStructuredSearchTests(unittest.TestCase):
   from unittest.mock import patch
   from law_local.worker import search_for_firm
   lead={'firm':'Some Example Law LLC','city':'Austin','state':'TX'}
-  ddg='<html><body>duckduckgo <div class="result__a">Some Example Law LLC</div><a href="https://lawyer.com/firm/example.html">Some Example Law LLC</a></body></html>'
+  ddg='<html><body>duckduckgo <a class="result__a" href="https://lawyer.com/firm/example.html">Some Example Law LLC</a></body></html>'
   with patch.dict(os.environ,{'BRAVE_SEARCH_API_KEY':'fixture'}), \
        patch('law_local.structured_search.brave_search',return_value={'responded':True,'urls':['https://examplelaw.com/']}), \
        patch('law_local.worker.fetch_public',return_value=ddg) as fetch:
    results=search_for_firm(lead)
   self.assertEqual(len(results),2)
   self.assertEqual(results[0]['urls'],['https://examplelaw.com/'])
+  self.assertTrue(results[1]['responded'])
+  self.assertEqual(results[1]['urls'],['https://lawyer.com/firm/example.html'])
   self.assertIn('duckduckgo.com',fetch.call_args.args[0])
