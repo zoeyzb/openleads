@@ -114,6 +114,16 @@ def cycle():
  with (ROOT/"campaign.lock").open("w") as lock:
   try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
   except BlockingIOError: print('another run is active');return 2
+  # Free, checkpointed directory discovery from Common Crawl's public index.
+  # Real profile pages supply firm-size/phone and explicit owned-site links;
+  # missing site link remains unverified and never auto-qualifies.
+  try:
+   cc=command(["-m","ops.local_law.commoncrawl_profiles","--max","12"],105)
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),commoncrawl_exit=cc.returncode,output=(cc.stdout+cc.stderr)[-1200:]))+"\n")
+  except subprocess.TimeoutExpired:
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),commoncrawl_error="timeout"))+"\n")
   # Research the recovered 9,037-source pool incrementally before wasting discovery queries.
   archive_script=SRC/"ops/local_law/archive_triage.py"
   if archive_script.exists():

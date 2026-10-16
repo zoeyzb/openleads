@@ -37,6 +37,13 @@ class ExportTests(unittest.TestCase):
  def test_stale_evidence_excluded(self):
   self.add(checked=(datetime.now(timezone.utc)-timedelta(days=40)).isoformat())
   self.assertEqual(campaign.strict_export(),0)
+class NewSourceSchedulerTests(unittest.TestCase):
+ def test_free_index_is_included_without_disabling_other_sources(self):
+  source=Path(__file__).parent.joinpath('campaign.py').read_text()
+  self.assertIn('ops.local_law.commoncrawl_profiles',source)
+  self.assertIn('archive_triage.py',source)
+  self.assertIn('process_backlog()',source)
+
 class SchedulerTests(unittest.TestCase):
  def test_no_geography_due_still_services_verification_backlog(self):
   with tempfile.TemporaryDirectory() as root:
