@@ -114,6 +114,18 @@ def cycle():
  with (ROOT/"campaign.lock").open("w") as lock:
   try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
   except BlockingIOError: print('another run is active');return 2
+  # Recover finished LOCAL Maps jobs into a separate unverified research queue.
+  # No paid network services or Redis; site absence is never inferred from Maps.
+  local_job=ROOT/"local-maps-pilot-job.json"
+  if local_job.is_file():
+   try:
+    local=command(["-m","ops.local_law.ingest_local_maps","--job-file",str(local_job)],25)
+    with (ROOT/"campaign-runs.log").open("a") as log:
+     log.write(json.dumps(dict(time=now(),local_maps_import_exit=local.returncode,
+                              output=(local.stdout+local.stderr)[-900:]))+"\n")
+   except subprocess.TimeoutExpired:
+    with (ROOT/"campaign-runs.log").open("a") as log:
+     log.write(json.dumps(dict(time=now(),local_maps_import_error="timeout"))+"\n")
   # Free, checkpointed directory discovery from Common Crawl's public index.
   # Real profile pages supply firm-size/phone and explicit owned-site links;
   # missing site link remains unverified and never auto-qualifies.
