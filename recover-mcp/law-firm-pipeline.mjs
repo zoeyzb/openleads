@@ -332,7 +332,7 @@ const RECOVERABLE_PENDING_SET="recover:law-firm:enrich-recoverable:v1";
 const SOURCE_PENDING_SET="recover:law-firm:enrich-pending:v2";
 const CHICAGO_PENDING_SET="recover:law-firm:chicago-priority:v1";
 const PHONE_HEADCOUNT_PRIORITY_SET="recover:law-firm:phone-headcount-priority:v1";
-const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v18-txbar-current-profile-url";
+const PHONE_HEADCOUNT_METHOD_VERSION="phone-headcount-v19-official-bar-first";
 const UNIQUE_VERIFIED_EMAIL_SET="recover:law-firm:unique-verified-email:v1";
 const VERIFIED_EMAIL_EVIDENCE_HASH="recover:law-firm:verified-email-evidence:v1";
 const VERIFIED_HEADCOUNT_EVIDENCE_HASH="recover:law-firm:verified-headcount-evidence:v1";
@@ -1991,6 +1991,49 @@ async function directDirectorySizeEvidence(lead={},key=""){
   await redis.hIncrBy(STATS,"direct_directory_size_ambiguous",1);
   return {count:0,source:"",website:verifiedWebsite};
 }
+async function directOfficialBarHeadcountEvidence(lead={},key=""){
+  const state=normalizedStateCode(lead);
+  if(!state)return {count:0,source:"",publishedEmails:[],emailSource:""};
+  const people=attorneyNameVariants(lead);
+  const links=await directOfficialProfileLinks(lead,people);
+  if(!links.length)return {count:0,source:"",publishedEmails:[],emailSource:""};
+  const phone=String(lead.phone||"").replace(/\D/g,"").slice(-10);
+  for(const url of links.slice(0,8)){
+    try{
+      if(!trustedLawSource(url,lead))continue;
+      const page=await fetchResearchPage(url,{...lead,conversion_headcount_priority:true},key,true);
+      if(!page?.html)continue;
+      const source=String(page.final_url||url);
+      if(!trustedLawSource(source,lead))continue;
+      const html=String(page.html||"");
+      const text=stripHtml(html).slice(0,80000);
+      const exactPhone=Boolean(phone&&String(text).replace(/\D/g,"").includes(phone));
+      const firmIdentity=sourcePageMatchesFirmIdentity(text,lead,source);
+      if(!exactPhone&&!firmIdentity)continue;
+      const count=officialFirmSizeEstimate(text);
+      if(!(count>0))continue;
+
+      const rawEmails=contextualEmails(html,lead,source)
+        .filter(email=>isUsableLawEmail(email)&&!isThirdPartyEmailDomain(email));
+      const emailChecks=await Promise.all([...new Set(rawEmails)].slice(0,6).map(async email=>({
+        email,ok:await hasMailExchange(email)
+      })));
+      const publishedEmails=rankLawEmails(emailChecks.filter(x=>x.ok).map(x=>x.email)).slice(0,5);
+      await redis.hIncrBy(STATS,"phone_first_official_bar_headcount_hit",1);
+      console.log(JSON.stringify({
+        event:"law_official_bar_headcount_hit",key,state,
+        name:String(lead.name||lead.title||""),count,source,exactPhone,
+        publishedEmails:publishedEmails.slice(0,3)
+      }));
+      return {count,source,publishedEmails,emailSource:publishedEmails.length?source:""};
+    }catch(error){
+      await redis.hIncrBy(STATS,"phone_first_official_bar_headcount_fetch_fail",1);
+    }
+  }
+  await redis.hIncrBy(STATS,"phone_first_official_bar_headcount_miss",1);
+  return {count:0,source:"",publishedEmails:[],emailSource:""};
+}
+
 async function directFloridaFirmRosterHeadcountEvidence(lead={},key=""){
   if(normalizedStateCode(lead)!=="FL")return {count:0,source:""};
   const rawFirm=String(lead.name||lead.title||"").replace(/["']/g," ").replace(/\s+/g," ").trim();
@@ -3854,10 +3897,25 @@ async function enrichLead(key,lead){
   const phoneHeadcountPriority=!website&&isUsableLawPhone(lead.phone);
   if(!attorneyCountVerified&&phoneHeadcountPriority){
     let earlyCount=0,earlySource="",earlyWebsite="";
-    // Cheap-to-expensive headcount waterfall. The previous order launched up
-    // to 14 directory searches per lead before trying exact-phone roster lookup,
-    // which made a 10k calling target impossible.
+    // Cheap-to-expensive headcount waterfall. Official state-bar profiles are
+    // first because they frequently publish Firm Size directly and bind the
+    // evidence to a licensed attorney/firm identity.
     try{
+      const officialBar=await directOfficialBarHeadcountEvidence(lead,key);
+      if(Number(officialBar?.count||0)>0&&isPublishedHeadcountSource(String(officialBar?.source||""),lead)){
+        earlyCount=Number(officialBar.count);earlySource=String(officialBar.source);
+        if(Array.isArray(officialBar.publishedEmails)&&officialBar.publishedEmails.length){
+          emails.push(...officialBar.publishedEmails);
+          source=String(officialBar.emailSource||officialBar.source||"");
+          for(const email of officialBar.publishedEmails)emailEvidenceSources[String(email).toLowerCase()]=source;
+          emailMethod="official_bar_profile";
+        }
+        await redis.hIncrBy(STATS,"phone_first_headcount_official_bar",1);
+      }
+    }catch{await redis.hIncrBy(STATS,"phone_first_headcount_official_bar_fail",1);}
+
+    // Florida has a separate direct firm roster that can prove multiple members.
+    if(!earlyCount)try{
       const floridaRoster=await directFloridaFirmRosterHeadcountEvidence(lead,key);
       if(Number(floridaRoster?.count||0)>0&&isPublishedHeadcountSource(String(floridaRoster?.source||""),lead)){
         earlyCount=Number(floridaRoster.count);earlySource=String(floridaRoster.source);
