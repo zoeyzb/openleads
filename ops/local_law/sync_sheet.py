@@ -9,10 +9,19 @@ TAB="Verified Calling Queue"
 def key(r):
  return hashlib.sha256((r["Firm"].casefold().strip()+"|"+r["Phone"]+"|"+r["State"].upper().strip()).encode()).hexdigest()[:24]
 def rows():
- p=subprocess.run(["/opt/homebrew/bin/python3.11",str(ROOT/"campaign.py"),"export"],capture_output=True,text=True,check=True)
+ # Always re-export through the original SQLite proof gate; the legacy
+ # campaign.py exporter can reintroduce removed attorney-size criteria.
+ from law_local.worker import SqliteQueue
+ queue=SqliteQueue(ROOT/"law-leads.sqlite3")
+ try:
+  queue.export("calling_qualified",ROOT/"call-qualified-law.csv")
+ finally:
+  queue.close()
  with (ROOT/"call-qualified-law.csv").open(newline="") as f:
   for r in csv.DictReader(f):
-   if not (r.get("Headcount source") and r.get("Website audit")=="screened_no_site" and r.get("Phone")):continue
+   # Firm size and a firmwide headcount source are not eligibility criteria.
+   # The SQLite exporter has already checked source, phone and site evidence.
+   if r.get("Website audit")!="screened_no_site" or not r.get("Phone"):continue
    yield r
 def preview():
  batch=[]
@@ -51,23 +60,22 @@ def run():
  existing=request("GET",TAB+"!K2:K100000").get("values",[])
  mapping={row[0]:i+2 for i,row in enumerate(existing) if row and row[0]}
  now=datetime.now(timezone.utc).isoformat(timespec="seconds")
- updates=[]
  appended=[]
+ already_present=0
  for r in rows():
   k=key(r)
   v=[r["Firm"],r["Phone"],r["Attorneys"],r["City"],r["State"],r["Headcount source"],r["Website audit"],r["Checked at"],r.get("Email",""),r.get("Email source",""),k,now]
   if k in mapping:
-   updates.append({"range":f"'{TAB}'!A{mapping[k]}:L{mapping[k]}","values":[v]})
-  else:
-   mapping[k]=-(len(appended)+1)
-   appended.append(v)
- # Do not delete rows, overwrite headers, or treat pending leads as strict.
- for start in range(0,len(updates),100):
-  request("POST","batchUpdate",{"valueInputOption":"RAW","data":updates[start:start+100]})
+   # Preserve existing user edits and notes; do not overwrite synced rows.
+   already_present+=1
+   continue
+  mapping[k]=-(len(appended)+1)
+  appended.append(v)
+ # Append only: do not delete or rewrite existing rows.
  for start in range(0,len(appended),200):
   request("POST",TAB+"!A:L:append",{"values":appended[start:start+200]},
           {"valueInputOption":"RAW","insertDataOption":"INSERT_ROWS"})
- print(json.dumps({"event":"sheet_sync","phone_rows_checked":len(updates)+len(appended),"updated":len(updates),"new":len(appended)}))
+ print(json.dumps({"event":"sheet_sync","phone_rows_checked":already_present+len(appended),"existing_preserved":already_present,"new":len(appended)}))
  return 0
 if __name__=="__main__":
  try:sys.exit(run())
