@@ -25,7 +25,7 @@ class LocalPilotTests(unittest.TestCase):
     def found(lead):
         website=lead['firm'].endswith('2')
         result=[]
-        for name in ('google cse','yahoo'):
+        for name in ('yandex','yep'):
             result.append({'provider':'searxng:'+name,'responded':True,'urls':[f'https://{lead["firm"].replace(" ","").lower()}.com/'] if website else ['https://www.lawyers.com/example/']})
         return result
     def test_source_only_dedup_and_resume(self):
@@ -49,8 +49,8 @@ class LocalPilotTests(unittest.TestCase):
         self.assertEqual(out['attempted'],0)
         self.assertFalse((self.root/'research_catalog.sqlite3').exists())
     def test_reject_provider_injection_without_qualifying(self):
-        out=pilot(self.root,2,search=lambda lead:[{'provider':'searxng:yahoo','responded':True,'urls':[]},
-                                                  {'provider':'searxng:yahoo','responded':True,'urls':[]}],health=lambda:GOOD)
+        out=pilot(self.root,2,search=lambda lead:[{'provider':'searxng:yep','responded':True,'urls':[]},
+                                                  {'provider':'searxng:yep','responded':True,'urls':[]}],health=lambda:GOOD)
         self.assertEqual(out['inconclusive'],2)
         self.assertEqual(out['calling_qualified_added'],0)
     def test_prioritizes_named_private_law_practices(self):
@@ -71,9 +71,9 @@ class LocalPilotTests(unittest.TestCase):
         c=sqlite3.connect(self.root/'research_catalog.sqlite3')
         c.execute("""CREATE TABLE local_selfhosted_site_checks
            (map_id TEXT PRIMARY KEY,firm TEXT,phone TEXT,checked_at TEXT,status TEXT,evidence_json TEXT)""")
-        sources=[{'provider':'searxng:google cse','responded':True,
+        sources=[{'provider':'searxng:yandex','responded':True,
                   'urls':['https://reviews.birdeye.com/example-law']},
-                 {'provider':'searxng:yahoo','responded':True,
+                 {'provider':'searxng:yep','responded':True,
                   'urls':['https://www.lawyers.com/example']}]
         proof={'search_providers':sources,
                'site_signal':{'status':'review_website',

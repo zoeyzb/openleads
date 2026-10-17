@@ -183,6 +183,28 @@ def cycle():
   except subprocess.TimeoutExpired:
    with (ROOT/"campaign-runs.log").open("a") as log:
     log.write(json.dumps(dict(time=now(),maps_research_export_error="timeout"))+"\n")
+  # Fresh source-published attorney business phone+email directory.
+  # Revisit due states daily; unavailable sources cool down for 24 hours.
+  # Never promote these records from source contacts or a negative site scan:
+  # current private-practice status and firmwide 2–10 count remain gates.
+  try:
+   plea=command(["-m","ops.local_law.plea_source","ingest"],115)
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),plea_source_ingest_exit=plea.returncode,
+                             output=(plea.stdout+plea.stderr)[-650:]))+"\n")
+  except subprocess.TimeoutExpired:
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),plea_source_ingest_error="timeout"))+"\n")
+  # Bounded research-only two-index check, with known-owned-site preflight.
+  # Cap per hour to avoid hammering the upstream free search engines.
+  try:
+   plea_sites=command(["-m","ops.local_law.plea_source","audit-sites","--max","4"],55)
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),plea_site_audit_exit=plea_sites.returncode,
+                             output=(plea_sites.stdout+plea_sites.stderr)[-650:]))+"\n")
+  except subprocess.TimeoutExpired:
+   with (ROOT/"campaign-runs.log").open("a") as log:
+    log.write(json.dumps(dict(time=now(),plea_site_audit_error="timeout"))+"\n")
   # Free, checkpointed directory discovery from Common Crawl's public index.
   # Real profile pages supply business phone and explicit owned-site links;
   # missing site link remains unverified and never auto-qualifies.

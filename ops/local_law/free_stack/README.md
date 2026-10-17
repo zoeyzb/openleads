@@ -115,3 +115,22 @@ Some bar and legal-association member profiles contain a member's own business e
 ```
 
 Only a genuine public `https://www.irela.org/Sys/PublicProfile/<numeric-id>` URL is accepted; the collector rejects unrelated hosts **before** fetching. It matches the member-profile firm's business phone and one scoped email against an existing Maps identity and tests the email domain's MX records. An idempotent source URL and masked evidence note are stored in `research_catalog.sqlite3:external_evidence`, **not** in `candidates` or the calling export. A second run returns `email_staged=0` because it is already stored. Sauk Valley has conflicting firmwide lawyer counts, so it remains research-only pending 2–10 verification and complete owned-site review.
+
+### Free source-first attorney-member discovery (October 17, 2026)
+
+`ops/local_law/plea_source.py` collects only member-scoped, published **firm + phone + email + lawyer name** from the Professional Law Enforcement Association's public state directories (`https://plea.net/attorneys/<state>/`). It caches 50 states plus DC for 24 hours in private `research_catalog.sqlite3` (`plea_source_pages`, `plea_firm_research`). A failed/unavailable directory cools down for 24 hours instead of being fetched repeatedly. Grouping by canonical firm AND phone preserves separate branches, attorney name sources, detected cities and possible shared-phone ambiguity. A named participating lawyer is **not** an independently verified active lawyer or a firmwide employee count. No PLEA records are automatically written to the canonical `candidates` table, calling CSV, or Google Sheet.
+
+Commands:
+
+```sh
+/opt/homebrew/bin/python3.11 -m ops.local_law.plea_source ingest
+/opt/homebrew/bin/python3.11 -m ops.local_law.plea_source audit-sites --max 4
+# Positive-only external website proof, when a matching directory page exists:
+/opt/homebrew/bin/python3.11 -m ops.local_law.plea_source confirm-owned-site \
+  --lead-id aa9d81c981522d546f13c979 \
+  --source-url 'https://lawyers.findlaw.com/texas/laredo/4951730_1/'
+```
+
+A bounded real scan yielded 334 unique firm + phone research rows from 47 source-backed state directories, including 43 with two or more PLEA-listed member attorneys. This does **not** mean 43 proven 2–10-attorney firms. `audit-sites` requires two independent healthy known-owned-domain checks (as do the main worker and Maps screener), holds plausible firm domains for review, and never directly calls qualification. Two trusted legal directories explicitly linked the attributed firms' own websites; `confirm-owned-site` checks exact firm and phone, the labeled Website anchor and trusted host, then writes append-only `plea_owned_site_audit_history` and `external_evidence` in research SQLite. It cannot clear a firm on a missing source. The source-site evidence remains available for manual reconciliation.
+
+SearXNG upstream `google cse` was rate-limited on October 17 (`unusual traffic`). The **current configured independent pair is `yandex` + `yep`**, each live-verified to recover the official domains for AXS Law Group, Baker McKenzie, and Olsen & White LLP. Search origins remain localhost; no paid API or new public hosting. Yandex/Yep can still rate-limit or omit obscure firms. An HTTP 200 with no attributable firm hit is *not* a completed negative search. The PLEA website pilot remains research-only: **zero new strict qualified**. The hourly Mac campaign invokes a cached PLEA ingest and at most four PLEA website checks per cycle, leaving source-specific 2–10 firmwide proof and practice-activity review as gating steps.

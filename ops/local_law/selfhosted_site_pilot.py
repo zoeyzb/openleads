@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from law_local.worker import classify_search_results, normalize_phone, utc_now
-from law_local.free_search import search_firm
+from law_local.free_search import search_firm, valid_provider_pair
 from law_local.site_provider_health import audit_provider_health
 
 ROOT = Path.home() / 'lead-workspace'
@@ -86,7 +86,7 @@ def pilot(root=ROOT, maximum=4, search=search_firm, health=None, now=None):
             try:
                 results=search(lead)
                 # The first two providers must be the exact probed engines.
-                if len(results)<2 or [v.get('provider') for v in results[:2]] != ['searxng:google cse','searxng:yahoo']:
+                if not valid_provider_pair(results):
                     raise ValueError('unexpected_search_providers')
                 signal=classify_search_results(results)
                 evidence={'checked_at':utc_now(), 'search_providers':results,
@@ -135,9 +135,7 @@ def reclassify(root=ROOT, maximum=1000):
             try:
                 record = json.loads(row['evidence_json'])
                 sources = record.get('search_providers', [])
-                if (len(sources) < 2 or
-                    [v.get('provider') for v in sources[:2]] !=
-                        ['searxng:google cse', 'searxng:yahoo']):
+                if not valid_provider_pair(sources, legacy=True):
                     continue
                 updated = classify_search_results(sources)
                 if updated['status'] not in ('review_website','screened_no_site','inconclusive'):

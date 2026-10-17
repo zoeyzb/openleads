@@ -71,6 +71,16 @@ class NewSourceSchedulerTests(unittest.TestCase):
   self.assertIn('archive_triage.py',source)
   self.assertIn('process_backlog()',source)
 
+class PLEASourceSchedulerTests(unittest.TestCase):
+ def test_plea_source_is_attached_as_bounded_research_without_automatic_promotion(self):
+  source=Path(__file__).parent.joinpath('campaign.py').read_text()
+  self.assertIn('ops.local_law.plea_source","ingest',source)
+  self.assertIn('ops.local_law.plea_source","audit-sites","--max","4',source)
+  self.assertIn('plea_source_ingest_exit',source)
+  self.assertIn('plea_site_audit_exit',source)
+  # A source-only website audit is never an eligible caller import.
+  self.assertNotIn('plea_source","promote',source)
+
 class SchedulerTests(unittest.TestCase):
  def test_no_geography_due_still_services_verification_backlog(self):
   with tempfile.TemporaryDirectory() as root:

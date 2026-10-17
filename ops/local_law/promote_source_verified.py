@@ -10,7 +10,7 @@ import json
 import re
 from pathlib import Path
 from urllib.parse import urlparse
-from law_local.free_search import search_firm
+from law_local.free_search import search_firm, valid_provider_pair
 from law_local.site_provider_health import audit_provider_health
 from law_local.worker import (SqliteQueue, classify_search_results, domain_has_mail,
                               EMAIL_RE, PHONE_RE, fetch_public, _third_party, reader,
@@ -156,8 +156,7 @@ def qualify(db_path,review,fetch=fetch_public,search=search_firm,
         if checked.get('status')!='usable' or not checked.get('positive_control_found'):
             return {**report,'reason':'website_positive_control_failed'}
         response=search(candidate)
-        if (len(response)<2 or [r.get('provider') for r in response[:2]]!=
-                ['searxng:google cse','searxng:yahoo']):
+        if not valid_provider_pair(response):
             return {**report,'reason':'untrusted_search_providers'}
         site=classify_search_results(response)
         if site['status']!='screened_no_site':

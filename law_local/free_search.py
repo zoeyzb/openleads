@@ -1,6 +1,6 @@
 """Opt-in localhost search adapters. Third-party results are evidence, not proof of no website.
 
-SearXNG issues *separate* Google CSE and Yahoo engine requests; neither the wrapper
+SearXNG issues *separate* Yandex and Yep engine requests; neither the wrapper
 nor a responsive HTTP status alone establishes an independent negative search.
 YaCy uses its own P2P index for positive hints only: low coverage never qualifies.
 """
@@ -13,6 +13,18 @@ from urllib.request import Request, urlopen
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 MAX_RESPONSE = 1024 * 1024
+# Two independently indexed public-web search engines; each must recover
+# known owned websites in live controls. No provider is treated as unlimited.
+SITE_ENGINES = ('yandex', 'yep')
+SITE_PROVIDERS = tuple('searxng:' + e for e in SITE_ENGINES)
+LEGACY_SITE_PROVIDERS = ('searxng:google cse', 'searxng:yahoo')
+
+def valid_provider_pair(results, legacy=False):
+    if len(results) < 2:
+        return False
+    actual = tuple(item.get('provider') for item in results[:2])
+    return actual == SITE_PROVIDERS or (legacy and actual == LEGACY_SITE_PROVIDERS)
+
 
 
 def local_origin(value, default_port):
@@ -84,7 +96,7 @@ def _urls(items, field, lead=None):
 
 
 def searx_engine(query, engine, origin=None, fetch=None, lead=None):
-    if engine not in ("google", "bing", "google cse", "yahoo"):
+    if engine not in ("google", "bing", "google cse", "yahoo", "yandex", "yep"):
         raise ValueError("unsupported named independent search engine")
     output = {"provider": "searxng:" + engine, "responded": False, "urls": [], "reason": "unavailable"}
     try:
@@ -134,10 +146,9 @@ def yacy_search(query, origin=None, fetch=None, lead=None):
 
 def search_firm(lead):
     query = '"' + str(lead.get("firm", "")).replace('"', '') + '" law firm ' + str(lead.get("city", "")) + ' ' + str(lead.get("state", ""))
-    # These engines passed the source-attributed AXS Law Group control from
-    # this Mac on 2026-10-17; upstream reliability is always re-probed.
-    result = [searx_engine(query, "google cse", lead=lead),
-              searx_engine(query, "yahoo", lead=lead)]
+    # Yandex and Yep independently recovered AXS Law Group, Baker McKenzie,
+    # and Olsen & White on 2026-10-17. Continue to fail closed on outages.
+    result = [searx_engine(query, engine, lead=lead) for engine in SITE_ENGINES]
     # YaCy is a resource-intensive optional positive-only evidence channel.
     if os.environ.get("OPENLEADS_YACY_ENABLED") == "1":
         result.append(yacy_search(query, lead=lead))

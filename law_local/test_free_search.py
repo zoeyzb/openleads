@@ -83,7 +83,7 @@ class FreeSearchTests(unittest.TestCase):
         lead={'firm':'AXS Law Group','city':'Miami','state':'FL'}
         with patch.dict('os.environ', {'OPENLEADS_YACY_ENABLED':'0'}), patch('law_local.free_search.searx_engine', side_effect=lambda query,engine,lead=None: {'provider':'searxng:'+engine,'responded':True,'urls':[]} ) as engine:
             sources=free_search.search_firm(lead)
-            self.assertEqual([x['provider'] for x in sources], ['searxng:google cse','searxng:yahoo'])
+            self.assertEqual([x['provider'] for x in sources], ['searxng:yandex','searxng:yep'])
             self.assertEqual(engine.call_count,2)
 
     def test_absent_attributed_search_hits_are_not_a_completed_negative(self):

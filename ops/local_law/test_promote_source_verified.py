@@ -37,8 +37,8 @@ class StrictConversionTests(unittest.TestCase):
   return DIRECTORY if 'plea.net' in url else ARTICLE
  @staticmethod
  def search(lead):
-  return [{'provider':'searxng:google cse','responded':True,'urls':['https://www.lawyers.com/example']},
-          {'provider':'searxng:yahoo','responded':True,'urls':['https://www.lawyer.com/firm/example']}]
+  return [{'provider':'searxng:yandex','responded':True,'urls':['https://www.lawyers.com/example']},
+          {'provider':'searxng:yep','responded':True,'urls':['https://www.lawyer.com/firm/example']}]
  @staticmethod
  def health(): return {'status':'usable','positive_control_found':True}
  def call(self,review=None,**kwargs):
