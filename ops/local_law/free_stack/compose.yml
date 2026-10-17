@@ -1,0 +1,29 @@
+# Localhost-only optional search backends. No cloud services or paid APIs.
+# Start only needed profiles: docker compose -f ... --profile searxng up -d
+services:
+  searxng:
+    profiles: ["searxng"]
+    image: ${OPENLEADS_SEARXNG_IMAGE:-searxng/searxng:latest}
+    container_name: openleads-searxng
+    restart: "no"
+    cpus: 1.0
+    mem_limit: 600m
+    ports:
+      - "127.0.0.1:18888:8080"
+    volumes:
+      - ./searxng-settings.yml:/etc/searxng/settings.yml:ro
+  # YaCy requires meaningful indexed coverage; never trust empty results.
+  # This optional service is intentionally NOT started with SearXNG.
+  yacy:
+    profiles: ["yacy"]
+    image: ${OPENLEADS_YACY_IMAGE:-yacy/yacy_search_server:latest}
+    container_name: openleads-yacy
+    restart: "no"
+    cpus: 1.0
+    mem_limit: 1400m
+    ports:
+      - "127.0.0.1:18090:8090"
+    volumes:
+      - openleads_yacy_data:/opt/yacy_search_server/DATA
+volumes:
+  openleads_yacy_data:

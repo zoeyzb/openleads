@@ -187,7 +187,9 @@ def classify_search_results(search_results):
     # Never use an outage or a third-party search hit as negative website proof.
     healthy=len(search_results)>=2 and all(r.get("responded") is True for r in search_results[:2])
     potential=[]
-    for result in search_results[:2]:
+    # Additional positive-only indexes (e.g. YaCy) may reveal an owned site,
+    # but never count as one of the two independent negative controls.
+    for result in search_results:
         for raw_url in result.get("urls",[]):
             try:
                 url=search_target(raw_url)
@@ -230,9 +232,9 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
     site=classify_search_results(search_results)
     evidence["site_status"]=site["status"]
     evidence["site_evidence"]={"checked_at":utc_now(),"providers":[
-        {"responded":bool(r.get("responded")),
+        {"provider":r.get("provider","unknown"),"responded":bool(r.get("responded")),
          "urls":[v for v in r.get("urls",[])[:10] if _public_http_url(v)]}
-        for r in search_results[:2]]}
+        for r in search_results]}
     if site["status"]!="screened_no_site":
         return {**evidence,"status":site["status"],"site_evidence":site}
     # Email is optional for calling; only a source-published MX-checked email
@@ -576,6 +578,9 @@ def search_result_relevant(title,description,lead):
     return all(t in combined.split() for t in tokens)
 
 def search_for_firm(lead):
+    if os.environ.get("OPENLEADS_SEARCH_MODE") == "local_forks":
+        from law_local.free_search import search_firm
+        return search_firm(lead)
     term='"'+str(lead["firm"]).replace('"',"")+'"'+" law firm "+str(lead.get("city") or "")+" "+str(lead.get("state") or "")
     # Public Brave HTML currently provides actual result cards where Bing RSS
     # redirects to its homepage. This leg is positive discovery only: one

@@ -4,6 +4,9 @@ set -eu
 NAME=openleads-maps-local
 PORT=18080
 DATA="$HOME/lead-workspace/local-maps-data"
+# To run an image built from zoeyzb/google-maps-scraper, set this variable
+# before creating a NEW collector; existing persistent container is preserved.
+IMAGE="${OPENLEADS_MAPS_IMAGE:-gosom/google-maps-scraper:latest}"
 mkdir -p "$DATA"
 if ! docker info >/dev/null 2>&1; then
   echo 'Docker not running. Start OrbStack first: orb start' >&2
@@ -19,7 +22,7 @@ else
       --memory 2g --cpus 2 \
       -p "127.0.0.1:$PORT:8080" \
       -v "$DATA:/gmapsdata" \
-      gosom/google-maps-scraper:latest -data-folder /gmapsdata >/dev/null
+      "$IMAGE" -data-folder /gmapsdata >/dev/null
   fi
 fi
 printf 'Local Maps scraper: http://127.0.0.1:%s\n' "$PORT"
