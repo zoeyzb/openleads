@@ -321,6 +321,49 @@ class QualityTests(unittest.TestCase):
             self.assertEqual(db.export("calling_qualified",Path(folder)/"calls.csv"),0)
             db.close()
 
+    def test_export_rejects_disagreement_between_status_and_evidence(self):
+        from law_local.worker import utc_now
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"law.sqlite3")
+            db.add(LEAD)
+            db.record(LEAD,{"status":"call_qualified_no_email",
+                "phone":"3124221836","checked_at":utc_now(),
+                "site_status":"screened_no_site",
+                "qualification_scope":"law_no_owned_website_any_size",
+                "site_evidence":{"providers":[{"responded":True},{"responded":True}]}})
+            # Simulate a stale evidence payload after a database status change.
+            db.conn.execute("UPDATE candidates SET status='strict_eligible'")
+            db.conn.commit()
+            self.assertEqual(db.counts()["calling_qualified"],0)
+            out=Path(folder)/"calls.csv"
+            self.assertEqual(db.export("calling_qualified",out),0)
+            with out.open() as handle:
+                self.assertEqual(list(csv.DictReader(handle)),[])
+            db.close()
+
+    def test_shared_phone_aliases_export_once_preferring_verified_email(self):
+        from law_local.worker import utc_now
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"law.sqlite3")
+            aliases=[LEAD,{**LEAD,"firm":"Keystone Parker Law LLC"}]
+            for lead,status in zip(aliases,("call_qualified_no_email","strict_eligible")):
+                db.add(lead)
+                proof={"status":status,"phone":"3124221836","checked_at":utc_now(),
+                    "site_status":"screened_no_site",
+                    "qualification_scope":"law_no_owned_website_any_size",
+                    "site_evidence":{"providers":[{"responded":True},{"responded":True}]}}
+                if status=="strict_eligible":
+                    proof.update(email="office@keystoneparker.example",
+                                 email_source=lead["source_url"])
+                db.record(lead,proof)
+            self.assertEqual(db.counts()["calling_qualified"],1)
+            out=Path(folder)/"calls.csv"
+            self.assertEqual(db.export("calling_qualified",out),1)
+            with out.open() as handle:
+                exported=list(csv.DictReader(handle))
+            self.assertEqual([row["Firm"] for row in exported],["Keystone Parker Law LLC"])
+            db.close()
+
     def test_legacy_no_email_records_are_requeued(self):
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/"law.sqlite3"

@@ -390,28 +390,48 @@ class SqliteQueue:
             return True
         except (ValueError,TypeError,KeyError,AttributeError):
             return False
+    def _verified_rows(self,statuses):
+        """Yield one current-proof record per phone; never delete source evidence.
+
+        Prefer source-verified email over phone-only when practice aliases or
+        shared numbers collide. Keep the selection stable between runs.
+        """
+        placeholders=",".join("?" for _ in statuses)
+        rows=self.conn.execute(f"""SELECT id,firm,phone,city,state,source_url,status,result_json
+             FROM candidates WHERE status IN ({placeholders})
+             ORDER BY CASE WHEN status='strict_eligible' THEN 0 ELSE 1 END,
+                      state,firm,id""",statuses)
+        seen_phones=set()
+        for row in rows:
+            try:
+                evidence=json.loads(row["result_json"])
+            except (TypeError,ValueError):
+                continue
+            # The database status is authoritative. A stale payload must not
+            # silently restore a revoked or reclassified qualification.
+            if not self._verified_for_export(row,evidence,row["status"]):
+                continue
+            phone=normalize_phone(row["phone"])
+            if phone in seen_phones:
+                continue
+            seen_phones.add(phone)
+            yield row,evidence
+
     def counts(self):
         totals=dict(self.conn.execute("SELECT status,COUNT(*) FROM candidates GROUP BY status").fetchall())
-        totals["calling_qualified"]=sum(
-            1 for row in self.conn.execute("SELECT phone,status,source_url,result_json FROM candidates WHERE status IN ('strict_eligible','call_qualified_no_email')")
-            if self._verified_for_export(row,json.loads(row["result_json"]),row["status"]))
+        totals["calling_qualified"]=sum(1 for _ in self._verified_rows(
+            ("strict_eligible","call_qualified_no_email")))
         return totals
     def export(self,status,path):
         statuses=("strict_eligible","call_qualified_no_email") if status=="calling_qualified" else (status,)
-        placeholders=",".join("?" for _ in statuses)
-        rows=self.conn.execute(f"""SELECT firm,phone,city,state,source_url,result_json
-             FROM candidates WHERE status IN ({placeholders}) ORDER BY state,firm""",statuses).fetchall()
         path=Path(path).expanduser()
         path.parent.mkdir(parents=True,exist_ok=True)
         cols=["Firm","Phone","City","State","Attorneys","Email","Headcount source","Email source","Website audit","Checked at"]
+        exported=0
         with path.open("w",newline="",encoding="utf-8") as fd:
             w=csv.DictWriter(fd,fieldnames=cols)
             w.writeheader()
-            for row in rows:
-                evidence=json.loads(row["result_json"])
-                candidate_status=evidence.get("status")
-                if not self._verified_for_export(row,evidence,candidate_status):
-                    continue
+            for row,evidence in self._verified_rows(statuses):
                 w.writerow({
                     "Firm":row["firm"],"Phone":row["phone"],"City":row["city"],"State":row["state"],
                     "Attorneys":evidence.get("attorneys",""),"Email":evidence.get("email",""),
@@ -420,11 +440,8 @@ class SqliteQueue:
                     "Website audit":evidence.get("site_status",""),
                     "Checked at":evidence.get("checked_at","")
                 })
-        return sum(
-            self._verified_for_export(row,json.loads(row["result_json"]),
-                                      json.loads(row["result_json"]).get("status"))
-            for row in rows
-        )
+                exported+=1
+        return exported
     def close(self):
         self.conn.close()
 

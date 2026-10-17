@@ -42,6 +42,14 @@ def strict_export():
      attorneys=ev.get("attorneys"),email=email,headcount_source=ev.get("headcount_source",""),
      email_source=ev["email_source"],site_status=ev["site_status"],checked_at=ev["checked_at"]))
   except (ValueError,TypeError,KeyError,AttributeError): continue
+ # A shared office number or mailbox must not produce duplicate outreach.
+ seen_phones=set();seen_emails=set();unique=[]
+ for item in sorted(qualified,key=lambda x:(x["state"],x["firm"])):
+  phone=''.join(ch for ch in item["phone"] if ch.isdigit())[-10:]
+  email=item["email"].casefold()
+  if phone in seen_phones or email in seen_emails:continue
+  seen_phones.add(phone);seen_emails.add(email);unique.append(item)
+ qualified=unique
  cols=["firm","phone","city","state","attorneys","email","headcount_source","email_source","site_status","checked_at"]
  temp=OUT.with_suffix(".tmp")
  with temp.open("w",newline="") as f:

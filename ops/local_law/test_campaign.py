@@ -31,6 +31,12 @@ class ExportTests(unittest.TestCase):
  def test_published_email_without_firm_size_source_is_excluded(self):
   self.add(attorneys=5,headcount_source="")
   self.assertEqual(campaign.strict_export(),1)
+ def test_strict_email_export_deduplicates_shared_phone(self):
+  self.add()
+  self.add()
+  self.assertEqual(campaign.strict_export(),1)
+  with campaign.OUT.open() as handle:
+   self.assertEqual(len(list(csv.DictReader(handle))),1)
  def test_phone_only_excluded(self):
   self.add(status="call_qualified_no_email")
   self.assertEqual(campaign.strict_export(),0)
