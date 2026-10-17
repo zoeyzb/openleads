@@ -5,7 +5,8 @@ services:
     profiles: ["searxng"]
     image: ${OPENLEADS_SEARXNG_IMAGE:-searxng/searxng:latest}
     container_name: openleads-searxng
-    restart: "no"
+    # Resume the local search service when OrbStack starts after a Mac reboot.
+    restart: unless-stopped
     cpus: 1.0
     mem_limit: 600m
     ports:

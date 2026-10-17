@@ -47,6 +47,12 @@ DIRECTORY_DOMAINS = (
     "attorneyslisted.com", "globallawlists.org", "yobi.com",
     "us-info.com", "evvbar.org", "lawyerland.com",
     "gadsdenmessenger.com", "gadsdenthrive.com",
+    "actl.com", "attorneyslisted.com", "elitelitigators.com",
+    "trustanalytica.org", "delaware.gov", "delawaretoday.com",
+    "plea.net", "findlemonlaw.com", "beforeattorney.com",
+    "reachattorneys.com", "bestprosintown.com", "wanderboat.ai",
+    "111things.com", "sullivanauctioneers.com", "irela.org",
+    "uscompanies.net", "waze.com",
 )
 EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[\s.()\-]*)?([2-9]\d{2})[\s.()\-]*([2-9]\d{2})[\s.\-]*(\d{4})(?!\d)")
@@ -261,7 +267,16 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
             evidence["email"]=email
             evidence["email_source"]=lead.get("source_url","")
             break
-    return {**evidence,"status":"strict_eligible" if evidence["email"] else "call_qualified_no_email"}
+    if evidence["email"]:
+        # An MX-checked business email does not waive the 2–10-attorney
+        # requirement of the STRICT qualified pool. Do not count one-lawyer,
+        # large or unknown-size practices as strict leads.
+        if not (2 <= int(source.get("attorneys") or 0) <= 10):
+            return {**evidence,"status":"review_firmwide_headcount",
+                    "reason":"published_email_but_firmwide_2_10_unverified"}
+        evidence["qualification_scope"]="law_no_owned_website_2_10_email"
+        return {**evidence,"status":"strict_eligible"}
+    return {**evidence,"status":"call_qualified_no_email"}
 
 class SqliteQueue:
     def __init__(self,path):
@@ -381,7 +396,11 @@ class SqliteQueue:
             identity_source=evidence.get("headcount_source") or row["source_url"]
             if not identity_source:
                 return False
-            if not _third_party(urlparse(identity_source).hostname or ""):
+            if (evidence.get("source_qualification_method")=="reviewed_named_team_published_email"
+                    and evidence.get("source_proof",{}).get("headcount_source")==identity_source
+                    and evidence.get("source_proof",{}).get("identity_source")==row["source_url"]):
+                pass  # Complete source provenance is checked below.
+            elif not _third_party(urlparse(identity_source).hostname or ""):
                 # Operator reviews may use a client's public publication to
                 # bind identity/phone. Revalidate the complete review rather
                 # than treating arbitrary public URLs as trusted directories.
@@ -395,9 +414,32 @@ class SqliteQueue:
                     or any(h.get("disposition") in ("owned","uncertain")
                            for p in review["providers"] for h in p["results"])):
                     return False
-            if status=="strict_eligible" and (not EMAIL_RE.fullmatch(evidence.get("email","")) or
-                      not evidence.get("email_source")):
-                return False
+            if evidence.get("source_qualification_method")=="reviewed_named_team_published_email":
+                proof=evidence.get("source_proof",{})
+                if (status!="strict_eligible" or
+                    evidence.get("qualification_scope")!="law_no_owned_website_2_10_email" or
+                    evidence.get("review_method")!="live_source_verified_named_team" or
+                    evidence.get("firmwide_2_10_review_confirmed") is not True or
+                    evidence.get("private_practice_confirmed") is not True or
+                    not 2<=int(evidence.get("attorneys",0))<=10 or
+                    len(evidence.get("named_attorneys",[]))!=int(evidence.get("attorneys",0)) or
+                    not proof.get("reviewer") or
+                    proof.get("identity_source")!=row["source_url"] or
+                    proof.get("email_source")!=evidence.get("email_source") or
+                    proof.get("headcount_source")!=evidence.get("headcount_source") or
+                    evidence.get("email_mx_ok") is not True):
+                    return False
+            if status=="strict_eligible":
+                count=int(evidence.get("attorneys") or 0)
+                rng=evidence.get("attorney_range")
+                if (not 2 <= count <= 10 or
+                    (rng is not None and
+                     (not isinstance(rng,(tuple,list)) or len(rng)!=2 or
+                      not 2 <= int(rng[0]) <= int(rng[1]) <= 10)) or
+                    not EMAIL_RE.fullmatch(evidence.get("email", "")) or
+                    not evidence.get("email_source") or
+                    not evidence.get("headcount_source")):
+                    return False
             providers=evidence.get("site_evidence",{}).get("providers",[])
             if len(providers)<2 or not all(p.get("responded") is True for p in providers[:2]):
                 return False

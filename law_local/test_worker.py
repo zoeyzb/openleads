@@ -240,6 +240,16 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(result["status"],"call_qualified_no_email")
         self.assertEqual(result["email"],"")
 
+    def test_published_email_without_valid_firmwide_size_never_strict_qualifies(self):
+        for wording in ('Keystone & Parker Law Group has 1 attorney.',
+                        'Keystone & Parker Law Group has 24 attorneys.',
+                        'The attorneys at this location have 4 members.'):
+            with self.subTest(wording=wording):
+                html=PROFILE.replace('Keystone & Parker Law Group has 4 attorneys.',wording)
+                result=evaluate_candidate(LEAD,html,[{'responded':True,'urls':[]},
+                              {'responded':True,'urls':[]}],mx_check=lambda domain:True)
+                self.assertNotEqual(result['status'],'strict_eligible')
+
     def test_strict_gate_requires_mx_and_two_no_site_checks(self):
         good=evaluate_candidate(LEAD,PROFILE,[{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
                                 mx_check=lambda domain:True)
@@ -395,6 +405,9 @@ class QualityTests(unittest.TestCase):
                     "site_evidence":{"providers":[{"responded":True},{"responded":True}]}}
                 if status=="strict_eligible":
                     proof.update(email="office@keystoneparker.example",
+                                 attorneys=4,
+                                 headcount_source=lead["source_url"],
+                                 qualification_scope="law_no_owned_website_2_10_email",
                                  email_source=lead["source_url"])
                 db.record(lead,proof)
             self.assertEqual(db.counts()["calling_qualified"],1)

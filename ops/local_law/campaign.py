@@ -17,7 +17,14 @@ def connect():
  c.commit()
  return c
 def command(args,seconds=180):
- return subprocess.run([PY,*args],cwd=SRC,text=True,capture_output=True,timeout=seconds)
+ # Use the self-hosted search pair for VERIFICATION, not raw discovery.
+ # Its existing positive-control preflight still blocks false clearance
+ # whenever the local container or upstream indexes are unhealthy.
+ env=os.environ.copy()
+ if (len(args)>=2 and args[:2]==['-m','ops.local_law.screen_maps_websites'] or
+     len(args)>=2 and args[:2]==['-m','law_local.worker'] and 'run' in args):
+  env.setdefault('OPENLEADS_SEARCH_MODE','local_forks')
+ return subprocess.run([PY,*args],cwd=SRC,text=True,capture_output=True,timeout=seconds,env=env)
 def strict_export():
  from_path=DB
  c=sqlite3.connect(from_path)

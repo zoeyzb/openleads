@@ -5,6 +5,21 @@ from pathlib import Path
 from datetime import datetime,timezone,timedelta
 SPEC=importlib.util.spec_from_file_location("campaign",str(Path(__file__).parent/"campaign.py"))
 campaign=importlib.util.module_from_spec(SPEC);SPEC.loader.exec_module(campaign)
+class FreeSearchSchedulingTests(unittest.TestCase):
+ def test_website_verification_uses_selfhosted_engines_by_default(self):
+  from unittest.mock import patch
+  with patch.object(campaign.subprocess,'run',return_value=CompletedProcess([],0,'','')) as r, patch.dict(campaign.os.environ,{},clear=True):
+   campaign.command(['-m','law_local.worker','--db','/tmp/not-real.db','run'],4)
+   self.assertEqual(r.call_args.kwargs['env']['OPENLEADS_SEARCH_MODE'],'local_forks')
+   campaign.command(['-m','ops.local_law.screen_maps_websites','--max','2'],4)
+   self.assertEqual(r.call_args.kwargs['env']['OPENLEADS_SEARCH_MODE'],'local_forks')
+   campaign.command(['-m','law_local.worker','discover','--states','TX'],4)
+   self.assertNotIn('OPENLEADS_SEARCH_MODE',r.call_args.kwargs['env'])
+ def test_explicit_mode_is_honored_not_overwritten(self):
+  with patch.object(campaign.subprocess,'run',return_value=CompletedProcess([],0,'','')) as r, patch.dict(campaign.os.environ,{'OPENLEADS_SEARCH_MODE':'legacy'},clear=True):
+   campaign.command(['-m','law_local.worker','run'],3)
+   self.assertEqual(r.call_args.kwargs['env']['OPENLEADS_SEARCH_MODE'],'legacy')
+
 class ExportTests(unittest.TestCase):
  def setUp(self):
   self.t=tempfile.TemporaryDirectory(); self.root=Path(self.t.name)
@@ -27,10 +42,10 @@ class ExportTests(unittest.TestCase):
    self.assertEqual(len(list(csv.DictReader(fd))),1)
  def test_email_without_verified_attorney_count_is_excluded(self):
   self.add(attorneys=None)
-  self.assertEqual(campaign.strict_export(),1)
+  self.assertEqual(campaign.strict_export(),0)
  def test_published_email_without_firm_size_source_is_excluded(self):
   self.add(attorneys=5,headcount_source="")
-  self.assertEqual(campaign.strict_export(),1)
+  self.assertEqual(campaign.strict_export(),0)
  def test_strict_email_export_deduplicates_shared_phone(self):
   self.add()
   self.add()
