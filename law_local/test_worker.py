@@ -21,6 +21,65 @@ LEAD = {
     "source_url": "https://www.lawyers.com/chicago/illinois/keystone-parker-law-group/"
 }
 
+class EvidenceRetentionTests(unittest.TestCase):
+    def test_inactive_hold_survives_automatic_retry(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            q=SqliteQueue(Path(d)/"q.db")
+            q.add(LEAD)
+            hold={"status":"rejected_inactive","eligibility_hold":{"reason":"retired"}}
+            q.record(LEAD,hold)
+            q.record(LEAD,{"status":"inconclusive","reason":"search_provider_unavailable"})
+            row=q.conn.execute("SELECT status,result_json FROM candidates").fetchone()
+            self.assertEqual(row["status"],"rejected_inactive")
+            self.assertEqual(json.loads(row["result_json"])["eligibility_hold"],hold["eligibility_hold"])
+            q.close()
+
+    def test_owned_site_hold_survives_automatic_retry(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            q=SqliteQueue(Path(d)/"q.db");q.add(LEAD)
+            q.record(LEAD,{"status":"review_website","owned_site_url":"https://firm.example/"})
+            q.record(LEAD,{"status":"inconclusive","reason":"search_provider_unavailable"})
+            self.assertEqual(json.loads(q.conn.execute("SELECT result_json FROM candidates").fetchone()[0])["owned_site_url"],"https://firm.example/")
+            q.close()
+
+    def test_unresolved_website_candidates_survive_outage(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            q=SqliteQueue(Path(d)/"q.db");q.add(LEAD)
+            hold={"status":"review_website","website_candidates":["https://possible.example/"]}
+            q.record(LEAD,hold)
+            q.record(LEAD,{"status":"inconclusive","reason":"search_provider_unavailable"})
+            self.assertEqual(json.loads(q.conn.execute("SELECT result_json FROM candidates").fetchone()[0]),hold)
+            q.close()
+
+    def test_nonlaw_evidence_revokes_verified_practice(self):
+        from law_local.worker import utc_now
+        for status in ("review_nonlaw_employer","owned_site_or_untrusted_source"):
+            with self.subTest(status=status),tempfile.TemporaryDirectory() as d:
+                q=SqliteQueue(Path(d)/"q.db");q.add(LEAD)
+                q.record(LEAD,{"status":"call_qualified_no_email","phone":LEAD["phone"],"checked_at":utc_now(),"site_status":"screened_no_site","qualification_scope":"law_no_owned_website_any_size","site_evidence":{"providers":[{"responded":True},{"responded":True}]}})
+                self.assertEqual(q.counts()["calling_qualified"],1)
+                q.record(LEAD,{"status":status})
+                self.assertEqual(q.counts()["calling_qualified"],0)
+                q.close()
+
+    def test_verified_review_survives_provider_outage(self):
+        import json
+        from law_local.worker import utc_now
+        with tempfile.TemporaryDirectory() as d:
+            q=SqliteQueue(Path(d)/"q.db");q.add(LEAD)
+            proof={"status":"call_qualified_no_email","firm":LEAD["firm"],"phone":LEAD["phone"],"checked_at":utc_now(),"site_status":"screened_no_site","qualification_scope":"law_no_owned_website_any_size","site_evidence":{"providers":[{"responded":True},{"responded":True}]}}
+            q.record(LEAD,proof)
+            q.record(LEAD,{"status":"inconclusive","reason":"search_provider_unavailable"})
+            row=q.conn.execute("SELECT status,result_json FROM candidates").fetchone()
+            self.assertEqual(row["status"],"call_qualified_no_email")
+            self.assertEqual(json.loads(row["result_json"])["checked_at"],proof["checked_at"])
+            q.record(LEAD,{"status":"rejected_inactive","eligibility_hold":{"reason":"retired"}})
+            self.assertEqual(q.counts()["calling_qualified"],0)
+            q.close()
+
 class QueuePriorityTests(unittest.TestCase):
     def test_official_firm_size_source_first(self):
         with tempfile.TemporaryDirectory() as root:

@@ -53,6 +53,34 @@ class ReviewTests(unittest.TestCase):
             db=Path(d)/"q.db";bad=fixture();bad["checked_at"]="old"
             with self.assertRaises(ValueError):import_reviews(db,[fixture(),bad])
             self.assertFalse(db.exists())
+    def test_confirmed_owned_evidence_supersedes_unresolved_hold(self):
+        with tempfile.TemporaryDirectory() as d:
+            db=Path(d)/"q.db";r=fixture();q=SqliteQueue(db);q.add(r["lead"])
+            u="https://unrelated.example/"
+            q.record(r["lead"],{"status":"review_website","site_evidence":{"urls":[u]}})
+            q.record(r["lead"],{"status":"review_website","site_status":"published_owned_website","owned_site_url":"https://confirmed.example/"})
+            import json
+            self.assertEqual(json.loads(q.conn.execute("SELECT result_json FROM candidates").fetchone()[0])["owned_site_url"],"https://confirmed.example/")
+            q.close()
+            r["providers"][0]["results"].append({"url":u,"relevant":False,"disposition":"unrelated","note":"Different identity."})
+            with self.assertRaisesRegex(ValueError,"owned-site evidence"):
+                import_reviews(db,[r])
+
+    def test_operator_can_clear_only_explicitly_reviewed_prior_candidates(self):
+        with tempfile.TemporaryDirectory() as d:
+            db=Path(d)/"q.db";r=fixture();q=SqliteQueue(db)
+            q.add(r["lead"])
+            prior_url="https://different-practice.example/"
+            q.record(r["lead"],{"status":"review_website","site_evidence":{"urls":[prior_url]}})
+            q.close()
+            with self.assertRaisesRegex(ValueError,"unresolved website candidates"):
+                import_reviews(db,[r])
+            q=SqliteQueue(db)
+            self.assertEqual(q.conn.execute("SELECT COUNT(*) FROM operator_site_reviews").fetchone()[0],0)
+            q.close()
+            r["providers"][0]["results"].append({"url":prior_url,"relevant":False,"disposition":"unrelated","note":"Inspected different location, principal and phone."})
+            self.assertEqual(import_reviews(db,[r])["new_verified"],1)
+
     def test_existing_candidate_is_promoted(self):
         with tempfile.TemporaryDirectory() as d:
             db=Path(d)/"q.db";r=fixture();q=SqliteQueue(db)

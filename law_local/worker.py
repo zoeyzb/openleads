@@ -304,6 +304,36 @@ class SqliteQueue:
                       updated ASC LIMIT ?""",(cutoff,int(limit))).fetchall()
         return [dict(row) for row in rows]
     def record(self,lead,result):
+        existing=self.conn.execute("SELECT * FROM candidates WHERE id=?",(self._id(lead),)).fetchone()
+        prior=json.loads(existing["result_json"] or "{}") if existing else {}
+        # Keep every observation, including failed retries, without allowing
+        # outages to erase completed proof or conclusive exclusion evidence.
+        self.conn.execute("""CREATE TABLE IF NOT EXISTS candidate_check_history (
+            candidate_id TEXT NOT NULL, checked_at TEXT NOT NULL, result_json TEXT NOT NULL)""")
+        self.conn.execute("INSERT INTO candidate_check_history VALUES(?,?,?)",
+                          (self._id(lead),utc_now(),json.dumps(result,sort_keys=True)))
+        unresolved=prior.get("status")=="review_website"
+        if unresolved and result.get("review_method")=="operator_two_provider_review":
+            from ops.local_law.import_site_reviews import validate
+            review=result.get("operator_review",{})
+            reviewed_lead=validate(review)
+            reviewed={h["url"] for p in review["providers"] for h in p["results"]
+                      if h["disposition"] in ("directory","social","unrelated")}
+            prior_urls=set(prior.get("website_candidates",[])) | set(prior.get("site_evidence",{}).get("urls",[]))
+            if (not prior_urls or not prior_urls.issubset(reviewed) or
+                    self._id(reviewed_lead)!=self._id(lead)):
+                raise ValueError("unresolved website candidates require explicit operator review")
+            unresolved=False
+        conclusive_adverse=(result.get("eligibility_hold") or result.get("owned_site_url") or
+                            result.get("site_status")=="published_owned_website" or
+                            result.get("status") in ("rejected_inactive","review_inactive"))
+        prior_hold=((unresolved and not conclusive_adverse) or prior.get("eligibility_hold") or
+                    prior.get("status") in ("rejected_inactive","review_inactive") or
+                    prior.get("owned_site_url") or prior.get("site_status")=="published_owned_website")
+        proven=existing and self._verified_for_export(existing,prior,prior.get("status"))
+        if prior_hold or (proven and result.get("status")=="inconclusive"):
+            self.conn.commit()
+            return
         site=result.get("site_evidence")
         # A broken search provider is not a failed firm. Preserve its retry
         # budget until independent website checks are available again.
@@ -322,6 +352,8 @@ class SqliteQueue:
             when=datetime.fromisoformat(str(evidence.get("checked_at","")).replace("Z","+00:00"))
             age=datetime.now(timezone.utc)-when
             if when.tzinfo is None or not (0<=age.total_seconds()<=30*86400):
+                return False
+            if evidence.get("eligibility_hold") or evidence.get("owned_site_url"):
                 return False
             if evidence.get("status")!=status or evidence.get("site_status")!="screened_no_site":
                 return False
