@@ -30,7 +30,11 @@ def audit_provider_health(lookups=None):
                 continue
             if host==KNOWN_DOMAIN or host.endswith("."+KNOWN_DOMAIN):
                 found=True
-        details.append({"responded":bool(source.get("responded")),
+        details.append({"provider":source.get("provider","unknown"),
+                        "reason":source.get("reason",""),
+                        "http_status":source.get("http_status",0),
+                        "retry_after_seconds":source.get("retry_after_seconds",0),
+                        "responded":bool(source.get("responded")),
                         "result_count":len(source.get("urls",[])),
                         "positive_control_found":found})
     relevant=len(details)==2 and all(d["positive_control_found"] for d in details)

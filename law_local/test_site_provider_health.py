@@ -31,3 +31,11 @@ class SiteProviderHealthTests(unittest.TestCase):
         self.assertEqual(result["status"],"degraded")
     def test_no_responses_blocks(self):
         self.assertEqual(audit_provider_health(lambda c:[])["status"],"degraded")
+
+    def test_outage_diagnostics_preserve_provider_and_backoff(self):
+        out=audit_provider_health(lambda c:[{"provider":"brave_public","responded":False,"urls":[],"reason":"provider_cooldown","http_status":429,"retry_after_seconds":21600}])
+        detail=out["provider_details"][0]
+        self.assertEqual(detail["provider"],"brave_public")
+        self.assertEqual(detail["http_status"],429)
+        self.assertEqual(detail["retry_after_seconds"],21600)
+        self.assertEqual(out["status"],"degraded")
