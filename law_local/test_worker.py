@@ -321,6 +321,18 @@ class QualityTests(unittest.TestCase):
             self.assertEqual(db.export("calling_qualified",Path(folder)/"calls.csv"),0)
             db.close()
 
+    def test_degraded_site_provider_defers_without_consuming_queue(self):
+        from law_local.worker import run_batch
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"law.sqlite3")
+            db.add(LEAD)
+            before=db.conn.execute("SELECT status,attempts,result_json FROM candidates").fetchone()
+            result=run_batch(db,max_rows=10,workers=1,seconds=5,site_search_usable=False)
+            after=db.conn.execute("SELECT status,attempts,result_json FROM candidates").fetchone()
+            self.assertEqual(result,{"blocked_website_provider":1})
+            self.assertEqual(tuple(before),tuple(after))
+            db.close()
+
     def test_export_rejects_disagreement_between_status_and_evidence(self):
         from law_local.worker import utc_now
         with tempfile.TemporaryDirectory() as folder:
@@ -422,7 +434,7 @@ class EndToEndTests(unittest.TestCase):
             health.assert_called_once()
             db=SqliteQueue(path)
             row=db.conn.execute("SELECT status,attempts FROM candidates").fetchone()
-            self.assertEqual(row["status"],"inconclusive")
+            self.assertEqual(row["status"],"pending")
             self.assertEqual(row["attempts"],0)
             self.assertEqual(db.counts()["calling_qualified"],0)
             db.close()

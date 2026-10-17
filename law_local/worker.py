@@ -626,6 +626,11 @@ def run_batch(db,max_rows=100,workers=4,seconds=600,site_search_usable=True):
     # Freeze distinct ids at start: an inconclusive lookup gets a retry on the
     # next run, never 3 wasted retries in a single outage window.
     candidates=db.pending(int(max_rows))
+    # Source-only attempts cannot clear the website gate. Defer the entire
+    # verification batch while both independent search controls are down;
+    # preserve pending records, attempt budgets and original source evidence.
+    if not site_search_usable:
+        return {"blocked_website_provider":len(candidates)}
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         for offset in range(0,len(candidates),concurrency):
             if time.monotonic()>=deadline:
