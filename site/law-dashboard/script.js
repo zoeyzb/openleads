@@ -6,9 +6,9 @@ const tabs=['dashboard','queue','sources','coverage','system'];
 function navigate(){const tab=location.hash.slice(1);const active=tabs.includes(tab)?tab:'dashboard';document.querySelectorAll('[data-tab]').forEach(el=>{el.classList.toggle('active',el.dataset.tab===active);el.setAttribute('aria-current',el.dataset.tab===active?'page':'false')});document.querySelectorAll('[data-panel]').forEach(el=>el.hidden=el.dataset.panel!==active);$('view-title').textContent=active.charAt(0).toUpperCase()+active.slice(1);window.scrollTo(0,0)}
 window.addEventListener('hashchange',navigate);navigate();
 function ago(s){const delta=(Date.now()-Date.parse(s))/60000;if(!Number.isFinite(delta))return 'unknown';return delta<2?'just now':delta<60?Math.floor(delta)+'m ago':delta<1440?Math.floor(delta/60)+'h ago':Math.floor(delta/1440)+'d ago'}
-function render(d){if(d.schema!==1||!Number.isFinite(d.research))throw Error('Invalid metrics');data=d;
+function render(d){if(d.schema!==1||!Number.isFinite(d.research)||!Number.isFinite(d.strictQualified))throw Error('Strict qualification metric missing');data=d;
  const statuses=d.candidateStatuses||{},pending=Object.values(statuses).reduce((a,b)=>a+Number(b||0),0),triaged=Object.values(d.triageStatuses||{}).reduce((a,b)=>a+Number(b||0),0);
- for(const [key,value] of Object.entries({qualified:d.callingQualified,candidates:pending,research:d.research,triaged, 'queue-number':d.callingQualified,'system-qualified':d.callingQualified}))$(key).textContent=format(value);
+ for(const [key,value] of Object.entries({qualified:d.strictQualified,candidates:pending,research:d.research,triaged, 'queue-number':d.strictQualified,'system-qualified':d.strictQualified,'legacy-phone-only':d.legacyPhoneOnly}))$(key).textContent=format(value);
  const site=String(d.providerHealth||'unknown');if($('site-state'))$('site-state').textContent=site==='usable'?'CHECKS AVAILABLE':'BLOCKED';$('system-site').textContent=site.toUpperCase();
  $('feed-status').textContent='Mac updated '+ago(d.updatedAt);$('system-feed').textContent='Updated '+ago(d.updatedAt);$('updated').textContent=ago(d.updatedAt);$('footer-date').textContent=new Date(d.updatedAt).toLocaleString();
  const breakdown=$('queue-breakdown');breakdown.replaceChildren();const items=[['Pending',statuses.pending||0],['Website review',statuses.review_website||0],['Other review',pending-Number(statuses.pending||0)-Number(statuses.review_website||0)]];
@@ -57,7 +57,7 @@ function showEvidence(row){
  const area=$('candidate-detail');area.hidden=false;area.replaceChildren();
  const h=document.createElement('h3');h.textContent=row.firm;
  const p=document.createElement('p');p.textContent=[row.city,row.state,row.phone,row.status].filter(Boolean).join(' · ');
- const warning=document.createElement('p');warning.textContent='Candidate only. Verify total attorneys, no owned website and business phone independently before calling.';
+ const warning=document.createElement('p');warning.textContent='Candidate only. Verify 2–10 firmwide attorneys, no owned website, published email and business phone before outreach.';
  const src=document.createElement('a');src.href=row.source_url;src.target='_blank';src.rel='noopener noreferrer';src.textContent='Published source ↗';
  const code=document.createElement('pre');code.textContent=JSON.stringify(row.evidence||{},null,2);
  area.append(h,p,warning,src,code);
