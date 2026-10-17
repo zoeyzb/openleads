@@ -15,6 +15,19 @@ class MapSiteScreeningTests(unittest.TestCase):
   dbpath=Path(directory)/'leads.sqlite3'
   queue=SqliteQueue(dbpath);ingest_maps_candidates(queue,path);queue.close()
   return dbpath
+ def test_prioritizes_likely_multi_attorney_practices(self):
+  with tempfile.TemporaryDirectory() as directory:
+   db=self.seed(directory)
+   queue=SqliteQueue(db)
+   queue.conn.execute("UPDATE maps_raw_candidates SET added_at='2026-01-02' WHERE firm='Example Law Group'")
+   queue.conn.execute("""INSERT INTO maps_raw_candidates(map_id,firm,phone,state,maps_url,added_at,status,city)
+      VALUES('solo|3124221869','John Doe Attorney','3124221869','IL',?,'2026-01-01','unverified_headcount','Chicago')""",(MAP,))
+   queue.conn.commit();queue.close()
+   attempted=[]
+   result=screen(db,1,search=lambda lead:(attempted.append(lead['firm']) or GOOD),health_ok=True)
+   self.assertEqual(result['attempted'],1)
+   self.assertEqual(attempted,['Example Law Group'])
+
  def test_provider_health_failure_never_qualifies_blank_maps_website(self):
   with tempfile.TemporaryDirectory() as directory:
    db=self.seed(directory)

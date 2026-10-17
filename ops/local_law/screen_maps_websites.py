@@ -39,7 +39,11 @@ def screen(db_path,limit=10,search=search_for_firm,health_ok=None,research_path=
   AND (w.map_id IS NULL OR
        (w.status='inconclusive' AND w.checked_at < ?) OR
        w.checked_at < ?)
-  '''+exclusion+''' ORDER BY m.added_at LIMIT ?''',(inconclusive_cutoff,cutoff,limit)).fetchall()
+  '''+exclusion+''' ORDER BY
+  CASE WHEN lower(m.firm) LIKE '% llp%' OR lower(m.firm) LIKE '% partners%'
+       OR lower(m.firm) LIKE '% law group%' OR m.firm LIKE '%&%' THEN 0
+       WHEN lower(m.firm) LIKE '%law%' THEN 1 ELSE 2 END,
+  m.added_at,m.map_id LIMIT ?''',(inconclusive_cutoff,cutoff,limit)).fetchall()
  if health_ok is None:
   health_ok=audit_provider_health()['status']=='usable'
  stats={'site_provider_usable':health_ok,'attempted':0,'confirmed_no_site':0,'possible_owned_website':0,
@@ -69,7 +73,7 @@ def screen(db_path,limit=10,search=search_for_firm,health_ok=None,research_path=
    elif status=='review_website':stats['possible_owned_website']+=1
    else:stats['provider_degraded']+=1
    evidence={'status':status,'verdict':verdict,'providers':[
-       {'responded':bool(p.get('responded')),'urls':p.get('urls',[])[:10]}
+       {'provider':p.get('provider','unknown'),'responded':bool(p.get('responded')),'urls':p.get('urls',[])[:10]}
        for p in sources[:2]]}
    db.conn.execute('''INSERT INTO maps_website_checks VALUES(?,?,?,?)
      ON CONFLICT(map_id) DO UPDATE SET checked_at=excluded.checked_at,
