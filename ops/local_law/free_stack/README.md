@@ -7,7 +7,7 @@ The five owned GitHub forks are registered in `ops/local_law/free_stack.py` and 
 | User-owned fork | Adapter and responsibility | Production eligibility impact |
 |---|---|---|
 | [zoeyzb/google-maps-scraper](https://github.com/zoeyzb/google-maps-scraper) | Existing `start_local_maps.sh` → `local_maps_controller.py` → `ingest_local_maps.py` → research SQLite | Discovery ONLY; empty Maps website ≠ no owned site. Existing running container uses compatible upstream image unless replaced explicitly. |
-| [zoeyzb/searxng](https://github.com/zoeyzb/searxng) | `law_local/free_search.py` queries `engines=google` and `engines=bing` separately over local JSON API | Opt-in only when the named known-owned-site control passes **both** channels. SearXNG inherits upstream CAPTCHAs/HTTP 403 and cannot automatically fix blocking. Default container runs official compatible image; fork is checked out for source changes/custom build. |
+| [zoeyzb/searxng](https://github.com/zoeyzb/searxng) | `law_local/free_search.py` queries `engines=google cse` and `engines=yahoo` separately over local JSON API | Opt-in only when the named known-owned-site control passes **both** channels. SearXNG inherits upstream CAPTCHAs/HTTP 403 and cannot automatically fix blocking. Default container runs official compatible image; fork is checked out for source changes/custom build. |
 | [zoeyzb/yacy_search_server](https://github.com/zoeyzb/yacy_search_server) | `law_local/free_search.py` queries YaCy P2P JSON API | Positive owned-site hints ONLY; missing YaCy indexed results cannot prove website absence. Heavy and opt-in. |
 | [zoeyzb/cdx_toolkit](https://github.com/zoeyzb/cdx_toolkit) | `free_stack.py cdx-hints` via isolated optional Python venv | Historical URLs ONLY; existing `commoncrawl_profiles.py` continues to discover dated public directory pages. |
 | [zoeyzb/stormcrawler](https://github.com/zoeyzb/stormcrawler) | Registered optional offline crawler source checkout | **NOT STARTED.** Requires Java 25+, Maven, Apache Storm and more resources; it is not a search provider/negative-site verifier. |
@@ -82,3 +82,24 @@ This source checkout is registered for offline crawling against explicit law-dir
 ## Verification and rollback
 
 Run `python3 -m unittest discover -s law_local -q` and `python3 -m unittest discover -s ops/local_law -q`. Site-provider preflight uses a known-owned-site positive control. Inspect detailed diagnostics rather than treating an HTTP 200 with zero relevant results as search success. To revert the new search adapters, unset `OPENLEADS_SEARCH_MODE`; no schema migration or calling-sheet change is involved. To stop SearXNG: `docker stop openleads-searxng`.
+
+### Provider findings (October 17, 2026)
+
+Original `google`/`bing` SearXNG engines did not pass the owned-domain control. A bounded alternative experiment found `google cse` and `yahoo` both returned the official AXS Law Group website with direct per-engine attribution; `qwant` returned access denied, `brave` was rate-limited, and `mojeek` engine selector unexpectedly fell back to other SearXNG engines. The actual adapters now use `google cse` and `yahoo`. A search-result HTTP 200 without an attributable firm-matching URL is **not** marked as a successful negative search. Always rerun the known-positive preflight before using these sources; it does not prove that any specific firm lacks an owned website.
+
+### Resumable free search research (validated October 17, 2026)
+
+The self-hosted engine pair now defaults to **Google CSE + Yahoo** inside the locally running SearXNG, rather than Google HTML + Bing HTML. Both returned the actual known owned domains for AXS Law Group (`axslawgroup.com`), Baker McKenzie (`bakermckenzie.com`), and Olsen & White (`thelawteam.net`) in bounded live tests on this Mac. These are three positive controls, **not** validation that an indexed-domain absence proves there is no website. Do not enable unbounded retries or rate-limit circumvention.
+
+```sh
+# The pair must pass the AXS positive control before making candidate requests.
+/opt/homebrew/bin/python3.11 -m ops.local_law.free_stack probe
+# Run at most 12 unique Maps research identities per batch.
+/opt/homebrew/bin/python3.11 -m ops.local_law.selfhosted_site_pilot --max 4
+# Offline only: refine directory-domain classifications from saved evidence.
+/opt/homebrew/bin/python3.11 -m ops.local_law.selfhosted_site_pilot --reclassify
+```
+
+The research pilot reads only `maps_raw_candidates` from `~/lead-workspace/law-leads.sqlite3`. It prioritizes practices whose names indicate a law firm, skips already qualified/shared calling phones and recently searched records, and records search sources, provider status, URLs, timestamp and verdict in `local_selfhosted_site_checks` in the private `~/lead-workspace/research_catalog.sqlite3`. It **never writes to the verified calling table, exports or Google Sheet**. Incomplete providers produce inconclusive records; possible owned domains—including dedicated WordPress-hosted firm pages—are not cleared. An offline reclassification stores its original/updated decisions in `local_selfhosted_reclass_history` and keeps the original search timestamp.
+
+The initial 13-identity live pilot returned 13 complete pairs, of which 3 were reclassified to `screened_no_site` after precise third-party directory-domain recognition. Ten still need domain/identity review, and **zero** met the complete calling eligibility contract. These numbers are observations for this small batch, not a nationwide qualification rate. A recovered third-party listing is not itself an owned website. The Mac campaign's existing hourly verifier and calling queue are deliberately **not** switched to the new pair from this pilot: provider longevity and false-negative rates still need direct validation on a separate review set, alongside the required source-verified active private practice, matching phone, 2–10 attorneys, and usable published email.

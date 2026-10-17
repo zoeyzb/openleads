@@ -21,6 +21,35 @@ LEAD = {
     "source_url": "https://www.lawyers.com/chicago/illinois/keystone-parker-law-group/"
 }
 
+class PublicDirectoryRecognitionTests(unittest.TestCase):
+    def test_new_public_directory_domains_never_imply_owned_site(self):
+        rows=[{'responded':True,'urls':['https://www.allbiz.com/business/example-law']},
+              {'responded':True,'urls':['https://www.lawyerdb.org/lawfirm/example']}]
+        self.assertEqual(classify_search_results(rows)['status'],'screened_no_site')
+
+class ThirdPartySiteResearchTests(unittest.TestCase):
+    def test_public_legal_and_business_indexes_are_not_firm_owned_websites(self):
+        hosts=('birdeye.com','bizapedia.com','findglocal.com','allusinjurylawyers.com',
+               'reliaguide.com','attorneyhelp.org','localsolution.com','law-db.mc.edu',
+               'infoattorneys.com','experience.com','nextdoor.com','issuu.com',
+               'bnimidsouth.com','attorneyslisted.com','globallawlists.org',
+               'yobi.com','us-info.com','evvbar.org','lawyerland.com',
+               'gadsdenmessenger.com','gadsdenthrive.com')
+        for hostname in hosts:
+            with self.subTest(hostname=hostname):
+                result=classify_search_results([
+                    {'responded':True,'urls':['https://'+hostname+'/business/example-law']},
+                    {'responded':True,'urls':['https://www.lawyers.com/firm/example']}])
+                self.assertEqual(result['status'],'screened_no_site')
+
+    def test_dedicated_hosted_and_likely_firm_domains_still_need_review(self):
+        for url in ('https://thelawteam.net/',
+                    'https://elderlawsanangelo.wordpress.com/about/'):
+            with self.subTest(url=url):
+                result=classify_search_results([
+                    {'responded':True,'urls':[url]}, {'responded':True,'urls':[]}])
+                self.assertEqual(result['status'],'review_website')
+
 class EvidenceRetentionTests(unittest.TestCase):
     def test_inactive_hold_survives_automatic_retry(self):
         import json

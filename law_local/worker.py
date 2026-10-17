@@ -34,7 +34,19 @@ DIRECTORY_DOMAINS = (
     "facebook.com", "linkedin.com", "instagram.com", "youtube.com",
     "yelp.com", "google.com", "bing.com", "duckduckgo.com",
     "mapquest.com", "yellowpages.com", "chamberofcommerce.com",
-    "bbb.org", "nolo.com", "legalmatch.com", "law.com"
+    "bbb.org", "nolo.com", "legalmatch.com", "law.com",
+    # Public third-party firm listings, not owned sites of the listed client.
+    "allbiz.com", "lawyerdb.org", "botw.org", "catalog.lawyer",
+    "cybo.com", "look4lawyer.com", "padisciplinaryboard.org",
+    "blaircountybar.org", "trellis.law", "wheree.com",
+    "opengovco.com", "legalreach.com", "repsight.com", "maptons.com",
+    "birdeye.com", "bizapedia.com", "findglocal.com",
+    "allusinjurylawyers.com", "reliaguide.com", "attorneyhelp.org",
+    "localsolution.com", "law-db.mc.edu", "infoattorneys.com",
+    "experience.com", "nextdoor.com", "issuu.com", "bnimidsouth.com",
+    "attorneyslisted.com", "globallawlists.org", "yobi.com",
+    "us-info.com", "evvbar.org", "lawyerland.com",
+    "gadsdenmessenger.com", "gadsdenthrive.com",
 )
 EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[\s.()\-]*)?([2-9]\d{2})[\s.()\-]*([2-9]\d{2})[\s.\-]*(\d{4})(?!\d)")

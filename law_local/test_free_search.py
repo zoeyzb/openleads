@@ -29,6 +29,37 @@ class FreeSearchTests(unittest.TestCase):
         self.assertFalse(got['responded'])
         self.assertEqual(got['urls'],['https://firm.example/'])
         self.assertEqual(classify_search_results([{'responded':True,'urls':[]},{'responded':False,'urls':[]},got])['status'],'review_website')
+    def test_namesake_without_legal_context_is_not_website_proof(self):
+        lead={'firm':'Adams James F','city':'Altoona','state':'PA'}
+        data={'results':[{'url':'https://graves.example/cemetery/adams','engine':'yahoo',
+                          'title':'James F Adams cemetery burial records'},
+                         {'url':'https://lawyers.com/attorneys/adams','engine':'yahoo',
+                          'title':'James F Adams attorney directory'}], 'unresponsive_engines':[]}
+        out=free_search.searx_engine('Adams James','yahoo',fetch=lambda _:data,lead=lead)
+        self.assertEqual(out['urls'],['https://lawyers.com/attorneys/adams'])
+
+    def test_official_domain_with_name_but_without_law_keyword_survives(self):
+        lead={'firm':'Culmer & Davidson','city':'Miami','state':'FL'}
+        data={'results':[{'url':'https://culmerdavidson.com/','engine':'yahoo',
+                          'title':'Culmer & Davidson'}], 'unresponsive_engines':[]}
+        out=free_search.searx_engine('Culmer Davidson','yahoo',fetch=lambda _:data,lead=lead)
+        self.assertTrue(out['responded'])
+        self.assertEqual(out['urls'],['https://culmerdavidson.com/'])
+
+    def test_direct_firm_domain_survives_generic_page_title(self):
+        lead={'firm':'Culmer & Davidson','city':'Miami','state':'FL'}
+        data={'results':[{'url':'https://culmerdavidson.com/','engine':'yahoo',
+                          'title':'Welcome','content':''}], 'unresponsive_engines':[]}
+        out=free_search.searx_engine('Culmer Davidson','yahoo',fetch=lambda _:data,lead=lead)
+        self.assertEqual(out['urls'],['https://culmerdavidson.com/'])
+
+    def test_www_firm_domain_is_not_lost_when_title_is_generic(self):
+        lead={'firm':'Culmer & Davidson','city':'Miami','state':'FL'}
+        data={'results':[{'url':'https://www.culmerdavidson.com/','engine':'yahoo',
+                          'title':'Welcome','content':''}], 'unresponsive_engines':[]}
+        out=free_search.searx_engine('Culmer Davidson','yahoo',fetch=lambda _:data,lead=lead)
+        self.assertEqual(out['urls'],['https://www.culmerdavidson.com/'])
+
     def test_yacy_unrelated_hits_do_not_hold_as_possible_firm_site(self):
         lead={'firm':'AXS Law Group','city':'Miami','state':'FL'}
         payload={'channels':[{'items':[{'link':'https://unrelated.example/','title':'Miami nightlife'},
@@ -48,6 +79,23 @@ class FreeSearchTests(unittest.TestCase):
         got=free_search.yacy_search('firm',fetch=lambda _: {'channels':[{'items':[]}]})
         self.assertFalse(got['responded'])
         self.assertEqual(classify_search_results([{'responded':True,'urls':[]},got])['status'],'inconclusive')
+    def test_default_local_pair_uses_independent_working_indexes(self):
+        lead={'firm':'AXS Law Group','city':'Miami','state':'FL'}
+        with patch.dict('os.environ', {'OPENLEADS_YACY_ENABLED':'0'}), patch('law_local.free_search.searx_engine', side_effect=lambda query,engine,lead=None: {'provider':'searxng:'+engine,'responded':True,'urls':[]} ) as engine:
+            sources=free_search.search_firm(lead)
+            self.assertEqual([x['provider'] for x in sources], ['searxng:google cse','searxng:yahoo'])
+            self.assertEqual(engine.call_count,2)
+
+    def test_absent_attributed_search_hits_are_not_a_completed_negative(self):
+        response={'results':[{'url':'https://unrelated.example/','engine':'bing','title':'Wrong search engine'}], 'unresponsive_engines':[]}
+        got=free_search.searx_engine('firm','yahoo',fetch=lambda _:response)
+        self.assertFalse(got['responded'])
+
+    def test_search_engine_error_fails_closed(self):
+        response={'results':[{'url':'https://lawfirm.example/','engine':'yahoo','title':'Law Firm'}], 'unresponsive_engines':[['yahoo','HTTP 429']]}
+        got=free_search.searx_engine('law firm','yahoo',fetch=lambda _:response)
+        self.assertFalse(got['responded'])
+
     def test_opt_in_source_switch(self):
         lead={'firm':'Example Law','city':'Miami','state':'FL'}
         with patch.dict('os.environ', {'OPENLEADS_SEARCH_MODE':'local_forks'}), patch('law_local.free_search.search_firm',return_value=[{'provider':'example'}]) as checker:

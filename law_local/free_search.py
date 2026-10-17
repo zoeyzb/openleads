@@ -1,6 +1,6 @@
 """Opt-in localhost search adapters. Third-party results are evidence, not proof of no website.
 
-SearXNG issues *separate* Google and Bing engine requests; neither the wrapper
+SearXNG issues *separate* Google CSE and Yahoo engine requests; neither the wrapper
 nor a responsive HTTP status alone establishes an independent negative search.
 YaCy uses its own P2P index for positive hints only: low coverage never qualifies.
 """
@@ -62,15 +62,30 @@ def _urls(items, field, lead=None):
             context = ' '.join(str(item.get(key) or '') for key in ('title', 'content', 'description'))
             context += ' ' + re.sub(r'[^a-z0-9]+', ' ', (parsed.hostname or '').lower())
             words = set(re.findall(r'[a-z0-9]+', context.lower()))
-            if not all(token in words for token in distinctive):
+            # A homepage may title itself just "Welcome" but use the
+            # practice's exact distinctive name as its hostname. Keep that
+            # positive candidate even without firm tokens in snippets.
+            host_label=(parsed.hostname or '').lower().removeprefix('www.').split('.')[0]
+            host_fold=re.sub(r'[^a-z0-9]', '', host_label.lower())
+            direct_firm_domain=bool(len(distinctive)>=2 and
+                                    all(token in host_fold for token in distinctive))
+            if not direct_firm_domain and not all(token in words for token in distinctive):
+                continue
+            # Namesake obituaries and non-law businesses should not be treated
+            # as potentially attributable law practice websites.
+            legal_terms={'law','legal','lawyer','lawyers','attorney','attorneys',
+                         'attorneyatlaw','esq','counsel','bar','litigation','advocacy'}
+            context_tokens=words | set(re.findall(r'[a-z0-9]+', (parsed.path or '').lower()))
+            if (not direct_firm_domain and not (legal_terms & context_tokens)
+                    and not ('law' in host_fold or 'attorney' in host_fold)):
                 continue
         result.append(link)
     return list(dict.fromkeys(result))[:15]
 
 
 def searx_engine(query, engine, origin=None, fetch=None, lead=None):
-    if engine not in ("google", "bing"):
-        raise ValueError("only separate named search engine requests are supported")
+    if engine not in ("google", "bing", "google cse", "yahoo"):
+        raise ValueError("unsupported named independent search engine")
     output = {"provider": "searxng:" + engine, "responded": False, "urls": [], "reason": "unavailable"}
     try:
         url = local_origin(origin or os.environ.get("OPENLEADS_SEARXNG_URL", "http://127.0.0.1:18888"), 18888)
@@ -91,7 +106,10 @@ def searx_engine(query, engine, origin=None, fetch=None, lead=None):
             if engine in names:
                 entries.append(hit)
         output["urls"] = _urls(entries, "url", lead)
-        output["responded"] = True
+        # A local HTTP 200 with no attributable firm-matching hits is not
+        # evidence of a completed negative website search. This matters when
+        # SearXNG silently falls back to other engines or a parser breaks.
+        output["responded"] = bool(output["urls"])
         output["reason"] = "results" if output["urls"] else "empty_or_unattributed"
     except (ValueError, OSError, TimeoutError, TypeError, json.JSONDecodeError) as exc:
         output["reason"] = type(exc).__name__
@@ -116,7 +134,10 @@ def yacy_search(query, origin=None, fetch=None, lead=None):
 
 def search_firm(lead):
     query = '"' + str(lead.get("firm", "")).replace('"', '') + '" law firm ' + str(lead.get("city", "")) + ' ' + str(lead.get("state", ""))
-    result = [searx_engine(query, "google", lead=lead), searx_engine(query, "bing", lead=lead)]
+    # These engines passed the source-attributed AXS Law Group control from
+    # this Mac on 2026-10-17; upstream reliability is always re-probed.
+    result = [searx_engine(query, "google cse", lead=lead),
+              searx_engine(query, "yahoo", lead=lead)]
     # YaCy is a resource-intensive optional positive-only evidence channel.
     if os.environ.get("OPENLEADS_YACY_ENABLED") == "1":
         result.append(yacy_search(query, lead=lead))
