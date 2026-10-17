@@ -103,3 +103,15 @@ The self-hosted engine pair now defaults to **Google CSE + Yahoo** inside the lo
 The research pilot reads only `maps_raw_candidates` from `~/lead-workspace/law-leads.sqlite3`. It prioritizes practices whose names indicate a law firm, skips already qualified/shared calling phones and recently searched records, and records search sources, provider status, URLs, timestamp and verdict in `local_selfhosted_site_checks` in the private `~/lead-workspace/research_catalog.sqlite3`. It **never writes to the verified calling table, exports or Google Sheet**. Incomplete providers produce inconclusive records; possible owned domains—including dedicated WordPress-hosted firm pages—are not cleared. An offline reclassification stores its original/updated decisions in `local_selfhosted_reclass_history` and keeps the original search timestamp.
 
 The initial 13-identity live pilot returned 13 complete pairs, of which 3 were reclassified to `screened_no_site` after precise third-party directory-domain recognition. Ten still need domain/identity review, and **zero** met the complete calling eligibility contract. These numbers are observations for this small batch, not a nationwide qualification rate. A recovered third-party listing is not itself an owned website. The Mac campaign's existing hourly verifier and calling queue are deliberately **not** switched to the new pair from this pilot: provider longevity and false-negative rates still need direct validation on a separate review set, alongside the required source-verified active private practice, matching phone, 2–10 attorneys, and usable published email.
+
+### Stage publicly published attorney-member emails without inflating qualified leads
+
+Some bar and legal-association member profiles contain a member's own business email, firm and matching phone, while also including the **association's** email in the footer. The source-scoped single-member collector avoids that contamination:
+
+```sh
+/opt/homebrew/bin/python3.11 -m ops.local_law.stage_member_profile \
+  --map-id 'sauk valley law group llc|8155356769' \
+  --source-url 'https://www.irela.org/Sys/PublicProfile/63300247'
+```
+
+Only a genuine public `https://www.irela.org/Sys/PublicProfile/<numeric-id>` URL is accepted; the collector rejects unrelated hosts **before** fetching. It matches the member-profile firm's business phone and one scoped email against an existing Maps identity and tests the email domain's MX records. An idempotent source URL and masked evidence note are stored in `research_catalog.sqlite3:external_evidence`, **not** in `candidates` or the calling export. A second run returns `email_staged=0` because it is already stored. Sauk Valley has conflicting firmwide lawyer counts, so it remains research-only pending 2–10 verification and complete owned-site review.

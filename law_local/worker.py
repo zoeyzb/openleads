@@ -52,7 +52,7 @@ DIRECTORY_DOMAINS = (
     "plea.net", "findlemonlaw.com", "beforeattorney.com",
     "reachattorneys.com", "bestprosintown.com", "wanderboat.ai",
     "111things.com", "sullivanauctioneers.com", "irela.org",
-    "uscompanies.net", "waze.com",
+    "uscompanies.net", "waze.com", "irela.org",
 )
 EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[\s.()\-]*)?([2-9]\d{2})[\s.()\-]*([2-9]\d{2})[\s.\-]*(\d{4})(?!\d)")

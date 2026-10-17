@@ -44,6 +44,17 @@ class StrictConversionTests(unittest.TestCase):
  def call(self,review=None,**kwargs):
   return qualify(self.db,review or REVIEW,fetch=self.source,search=kwargs.pop('search',self.search),
                  health=kwargs.pop('health',self.health),mx=kwargs.pop('mx',lambda _:True))
+ def test_single_member_association_profile_scopes_published_contact(self):
+  profile='<div class="memberDirectoryDetailsContainer"><div class="memberDirectoryDetailsHeaderContainer"><h2>Rebecca Rodriguez</h2><h3>Sauk Valley Law Group, LLC</h3></div><h4>Member profile details</h4><div class="fieldLabel"><span>Email</span></div><div class="fieldBody"><span><a href="mailto:rodriguez@saukvalleylaw.com">rodriguez@saukvalleylaw.com</a></span></div><div class="fieldLabel"><span>Phone</span></div><div class="fieldBody"><span>815-535-6769</span></div></div></div><div class="gadgetContentEditableArea">Association footer <a href="mailto:info@irela.org">info@irela.org</a></div>'
+  self.assertTrue(exact_contact_block(profile,'Sauk Valley Law Group, LLC','8155356769',
+                        'rodriguez@saukvalleylaw.com',source_url='https://www.irela.org/Sys/PublicProfile/63300247'))
+  self.assertFalse(exact_contact_block(profile,'Sauk Valley Law Group, LLC','8155356769',
+                        'info@irela.org',source_url='https://www.irela.org/Sys/PublicProfile/63300247'))
+  self.assertFalse(exact_contact_block(profile,'Different Firm','8155356769',
+                        'rodriguez@saukvalleylaw.com',source_url='https://www.irela.org/Sys/PublicProfile/63300247'))
+  self.assertFalse(exact_contact_block(profile,'Sauk Valley Law Group, LLC','8155356769',
+                        'rodriguez@saukvalleylaw.com',source_url='https://www.irela.org/Directory'))
+
  def test_real_scoped_directory_block_does_not_select_other_email(self):
   self.assertTrue(exact_contact_block(DIRECTORY,'Liguori & Morris','3026789900','gmorris@lmylaw.com'))
   self.assertFalse(exact_contact_block(DIRECTORY,'Liguori & Morris','3026789900','other@firm.example'))

@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from law_local.free_search import search_firm
 from law_local.site_provider_health import audit_provider_health
 from law_local.worker import (SqliteQueue, classify_search_results, domain_has_mail,
-                              EMAIL_RE, fetch_public, _third_party,
+                              EMAIL_RE, PHONE_RE, fetch_public, _third_party, reader,
                               normalize_phone, norm, utc_now)
 
 
@@ -26,14 +26,42 @@ def canonical(name):
     return ' '.join(words)
 
 
-def exact_contact_block(html,firm,phone,email):
+def exact_contact_block(html,firm,phone,email,source_url=''):
     """Extract a specific public directory card, never an email in its footer."""
+    parsed=urlparse(source_url)
+    if ((parsed.hostname or '').lower().removeprefix('www.')=='irela.org' and
+        re.fullmatch(r'/Sys/PublicProfile/[0-9]+',parsed.path,re.I)):
+        # Wild Apricot member profiles have one member's contact data under
+        # memberDirectoryDetailsContainer; a separate site footer contains
+        # the ASSOCIATION mailbox. Never include the footer in contact proof.
+        start=html.find('memberDirectoryDetailsContainer')
+        if start < 0 or html.count('memberDirectoryDetailsHeaderContainer')!=1:
+            return ''
+        tail=html[start:start+50000]
+        end=re.search(r'class=["\'][^"\']*gadgetContentEditableArea',tail,re.I)
+        if not end:
+            return ''
+        block=tail[:end.start()]
+        heading=re.search(r'<h3\b[^>]*>(.*?)</h3>',block,re.I|re.S)
+        if not heading or norm(reader(heading.group(1)).parts[0] if reader(heading.group(1)).parts else '')!=norm(firm):
+            return ''
+        mailbox={m.lower() for m in EMAIL_RE.findall(block)}
+        if mailbox!={email.lower()} or not EMAIL_RE.fullmatch(email):
+            return ''
+        if (not re.search(r'fieldLabel[^>]*>\s*<span[^>]*>Email</span>',block,re.I|re.S)
+                or not re.search(r'fieldLabel[^>]*>\s*<span[^>]*>Phone</span>',block,re.I|re.S)):
+            return ''
+        text=' '.join(reader(block).parts)
+        matched={normalize_phone(m.group()) for m in PHONE_RE.finditer(text)}
+        return block if normalize_phone(phone) in matched else ''
     parts=re.split(r'(?is)<div\b[^>]*class=["\']row attorney["\'][^>]*>',html)
     if len(parts)>1:
         chunks=[p.split('</div></div>',1)[0] for p in parts[1:]]
     else:
-        # Only isolated contact pages can be treated as one business profile.
-        chunks=[html] if len(html)<=35000 else []
+        # Never reinterpret an arbitrary short multi-profile page as one
+        # named firm's isolated contact record. Specific single-member
+        # templates are handled above with scoped field verification.
+        chunks=[]
     for chunk in chunks:
         # Avoid arbitrary pages naming the firm AND phone but advertising
         # somebody else's email in another section of the same document.
@@ -113,7 +141,8 @@ def qualify(db_path,review,fetch=fetch_public,search=search_firm,
             count_html=fetch(sources['headcount'],timeout=12)
         except Exception as exc:
             return {**report,'reason':'public_source_unavailable','error':type(exc).__name__}
-        if not exact_contact_block(identity_html,lead['firm'],phone,email) or not exact_contact_block(email_html,lead['firm'],phone,email):
+        if (not exact_contact_block(identity_html,lead['firm'],phone,email,sources['identity']) or
+                not exact_contact_block(email_html,lead['firm'],phone,email,sources['email'])):
             return {**report,'reason':'no_scoped_published_phone_and_email'}
         if not named_practitioners_proof(count_html,lead['firm'],review['named_attorneys']):
             return {**report,'reason':'headcount_source_not_matched'}
