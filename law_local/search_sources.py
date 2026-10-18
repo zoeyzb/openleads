@@ -7,6 +7,7 @@ are skipped, not proxied/bypassed.
 """
 from __future__ import annotations
 import re
+import os
 from urllib.parse import urlencode, urlparse
 from xml.etree import ElementTree as ET
 from law_local.worker import fetch_public
@@ -55,8 +56,8 @@ def source_queries(firm,city="",state=""):
     # Use two independent source families; Florida Bar lists firm size,
     # published office phone, and often a professional contact email.
     q=[
-        f'"{clean}" site:lawyer.com/firm',
-        f'"{clean}" site:lawyer.com/firms',
+        f'{clean} {where} site:lawyer.com/firm',
+        f'{clean} {where} site:lawyer.com/firms',
     ]
     if state=="FL":
         q.insert(0,f'"{clean}" {where} site:floridabar.org/directories/find-mbr/profile')
@@ -64,6 +65,21 @@ def source_queries(firm,city="",state=""):
 
 def real_profile_urls(firm,city="",state="",fetch_fn=None,seconds_per_request=8):
     fetch_fn=fetch_fn or fetch_public
+    if os.environ.get("OPENLEADS_SEARCH_MODE")=="local_forks":
+        from law_local.free_search import searx_engine,SITE_ENGINES
+        found=[];responded=0
+        queries=source_queries(firm,city,state)
+        # Actual profile URLs only. The two responses are discovery, never
+        # evidence of firm size or website absence.
+        for query in queries:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                responses=list(pool.map(lambda engine:searx_engine(query,engine),SITE_ENGINES))
+            for response in responses:
+                responded+=int(response["responded"])
+                found.extend(u for u in response["urls"] if permitted_source(u))
+        return {"urls":list(dict.fromkeys(found))[:15],"responded":responded,
+                "queries":len(queries),"failures":[]}
     found=[]
     responded=0
     errors=[]

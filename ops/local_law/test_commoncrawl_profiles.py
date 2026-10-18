@@ -62,27 +62,27 @@ class CommonCrawlProfileTests(unittest.TestCase):
   self.assertEqual((lead['firm_size_low'],lead['firm_size_high']),(4,4))
  def test_solo_is_research_candidate_not_qualified(self):
   page='<h2>Miller & Stone LLP</h2><h2>Miller & Stone LLP</h2><div>Firm Size: 1</div><div>Call 312-422-1836</div>'
-  self.assertEqual(m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)[1],'candidate_needs_site_audit')
+  self.assertEqual(m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)[1],'outside_firm_size')
  def test_large_firm_is_research_candidate(self):
   page='<h2>Miller & Stone LLP</h2><h2>Miller & Stone LLP</h2>Firm Size: 2-25 Attorneys Call 312-422-1836'
-  self.assertEqual(m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)[1],'candidate_needs_site_audit')
+  self.assertEqual(m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)[1],'outside_firm_size')
 if __name__=='__main__':unittest.main()
 
 class NoSizeTests(unittest.TestCase):
  def test_missing_size_does_not_block_source_bound_phone(self):
   page='<h2>Miller & Stone LLP</h2><h2>Miller & Stone LLP</h2><div>Call 312-422-1836</div>'
   lead,status=m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)
-  self.assertEqual(status,'candidate_needs_site_audit')
+  self.assertEqual(status,'no_explicit_size')
   self.assertIsNone(lead['firm_size_low'])
 
 class PolicyRecoveryTests(unittest.TestCase):
- def test_recovers_old_size_only_reviews_without_erasing_owned_sites(self):
+ def test_does_not_reopen_size_holds_without_new_evidence(self):
   with tempfile.TemporaryDirectory() as d:
    c=sqlite3.connect(Path(d)/'catalog.db');m.ensure(c)
    for name,status in [('solo','outside_firm_size'),('unknown','no_explicit_size'),('owner','has_owned_website')]:
     c.execute('insert into cc_law_profile_urls(url,status) values(?,?)',(name,status))
    c.commit();m.ensure(c);m.ensure(c)
-   self.assertEqual(c.execute("select count(*) from cc_law_profile_urls where status='needs_size_parser_recheck'").fetchone()[0],2)
-   self.assertEqual(c.execute('select count(*) from cc_size_policy_rechecks').fetchone()[0],2)
+   self.assertEqual(c.execute("select count(*) from cc_law_profile_urls where status='needs_size_parser_recheck'").fetchone()[0],0)
+   self.assertEqual(c.execute("select count(*) from cc_law_profile_urls where status in ('outside_firm_size','no_explicit_size')").fetchone()[0],2)
    self.assertEqual(c.execute("select status from cc_law_profile_urls where url='owner'").fetchone()[0],'has_owned_website')
    c.close()

@@ -8,6 +8,8 @@ permits the existing strict two-provider evidence audit to run.
 from __future__ import annotations
 import argparse
 import json
+import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 from law_local import worker
@@ -16,9 +18,26 @@ CONTROL={"firm":"AXS Law Group","phone":"3057030274",
          "city":"Miami","state":"FL"}
 KNOWN_DOMAIN="axslawgroup.com"
 
+def bounded_sources(seconds=20):
+    """Hard wall clock limit, including HTTP body reads; kill/reap on timeout.
+
+    An independent Python entrypoint also works from interactive/stdin callers,
+    unlike multiprocessing spawn which tries to reload a nonexistent <stdin>.
+    """
+    code="import json; from law_local.worker import search_for_firm; from law_local.site_provider_health import CONTROL; print(json.dumps(search_for_firm(CONTROL)))"
+    try:
+        result=subprocess.run([sys.executable,"-c",code],
+            cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True,
+            timeout=max(0.001,float(seconds)),check=False)
+        return json.loads(result.stdout) if result.returncode==0 else []
+    except subprocess.TimeoutExpired:
+        return [{"provider":"preflight","responded":False,"urls":[],
+                 "reason":"wall_clock_timeout"}]
+    except (ValueError,OSError):
+        return []
+
 def audit_provider_health(lookups=None):
-    lookups=lookups or worker.search_for_firm
-    sources=lookups(CONTROL)
+    sources=lookups(CONTROL) if lookups is not None else bounded_sources()
     both_ready=len(sources)>=2 and all(src.get("responded") is True for src in sources[:2])
     details=[]
     for source in sources[:2]:

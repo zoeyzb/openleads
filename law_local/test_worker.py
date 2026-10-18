@@ -88,7 +88,7 @@ class EvidenceRetentionTests(unittest.TestCase):
         for status in ("review_nonlaw_employer","owned_site_or_untrusted_source"):
             with self.subTest(status=status),tempfile.TemporaryDirectory() as d:
                 q=SqliteQueue(Path(d)/"q.db");q.add(LEAD)
-                q.record(LEAD,{"status":"call_qualified_no_email","phone":LEAD["phone"],"checked_at":utc_now(),"site_status":"screened_no_site","qualification_scope":"law_no_owned_website_any_size","site_evidence":{"providers":[{"responded":True},{"responded":True}]}})
+                q.record(LEAD,{"status":"call_qualified_no_email","phone":LEAD["phone"],"checked_at":utc_now(),"site_status":"screened_no_site","qualification_scope":"law_no_owned_website_2_10_phone","attorneys":4,"headcount_source":LEAD["source_url"],"site_evidence":{"providers":[{"responded":True},{"responded":True}]}})
                 self.assertEqual(q.counts()["calling_qualified"],1)
                 q.record(LEAD,{"status":status})
                 self.assertEqual(q.counts()["calling_qualified"],0)
@@ -99,7 +99,7 @@ class EvidenceRetentionTests(unittest.TestCase):
         from law_local.worker import utc_now
         with tempfile.TemporaryDirectory() as d:
             q=SqliteQueue(Path(d)/"q.db");q.add(LEAD)
-            proof={"status":"call_qualified_no_email","firm":LEAD["firm"],"phone":LEAD["phone"],"checked_at":utc_now(),"site_status":"screened_no_site","qualification_scope":"law_no_owned_website_any_size","site_evidence":{"providers":[{"responded":True},{"responded":True}]}}
+            proof={"status":"call_qualified_no_email","firm":LEAD["firm"],"phone":LEAD["phone"],"checked_at":utc_now(),"site_status":"screened_no_site","qualification_scope":"law_no_owned_website_2_10_phone","attorneys":4,"headcount_source":LEAD["source_url"],"site_evidence":{"providers":[{"responded":True},{"responded":True}]}}
             q.record(LEAD,proof)
             q.record(LEAD,{"status":"inconclusive","reason":"search_provider_unavailable"})
             row=q.conn.execute("SELECT status,result_json FROM candidates").fetchone()
@@ -266,7 +266,7 @@ class QualityTests(unittest.TestCase):
         page="<h1>Abrahamson & Uiterwyk Injury Lawyers</h1><p>727-725-9411</p><p>Attorneys 5 active</p>"
         result=evaluate_candidate(lead,page,[{"responded":True,"urls":[]},
                               {"responded":True,"urls":[]}],lambda domain:True)
-        self.assertEqual(result["status"],"call_qualified_no_email")
+        self.assertEqual(result["status"],"review_firmwide_headcount")
         self.assertEqual(result["attorneys"],0)
 
     def test_owned_site_hint_still_trumps_fl_size_scope(self):
@@ -279,14 +279,14 @@ class QualityTests(unittest.TestCase):
         result=evaluate_candidate(lead,page,[],lambda domain:True)
         self.assertEqual(result["status"],"review_website")
 
-    def test_size_only_reviews_are_reopened_without_becoming_qualified(self):
+    def test_size_holds_are_not_reopened_without_new_evidence(self):
         with tempfile.TemporaryDirectory() as folder:
             filename=Path(folder)/"law.sqlite3"
             db=SqliteQueue(filename);db.add(LEAD)
             db.record(LEAD,{"status":"review_headcount_scope","reason":"old policy"})
             db.close()
             db=SqliteQueue(filename)
-            self.assertEqual(db.counts().get("pending"),1)
+            self.assertEqual(db.counts().get("review_headcount_scope"),1)
             self.assertEqual(db.counts()["calling_qualified"],0)
             db.close()
 
@@ -301,7 +301,7 @@ class QualityTests(unittest.TestCase):
             db.close()
             db=SqliteQueue(path)
             self.assertEqual(len(db.pending(10)),0)
-            self.assertEqual(db.counts()["strict_eligible"],1)
+            self.assertEqual(db.counts()["stored_strict_labels"],1)
             db.close()
 
     def test_provider_outage_preserves_retry_budget_and_cools_down(self):
@@ -339,16 +339,16 @@ class QualityTests(unittest.TestCase):
             self.assertEqual(db.export("calling_qualified",export_path),1)
             db.close()
 
-    def test_unreported_firmwide_size_is_not_required(self):
+    def test_unreported_firmwide_size_is_held_for_evidence(self):
         page=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys.","")
         result=evaluate_candidate(LEAD,page,[{"responded":True,"urls":[]},
              {"responded":True,"urls":[]}],lambda domain:False)
-        self.assertEqual(result["status"],"call_qualified_no_email")
+        self.assertEqual(result["status"],"review_firmwide_headcount")
         self.assertEqual(result["attorneys"],0)
         with tempfile.TemporaryDirectory() as folder:
             db=SqliteQueue(Path(folder)/"law.sqlite3")
             db.add(LEAD);db.record(LEAD,result)
-            self.assertEqual(db.counts()["calling_qualified"],1)
+            self.assertEqual(db.counts()["calling_qualified"],0)
             db.close()
 
     def test_export_does_not_trust_status_without_verified_evidence(self):
@@ -380,7 +380,7 @@ class QualityTests(unittest.TestCase):
             db.record(LEAD,{"status":"call_qualified_no_email",
                 "phone":"3124221836","checked_at":utc_now(),
                 "site_status":"screened_no_site",
-                "qualification_scope":"law_no_owned_website_any_size",
+                "qualification_scope":"law_no_owned_website_2_10_phone","attorneys":4,"headcount_source":LEAD["source_url"],
                 "site_evidence":{"providers":[{"responded":True},{"responded":True}]}})
             # Simulate a stale evidence payload after a database status change.
             db.conn.execute("UPDATE candidates SET status='strict_eligible'")
@@ -401,7 +401,7 @@ class QualityTests(unittest.TestCase):
                 db.add(lead)
                 proof={"status":status,"phone":"3124221836","checked_at":utc_now(),
                     "site_status":"screened_no_site",
-                    "qualification_scope":"law_no_owned_website_any_size",
+                    "qualification_scope":"law_no_owned_website_2_10_phone","attorneys":4,"headcount_source":LEAD["source_url"],
                     "site_evidence":{"providers":[{"responded":True},{"responded":True}]}}
                 if status=="strict_eligible":
                     proof.update(email="office@keystoneparker.example",
@@ -492,7 +492,7 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(import_csv(db,path),1)
             with patch("law_local.worker.fetch_public",return_value=PROFILE), \
                  patch("law_local.worker.search_for_firm",return_value=[
-                     {"responded":True,"urls":[]},{"responded":True,"urls":[]}
+                     {"provider":"fixture-one","responded":True,"urls":[]},{"provider":"fixture-two","responded":True,"urls":[]}
                  ]), \
                  patch("law_local.worker.domain_has_mail",return_value=True):
                 result=run_batch(db,max_rows=1,workers=1,seconds=10)
@@ -504,7 +504,7 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(rows[0]["Headcount source"],LEAD["source_url"])
             self.assertEqual(rows[0]["Email source"],LEAD["source_url"])
             self.assertEqual(rows[0]["Website audit"],"screened_no_site")
-            self.assertEqual(db.counts()["strict_eligible"],1)
+            self.assertEqual(db.counts()["stored_strict_labels"],1)
             db.close()
 
 if __name__=="__main__":

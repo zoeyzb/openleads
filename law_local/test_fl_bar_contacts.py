@@ -83,7 +83,7 @@ class FinalGateIntegrationTests(unittest.TestCase):
     def screened_no_email():
         return {"status":"call_qualified_no_email","attorneys":2,
                 "phone":"8134221960","site_status":"screened_no_site",
-                "qualification_scope":"law_no_owned_website_any_size",
+                "qualification_scope":"law_no_owned_website_2_10_phone",
                 "headcount_source":"https://www.floridalawdirectory.com/firm/murray-shepard-law-llc",
                 "email":"","email_source":""}
 

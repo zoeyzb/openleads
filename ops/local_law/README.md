@@ -1,3 +1,11 @@
+# Current eligibility and Mac execution — 2026-10-18
+
+The current user contract supersedes older any-size/phone-first notes below. Strict qualified requires real US law practice, firmwide 2–10 source evidence, independent no-owned-site screening and source-published usable email. Keep phone-only separate. Current measurements and fixes: [repair record](REPAIR_2026-10-18.md).
+
+Install/reinstall the existing hourly job: `/opt/homebrew/bin/python3.11 -m ops.local_law.install_worker`. It executes `ops.local_law.campaign` from the canonical repository, with local SearXNG. It does not copy campaign.py. The old `~/lead-workspace/campaign.py` copy is no longer the scheduled entrypoint.
+
+Historical operational notes follow; their former qualification and copy instructions are superseded.
+
 # Mac local law lead controller — October 12, 2026
 Run from macOS, not Railway or Render. The existing law_local worker and SQLite are used without modifying core verification behavior.
 

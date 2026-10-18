@@ -239,14 +239,17 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
     if source["website_candidates"]:
         return {**evidence,"status":"review_website","website_candidates":source["website_candidates"]}
 
-    # Firm size is not an outreach criterion. Keep the identity and phone
-    # source checks and independent owned-website verification unchanged.
-    evidence["qualification_scope"]="law_no_owned_website_any_size"
+    # Both pools require source-attested firmwide size; phone-only is separate.
+    evidence["qualification_scope"]="law_no_owned_website_2_10_phone"
     if (urlparse(str(lead.get("source_url",""))).hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com":
         from law_local.florida_roster import clearly_non_law_employer
         if clearly_non_law_employer(lead.get("firm","")):
             return {**evidence,"status":"review_nonlaw_employer",
                     "reason":"Roster lists an in-house or non-law business employer"}
+    if not (2 <= int(source.get("attorneys") or 0) <= 10):
+        return {**evidence,"status":"review_firmwide_headcount",
+                "reason":"firmwide_2_10_not_source_verified"}
+    evidence["headcount_scope"]="firmwide"
     site=classify_search_results(search_results)
     evidence["site_status"]=site["status"]
     evidence["site_evidence"]={"checked_at":utc_now(),"providers":[
@@ -275,6 +278,7 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
             return {**evidence,"status":"review_firmwide_headcount",
                     "reason":"published_email_but_firmwide_2_10_unverified"}
         evidence["qualification_scope"]="law_no_owned_website_2_10_email"
+        evidence["email_mx_ok"]=True
         return {**evidence,"status":"strict_eligible"}
     return {**evidence,"status":"call_qualified_no_email"}
 
@@ -282,7 +286,7 @@ class SqliteQueue:
     def __init__(self,path):
         path=Path(path).expanduser().resolve()
         path.parent.mkdir(parents=True,exist_ok=True)
-        self.conn=sqlite3.connect(path)
+        self.conn=sqlite3.connect(path,timeout=20)
         self.conn.row_factory=sqlite3.Row
         self.conn.executescript("""
             PRAGMA journal_mode=WAL;
@@ -303,7 +307,7 @@ class SqliteQueue:
         # Only migrate obsolete statuses that were blocked by size or missing
         # email. Never demote already verified phone-qualified candidates.
         self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status='call_ready_no_email'")
-        self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status='review_headcount_scope'" )
+        # Size holds need NEW evidence, not an automatic retry on every connection.
         self.conn.commit()
     @staticmethod
     def _id(lead):
@@ -386,10 +390,19 @@ class SqliteQueue:
                 return False
             if evidence.get("status")!=status or evidence.get("site_status")!="screened_no_site":
                 return False
-            # Historical fully verified 2-10 records remain valid; new records
-            # do not need a size value or a firmwide count source.
+            # Never let an old any-size policy bypass the current user contract.
             if evidence.get("qualification_scope") not in (
-                    "law_no_owned_website_any_size", "law_no_owned_website_2_10_email"):
+                    "law_no_owned_website_2_10_phone", "law_no_owned_website_2_10_email"):
+                return False
+            count=int(evidence.get("attorneys") or 0)
+            rng=evidence.get("attorney_range")
+            if (not 2 <= count <= 10 or not evidence.get("headcount_source") or
+                (rng is not None and (not isinstance(rng,(tuple,list)) or len(rng)!=2 or
+                 not 2 <= int(rng[0]) <= int(rng[1]) <= 10))):
+                return False
+            # Legacy notes may reveal jurisdiction-only rather than firmwide proof.
+            size_note=str(evidence.get("headcount_note", ""))
+            if re.search(r"(?i)WSBA members|state.registered|jurisdiction.active|Florida.active",size_note):
                 return False
             if not normalize_phone(row["phone"]) or normalize_phone(row["phone"])!=normalize_phone(evidence.get("phone")):
                 return False
@@ -420,6 +433,7 @@ class SqliteQueue:
                     evidence.get("qualification_scope")!="law_no_owned_website_2_10_email" or
                     evidence.get("review_method")!="live_source_verified_named_team" or
                     evidence.get("firmwide_2_10_review_confirmed") is not True or
+                    evidence.get("headcount_total_attested") is not True or
                     evidence.get("private_practice_confirmed") is not True or
                     not 2<=int(evidence.get("attorneys",0))<=10 or
                     len(evidence.get("named_attorneys",[]))!=int(evidence.get("attorneys",0)) or
@@ -441,6 +455,9 @@ class SqliteQueue:
                     not evidence.get("headcount_source")):
                     return False
             providers=evidence.get("site_evidence",{}).get("providers",[])
+            named=[p.get("provider") for p in providers[:2]]
+            if len(named)==2 and all(named) and named[0]==named[1]:
+                return False
             if len(providers)<2 or not all(p.get("responded") is True for p in providers[:2]):
                 return False
             return True
@@ -457,7 +474,7 @@ class SqliteQueue:
              FROM candidates WHERE status IN ({placeholders})
              ORDER BY CASE WHEN status='strict_eligible' THEN 0 ELSE 1 END,
                       state,firm,id""",statuses)
-        seen_phones=set()
+        seen_phones=set();seen_emails=set()
         for row in rows:
             try:
                 evidence=json.loads(row["result_json"])
@@ -468,13 +485,17 @@ class SqliteQueue:
             if not self._verified_for_export(row,evidence,row["status"]):
                 continue
             phone=normalize_phone(row["phone"])
-            if phone in seen_phones:
+            email=str(evidence.get("email") or "").strip().casefold()
+            if phone in seen_phones or (email and email in seen_emails):
                 continue
             seen_phones.add(phone)
+            if email:seen_emails.add(email)
             yield row,evidence
 
     def counts(self):
         totals=dict(self.conn.execute("SELECT status,COUNT(*) FROM candidates GROUP BY status").fetchall())
+        totals["stored_strict_labels"]=totals.get("strict_eligible",0)
+        totals["strict_eligible"]=sum(1 for _ in self._verified_rows(("strict_eligible",)))
         totals["calling_qualified"]=sum(1 for _ in self._verified_rows(
             ("strict_eligible","call_qualified_no_email")))
         return totals
@@ -484,7 +505,8 @@ class SqliteQueue:
         path.parent.mkdir(parents=True,exist_ok=True)
         cols=["Firm","Phone","City","State","Attorneys","Email","Headcount source","Email source","Website audit","Checked at"]
         exported=0
-        with path.open("w",newline="",encoding="utf-8") as fd:
+        temp=path.with_name(path.name+".tmp")
+        with temp.open("w",newline="",encoding="utf-8") as fd:
             w=csv.DictWriter(fd,fieldnames=cols)
             w.writeheader()
             for row,evidence in self._verified_rows(statuses):
@@ -497,6 +519,7 @@ class SqliteQueue:
                     "Checked at":evidence.get("checked_at","")
                 })
                 exported+=1
+        os.replace(temp,path)
         return exported
     def close(self):
         self.conn.close()
@@ -506,7 +529,7 @@ def apply_verified_bar_contact_proof(db,lead,result):
     """Join published/matched Florida Bar contacts only after site clearance.
 
     This is strictly a final evidence join, NOT a shortcut around the
-    independent phone and no-owned-site checks; firm size is unrestricted.
+    independent phone, firmwide 2–10 size and no-owned-site checks.
     An attributed owned site always revokes calling/strict eligibility.
     """
     lead_id=db._id(lead)
@@ -559,7 +582,7 @@ def apply_verified_bar_contact_proof(db,lead,result):
     if (result.get("status")!="call_qualified_no_email"
             or result.get("site_status")!="screened_no_site"
             or result.get("qualification_scope") not in (
-                "law_no_owned_website_any_size", "law_no_owned_website_2_10_email")
+                "law_no_owned_website_2_10_phone", "law_no_owned_website_2_10_email")
             or normalize_phone(result.get("phone"))!=expected_phone):
         return result
     for proof in supported:
@@ -570,7 +593,8 @@ def apply_verified_bar_contact_proof(db,lead,result):
         domain=email.rsplit("@",1)[-1]
         if domain.endswith(BLOCKED_SUFFIXES) or _third_party(domain):
             continue
-        return {**result,"status":"strict_eligible","email":email,
+        return {**result,"status":"strict_eligible","email":email,"email_mx_ok":True,
+                "qualification_scope":"law_no_owned_website_2_10_email",
                 "email_source":proof["email_source"]}
     return result
 
@@ -673,7 +697,9 @@ def process_candidate(lead,site_search_usable=True):
         if not firm_identity_matches(html,lead):
             return {"status":"unverified_identity","source_url":lead["source_url"],"checked_at":utc_now()}
         source=evaluate_published_source(html,lead)
-        search=search_for_firm(lead) if site_search_usable and not source["website_candidates"] else []
+        # Do not spend two search queries on an unknown-size or solo firm.
+        size_ready=2 <= int(source.get("attorneys") or 0) <= 10
+        search=search_for_firm({**lead,"emails":source["emails"]}) if site_search_usable and size_ready and not source["website_candidates"] else []
         return evaluate_candidate(lead,html,search,mx_check=domain_has_mail)
     except Exception as exc:
         return {"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
@@ -703,6 +729,11 @@ def run_batch(db,max_rows=100,workers=4,seconds=600,site_search_usable=True):
                 except Exception as exc:
                     result={"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
                 result=apply_verified_bar_contact_proof(db,lead,result)
+                if result.get("status")=="call_qualified_no_email":
+                    from law_local.catalog_email import recover
+                    db_file=db.conn.execute("PRAGMA database_list").fetchone()[2]
+                    result=recover(lead,result,Path(db_file).parent/"research_catalog.sqlite3",
+                                   fetch_public,domain_has_mail,search_for_firm)
                 db.record(lead,result)
                 total[result["status"]]=total.get(result["status"],0)+1
                 print(json.dumps({"event":"law_local_lead_processed","firm":lead["firm"],"status":result["status"]}),flush=True)
@@ -767,6 +798,13 @@ def _discovery_result_url(url):
 
 def _search_directory_profiles(query):
     """Try public Bing RSS and DDG HTML; never treat anti-bot as no results."""
+    if os.environ.get("OPENLEADS_SEARCH_MODE")=="local_forks":
+        from law_local.free_search import searx_engine, SITE_ENGINES
+        responses=[searx_engine(query,engine) for engine in SITE_ENGINES]
+        if not any(r.get("responded") for r in responses):
+            raise ValueError("No responsive self-hosted discovery providers")
+        return list(dict.fromkeys(url for result in responses for raw in result["urls"]
+                    if (url:=_discovery_result_url(raw))))
     attempts=0
     raw_urls=[]
     for provider,url in (
@@ -822,7 +860,9 @@ def _extract_directory_profile(url,html):
             continue
         candidate={"firm":firm,"phone":phone,"city":"","state":"","source_url":url}
         if firm_identity_matches(html,candidate):
-            return candidate
+            proof=evaluate_published_source(html,candidate)
+            if 2 <= int(proof.get("attorneys") or 0) <= 10:
+                return candidate
     return None
 
 
@@ -841,7 +881,10 @@ def discover_candidates(db,states,max_queries=20,max_pages=100,seconds=480,delay
     for state,query in discovery_queries(states):
         if counts["queries"]>=max_queries or counts["pages"]>=max_pages or time.monotonic()>=deadline:
             break
-        done=db.conn.execute("SELECT 1 FROM discovery_queries WHERE query=?",(query,)).fetchone()
+        # New provider method gets one fresh pass; legacy zero-result checkpoints
+        # must not permanently suppress a repaired adapter.
+        key=("local-forks-v1:" if os.environ.get("OPENLEADS_SEARCH_MODE")=="local_forks" else "")+query
+        done=db.conn.execute("SELECT 1 FROM discovery_queries WHERE query=?",(key,)).fetchone()
         if done:
             continue
         try:
@@ -872,7 +915,7 @@ def discover_candidates(db,states,max_queries=20,max_pages=100,seconds=480,delay
         # Only checkpoint a fully-scanned query; interrupted queries retry.
         if counts["pages"]<max_pages and time.monotonic()<deadline:
             db.conn.execute("INSERT OR REPLACE INTO discovery_queries VALUES (?,?,?,?)",
-                            (query,utc_now(),len(urls),added))
+                            (key,utc_now(),len(urls),added))
             db.conn.commit()
         print(json.dumps({"event":"discovery_query","state":state,"query":query,
                           "found_urls":len(urls),"added":added}),flush=True)

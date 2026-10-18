@@ -2,7 +2,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from ops.local_law.promote_source_verified import qualify,exact_contact_block,canonical
+from ops.local_law.promote_source_verified import qualify,exact_contact_block,canonical,named_practitioners_proof
 from law_local.worker import SqliteQueue
 
 DIRECTORY = '''<html><div class="row attorney"><div><h3>of Other Law Group</h3></div>
@@ -11,7 +11,7 @@ DIRECTORY = '''<html><div class="row attorney"><div><h3>of Other Law Group</h3><
 <p>46 The Green, Dover DE</p></div><div>Phone: 302-678-9900
 Email: <a href="mailto:gmorris@lmylaw.com">gmorris@lmylaw.com</a></div></div></html>'''
 ARTICLE = '''<h1>Council appoints new solicitor</h1><p>Gregory Morris of Liguori & Morris will serve.</p>
-<p>The firm, Liguori & Morris, would offer assistance of James Liguori and Melissa Dill.</p>'''
+<p>The firm, Liguori & Morris, would offer assistance of James Liguori and Melissa Dill.</p><p>Firm Size: 3</p>'''
 REVIEW = {
  'lead':{'firm':'Liguori & Morris','phone':'3026789900','city':'Dover','state':'DE'},
  'map_id':'liguori morris attorneys at law|3026789900',
@@ -66,6 +66,9 @@ class StrictConversionTests(unittest.TestCase):
   self.assertEqual(q.counts()['strict_eligible'],1)
   self.assertEqual(self.call()['new_qualified'],0)
   q.close()
+ def test_named_members_without_total_do_not_prove_upper_bound(self):
+  partial=ARTICLE.replace('<p>Firm Size: 3</p>','')
+  self.assertFalse(named_practitioners_proof(partial,REVIEW['lead']['firm'],REVIEW['named_attorneys']))
  def test_missing_published_email_cannot_promote(self):
   review={**REVIEW,'email':'other@firm.example'}
   result=self.call(review)

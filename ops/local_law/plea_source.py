@@ -167,7 +167,7 @@ def ingest(catalog=ROOT/'research_catalog.sqlite3',states=STATES,fetch=fetch_pub
         return stats
     finally:db.close()
 
-def audit_sites(catalog=ROOT/'research_catalog.sqlite3',limit=8,search=search_firm,health=None):
+def audit_sites(catalog=ROOT/'research_catalog.sqlite3',limit=8,search=search_firm,health=None,recheck_screened=False):
     limit=int(limit)
     if not 1<=limit<=12:raise ValueError('max must be 1..12')
     check=health if health is not None else lambda: audit_provider_health(lookups=search)
@@ -181,11 +181,11 @@ def audit_sites(catalog=ROOT/'research_catalog.sqlite3',limit=8,search=search_fi
         ensure(db)
         due=(datetime.now(timezone.utc)-timedelta(hours=6)).isoformat(timespec='seconds')
         rows=db.execute('''SELECT * FROM plea_firm_research
-            WHERE (website_status='not_checked' OR
+            WHERE ((? AND website_status='screened_no_site') OR website_status='not_checked' OR
                    (website_status='inconclusive' AND website_checked_at<?))
               AND (member_count>=2 OR firm LIKE '%&%' OR lower(firm) LIKE '% llp%'
                    OR lower(firm) LIKE '% law group%')
-            ORDER BY CASE
+            ORDER BY CASE WHEN website_status='screened_no_site' THEN 0 ELSE 1 END, CASE
                  WHEN (lower(research_json) LIKE '%@gmail.com%'
                        OR lower(research_json) LIKE '%@yahoo.com%'
                        OR lower(research_json) LIKE '%@aol.com%'
@@ -197,20 +197,21 @@ def audit_sites(catalog=ROOT/'research_catalog.sqlite3',limit=8,search=search_fi
                        OR lower(research_json) LIKE '%@aol.com%'
                        OR lower(research_json) LIKE '%@outlook.com%') THEN 2
                  ELSE 3 END,
-                 member_count DESC,firm,id LIMIT ?''',(due,limit)).fetchall()
+                 member_count DESC,firm,id LIMIT ?''',(int(recheck_screened),due,limit)).fetchall()
         for record in rows:
             research=json.loads(record['research_json'])
             city=research.get('cities',[''])[0] if len(research.get('cities',[]))==1 else ''
             # Never fabricate a location or select one arbitrarily across offices.
             state=research['states'][0] if len(research['states'])==1 else ''
-            lead={'firm':record['firm'],'phone':record['phone'],'state':state,'city':city}
+            lead={'firm':record['firm'],'phone':record['phone'],'state':state,'city':city,
+                  'emails':[m['email'] for m in research.get('members',[]) if m.get('email')]}
             try:
                 sources=search(lead)
                 if not valid_provider_pair(sources):
                     raise ValueError('incorrect-search-provider-attribution')
                 verdict=classify_search_results(sources)
                 website_status=verdict['status']
-                evidence={'providers':sources[:2],'verdict':verdict,'checked_at':utc_now(),
+                evidence={'providers':sources,'verdict':verdict,'checked_at':utc_now(),
                           'disclaimer':'site research only; firmwide size not verified'}
             except (ValueError,TypeError,KeyError,OSError) as exc:
                 website_status='inconclusive'
@@ -300,6 +301,7 @@ def main():
     sub=p.add_subparsers(dest='cmd',required=True)
     ingest_p=sub.add_parser('ingest');ingest_p.add_argument('--states',default=','.join(STATES))
     sites=sub.add_parser('audit-sites');sites.add_argument('--max',type=int,default=8)
+    sites.add_argument('--recheck-screened',action='store_true')
     owned=sub.add_parser('confirm-owned-site')
     owned.add_argument('--lead-id',required=True)
     owned.add_argument('--source-url',required=True)
@@ -307,7 +309,7 @@ def main():
     if args.cmd=='ingest':
         result=ingest(states=[x.strip().lower() for x in args.states.split(',') if x.strip()])
     elif args.cmd=='audit-sites':
-        result=audit_sites(limit=args.max)
+        result=audit_sites(limit=args.max,recheck_screened=args.recheck_screened)
     else:
         result=confirm_explicit_owned_site(ROOT/'research_catalog.sqlite3',args.lead_id,args.source_url)
     print(json.dumps(result,indent=2))

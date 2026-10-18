@@ -21,7 +21,7 @@ class RealSourceSearchTests(unittest.TestCase):
     def test_search_queries_are_bounded_and_firm_specific(self):
         a=source_queries("Riverbank & Grove Law","Rockford","IL")
         self.assertEqual(len(a),2)
-        self.assertTrue(all('"Riverbank & Grove Law"' in x for x in a))
+        self.assertTrue(all('Riverbank & Grove Law' in x and 'Rockford' in x for x in a))
         b=source_queries("Culmer & Davidson","Rockledge","FL")
         self.assertEqual(len(b),3)
         self.assertIn("site:floridabar.org",b[0])

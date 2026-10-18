@@ -28,8 +28,8 @@ class SnapshotQualificationTests(unittest.TestCase):
   with patch.object(publish_metrics,'ROOT',self.root):
    report=publish_metrics.snapshot()
   self.assertEqual(report['strictQualified'],1)
-  self.assertEqual(report['callingQualified'],2)
-  self.assertEqual(report['legacyPhoneOnly'],1)
+  self.assertEqual(report['callingQualified'],1)
+  self.assertEqual(report['legacyPhoneOnly'],0)
   self.assertIn('2–10',report['note'])
  def test_recent_campaign_health_overrides_stale_old_probe(self):
   (self.root/'final-provider-health.log').write_text(json.dumps({'website_search_provider_health':{'status':'degraded'}})+'\n')

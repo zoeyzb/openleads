@@ -1,3 +1,9 @@
+# Current authoritative state — 2026-10-18 UTC
+
+The current user request restores strict firmwide 2–10 plus published email requirements. Earlier phone-first/any-size guidance below is HISTORICAL and superseded. Current verified count is 1 strict, zero additional valid phone-only. See [current project state](../SCRAPER_PROJECT_STATUS.md) and [repair evidence](../ops/local_law/REPAIR_2026-10-18.md). No milestone has been reached.
+
+# Historical project record (retain for failed approaches and source evidence)
+
 # Law acquisition — verified state (2026-10-08)
 
 ## Owner's current hard eligibility gates

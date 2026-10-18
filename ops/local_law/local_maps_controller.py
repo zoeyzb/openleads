@@ -23,6 +23,25 @@ MARKETS=(
  ('Hattiesburg','MS'),('Meridian','MS'),('Columbus','MS'),
  ('Texarkana','TX'),('Paris','TX'),('Sherman','TX'),
  ('Dothan','AL'),('Opelika','AL'),('New Bern','NC'),
+ ('Corinth','MS'),('Tupelo','MS'),('Oxford','MS'),('Laurel','MS'),
+ ('Greenwood','MS'),('Natchez','MS'),('Starkville','MS'),('Brookhaven','MS'),
+ ('Paducah','KY'),('Murray','KY'),('Hopkinsville','KY'),('Danville','KY'),
+ ('Somerset','KY'),('Frankfort','KY'),('Ashland','KY'),('Bardstown','KY'),
+ ('Cookeville','TN'),('Tullahoma','TN'),('Columbia','TN'),('Dyersburg','TN'),
+ ('Paris','TN'),('Greeneville','TN'),('Morristown','TN'),('Athens','TN'),
+ ('Emporia','KS'),('Hays','KS'),('Salina','KS'),('Hutchinson','KS'),
+ ('Dodge City','KS'),('Garden City','KS'),('Ottawa','KS'),('Winfield','KS'),
+ ('Kearney','NE'),('Hastings','NE'),('Norfolk','NE'),('Columbus','NE'),
+ ('Fremont','NE'),('North Platte','NE'),('Scottsbluff','NE'),('Beatrice','NE'),
+ ('Sedalia','MO'),('Kirksville','MO'),('Moberly','MO'),('Rolla','MO'),
+ ('Farmington','MO'),('Cape Girardeau','MO'),('Sikeston','MO'),('Mexico','MO'),
+ ('Waycross','GA'),('Tifton','GA'),('Dublin','GA'),('Statesboro','GA'),
+ ('Milledgeville','GA'),('Moultrie','GA'),('Thomasville','GA'),('Americus','GA'),
+ ('Aiken','SC'),('Greenwood','SC'),('Orangeburg','SC'),('Sumter','SC'),
+ ('Laurens','SC'),('Newberry','SC'),('Union','SC'),('Camden','SC'),
+ ('Kinston','NC'),('Lumberton','NC'),('Rockingham','NC'),('Shelby','NC'),
+ ('Henderson','NC'),('Roanoke Rapids','NC'),('Wilson','NC'),('Goldsboro','NC'),
+
 )
 
 

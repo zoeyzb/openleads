@@ -7,6 +7,7 @@ business, then rechecked against firm, phone and published firm-size evidence.
 """
 from __future__ import annotations
 import argparse
+import os
 import csv
 import json
 import re
@@ -63,7 +64,7 @@ def ingest_maps_candidates(db,path):
     db.conn.commit()
     return inserted
 
-def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_resolver=None):
+def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_resolver=None,max_maps=4):
     fetch_fn=fetch_fn or fetch_public
     source_resolver=source_resolver or (lambda firm,city,state: real_profile_urls(
         firm,city,state,fetch_fn=fetch_fn))
@@ -75,7 +76,7 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
         PRIMARY KEY(map_id,method)
     )""")
     db.conn.commit()
-    method="bing_rss_real_profiles_v1"
+    method="selfhosted_real_profiles_v2" if os.environ.get("OPENLEADS_SEARCH_MODE")=="local_forks" else "bing_rss_real_profiles_v1"
     cutoff=(datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
     deadline=time.monotonic()+max(1,int(seconds))
     counts={"maps_checked":0,"source_cooldown_skips":0,
@@ -83,18 +84,27 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
             "actual_directory_links":0,"profile_requests":0,
             "identity_phone_size_matches":0,
             "added_to_final_audit":0,"fetch_failures":0,"directory_hits":0}
+    db.conn.execute("""CREATE TABLE IF NOT EXISTS maps_website_checks (
+        map_id TEXT PRIMARY KEY, checked_at TEXT NOT NULL,status TEXT NOT NULL,result_json TEXT NOT NULL)""")
+    db.conn.commit()
     raw=db.conn.execute("""SELECT * FROM maps_raw_candidates
-        WHERE status='unverified_headcount' ORDER BY added_at LIMIT 100""").fetchall()
+        WHERE status IN ('unverified_headcount','needs_firmwide_size_and_email','needs_identity_phone_review')
+        ORDER BY CASE WHEN EXISTS (SELECT 1 FROM maps_website_checks w
+                      WHERE w.map_id=maps_raw_candidates.map_id AND w.status='screened_no_site')
+                      THEN 0 ELSE 1 END,added_at LIMIT 100""").fetchall()
     for record in raw:
-        if time.monotonic()>=deadline or counts["profile_requests"]>=max_profiles:
+        if time.monotonic()>=deadline or counts["profile_requests"]>=max_profiles or counts["maps_checked"]>=max_maps:
             break
         prior=db.conn.execute(
             "SELECT checked_at,result FROM maps_source_search_checks WHERE map_id=? AND method=?",
             (record["map_id"],method)).fetchone()
-        if prior and prior["checked_at"]>cutoff and prior["result"]=="no_relevant_indexed_firm_profiles":
+        retry_cutoff=(cutoff if prior and prior["result"] in ("no_relevant_indexed_firm_profiles","no_matching_source_evidence")
+                      else (datetime.now(timezone.utc)-timedelta(hours=6)).isoformat())
+        if prior and prior["checked_at"]>retry_cutoff:
             counts["source_cooldown_skips"]+=1
             continue
         had_match=False
+        counts["maps_checked"]+=1
         counts["searches"]+=1
         try:
             source_results=source_resolver(record["firm"],record["city"],record["state"])
@@ -104,6 +114,9 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
             continue
         # Search outages are never "no firm" or proof of no website.
         if not source_results.get("responded"):
+            db.conn.execute("INSERT OR REPLACE INTO maps_source_search_checks VALUES(?,?,?,?)",
+                            (record["map_id"],method,utc_now(),"source_provider_unavailable"))
+            db.conn.commit()
             print(json.dumps({"event":"firm_source_unavailable","firm":record["firm"]}),flush=True)
             continue
         counts["responsive_searches"]+=1
@@ -119,7 +132,6 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
             print(json.dumps({"event":"no_real_indexed_directory_source",
                 "firm":record["firm"],"reason":"RSS returned zero applicable source URLs",
                 "retry_days":7}),flush=True)
-            counts["maps_checked"]+=1
             continue
         for url in candidates:
             if time.monotonic()>=deadline or counts["profile_requests"]>=max_profiles:
@@ -166,22 +178,27 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
             db.conn.commit()
             if had_match:
                 break
+        if not had_match:
+            complete=all(db.conn.execute("SELECT 1 FROM maps_profile_checks WHERE map_id=? AND url=?",
+                                         (record["map_id"],u)).fetchone() for u in candidates)
+            db.conn.execute("INSERT OR REPLACE INTO maps_source_search_checks VALUES(?,?,?,?)",
+                (record["map_id"],method,utc_now(),
+                 "no_matching_source_evidence" if complete else "partial_source_pass"))
         db.conn.execute("UPDATE maps_raw_candidates SET status=? WHERE map_id=?",
                          ("pending_independent_site_audit" if had_match else "unverified_headcount",record["map_id"]))
         db.conn.commit()
-        counts["maps_checked"]+=1
     return counts
 
 def main():
     p=argparse.ArgumentParser()
     p.add_argument("--db",default="state/law-leads.sqlite3")
-    p.add_argument("--csv",required=True)
+    p.add_argument("--csv")
     p.add_argument("--seconds",type=int,default=90)
     p.add_argument("--max-profiles",type=int,default=30)
     args=p.parse_args()
     db=SqliteQueue(args.db)
     try:
-        imported=ingest_maps_candidates(db,args.csv)
+        imported=ingest_maps_candidates(db,args.csv) if args.csv else 0
         verified=verify_map_headcounts(db,seconds=args.seconds,max_profiles=args.max_profiles)
         print(json.dumps({"maps_imported":imported,"maps_headcount":verified,
                           "counts":db.counts()}))

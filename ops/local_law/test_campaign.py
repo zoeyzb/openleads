@@ -14,7 +14,7 @@ class FreeSearchSchedulingTests(unittest.TestCase):
    campaign.command(['-m','ops.local_law.screen_maps_websites','--max','2'],4)
    self.assertEqual(r.call_args.kwargs['env']['OPENLEADS_SEARCH_MODE'],'local_forks')
    campaign.command(['-m','law_local.worker','discover','--states','TX'],4)
-   self.assertNotIn('OPENLEADS_SEARCH_MODE',r.call_args.kwargs['env'])
+   self.assertEqual(r.call_args.kwargs['env']['OPENLEADS_SEARCH_MODE'],'local_forks')
  def test_explicit_mode_is_honored_not_overwritten(self):
   with patch.object(campaign.subprocess,'run',return_value=CompletedProcess([],0,'','')) as r, patch.dict(campaign.os.environ,{'OPENLEADS_SEARCH_MODE':'legacy'},clear=True):
    campaign.command(['-m','law_local.worker','run'],3)
@@ -104,6 +104,20 @@ class PLEASourceSchedulerTests(unittest.TestCase):
   self.assertNotIn('plea_source","promote',source)
 
 class SchedulerTests(unittest.TestCase):
+ def test_repaired_provider_releases_legacy_zero_yield_hold_once(self):
+  with tempfile.TemporaryDirectory() as root,patch.object(campaign,"ROOT",Path(root)):
+   db=campaign.connect()
+   db.execute("DELETE FROM coverage_method_migrations")
+   db.execute("INSERT INTO areas(state,source,next_retry,last_error) VALUES('TX','directory','2099-01-01','zero_source_yield')")
+   db.commit();db.close()
+   db=campaign.connect()
+   self.assertIsNone(db.execute("SELECT next_retry FROM areas").fetchone()[0])
+   db.execute("UPDATE areas SET next_retry='2099-01-01',last_error='zero_source_yield'")
+   db.commit();db.close()
+   db=campaign.connect()
+   self.assertEqual(db.execute("SELECT next_retry FROM areas").fetchone()[0],'2099-01-01')
+   db.close()
+
  def test_no_geography_due_still_services_verification_backlog(self):
   with tempfile.TemporaryDirectory() as root:
    root=Path(root)

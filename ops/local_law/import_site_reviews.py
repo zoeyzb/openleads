@@ -92,8 +92,8 @@ def import_reviews(db_path,reviews):
             before=db.counts()["calling_qualified"]
             result={
                 "firm":lead["firm"],"phone":lead["phone"],"attorneys":None,
-                "status":"review_website" if flagged else "call_qualified_no_email",
-                "qualification_scope":"law_no_owned_website_any_size",
+                "status":"review_website" if flagged else "review_firmwide_headcount",
+                "qualification_scope":"website_review_only",
                 "source_url":lead["source_url"],"headcount_source":lead["source_url"],
                 "site_status":"review_website" if flagged else "screened_no_site",
                 "checked_at":review["checked_at"],"email":"","email_source":"",

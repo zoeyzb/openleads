@@ -85,7 +85,14 @@ def named_practitioners_proof(html,firm,names):
     text=norm(re.sub(r'<[^>]+>',' ',html))
     if canonical(firm) not in text:
         return False
-    return all(norm(name) in text for name in names)
+    if not all(norm(name) in text for name in names):
+        return False
+    # Three named lawyers prove at least three, not a firmwide upper bound.
+    # Require an explicitly totalled firm/team, not assistance on one case.
+    count=len(names)
+    total=re.search(r"\b(?:firm size|total attorneys|total lawyers)\s*:?\s*(\d{1,2})\b",text)
+    prose=re.search(r"\b"+re.escape(canonical(firm))+r"\s+(?:has|employs|comprises)\s+(\d{1,2})\s+(?:attorneys|lawyers)\b",text)
+    return any(m and int(m.group(1))==count for m in (total,prose))
 
 
 def qualify(db_path,review,fetch=fetch_public,search=search_firm,
@@ -165,7 +172,8 @@ def qualify(db_path,review,fetch=fetch_public,search=search_firm,
             'qualification_scope':'law_no_owned_website_2_10_email',
             'source_qualification_method':'reviewed_named_team_published_email',
             'attorneys':len(review['named_attorneys']),
-            'firmwide_2_10_review_confirmed':True,'named_attorneys':review['named_attorneys'],
+            'firmwide_2_10_review_confirmed':True,'headcount_total_attested':True,
+            'named_attorneys':review['named_attorneys'],
             'headcount_source':sources['headcount'],'source_url':sources['identity'],
             'email':email,'email_source':sources['email'], 'email_mx_ok':True,
             'private_practice_confirmed':True,

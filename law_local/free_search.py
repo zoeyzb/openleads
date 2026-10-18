@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
@@ -148,7 +149,31 @@ def search_firm(lead):
     query = '"' + str(lead.get("firm", "")).replace('"', '') + '" law firm ' + str(lead.get("city", "")) + ' ' + str(lead.get("state", ""))
     # Yandex and Yep independently recovered AXS Law Group, Baker McKenzie,
     # and Olsen & White on 2026-10-17. Continue to fail closed on outages.
-    result = [searx_engine(query, engine, lead=lead) for engine in SITE_ENGINES]
+    # Bounded independent requests in parallel preserve provider order while
+    # reducing a two-provider outage from ~16s to ~8s per firm.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        result=list(pool.map(lambda engine:searx_engine(query,engine,lead=lead),SITE_ENGINES))
+    # Source-published custom email domains are a positive ownership hint.
+    # Query the domain without the possibly misspelled directory firm label.
+    # A missing result never contributes to negative certification.
+    free_mail={"gmail.com","yahoo.com","aol.com","outlook.com","hotmail.com",
+               "live.com","icloud.com","msn.com","comcast.net","att.net",
+               "sbcglobal.net","verizon.net","bellsouth.net","proton.me","protonmail.com"}
+    domains=sorted({email.rsplit("@",1)[-1].lower() for email in lead.get("emails",[])
+                    if isinstance(email,str) and "@" in email})
+    hints=[]
+    for domain in domains[:2]:
+        if domain in free_mail or not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+",domain):
+            continue
+        response=searx_engine('site:'+domain, SITE_ENGINES[0])
+        for url in response["urls"]:
+            host=(urlparse(url).hostname or "").lower()
+            if host==domain or host.endswith("."+domain):
+                hints.append(url)
+    if hints:
+        result.append({"provider":"published_email_domain_positive_only",
+                       "responded":False,"urls":list(dict.fromkeys(hints)),
+                       "reason":"attributable_domain_requires_ownership_review"})
     # YaCy is a resource-intensive optional positive-only evidence channel.
     if os.environ.get("OPENLEADS_YACY_ENABLED") == "1":
         result.append(yacy_search(query, lead=lead))

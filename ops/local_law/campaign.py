@@ -10,10 +10,34 @@ OUT=ROOT/"strict-qualified-law.csv"
 PY="/opt/homebrew/bin/python3.11"
 STATES=["TX","GA","NC","PA","OH","MI","IL","CA"]
 def now(): return datetime.now(timezone.utc).isoformat(timespec="seconds")
+def log_record(record):
+ with (ROOT/"campaign-runs.log").open("a") as log:
+  log.write(json.dumps(record)+"\n")
+
+def scheduled_cycle():
+ started=time.monotonic()
+ log_record(dict(time=now(),event="cycle_started",pid=os.getpid()))
+ try:
+  code=cycle()
+ except Exception as exc:
+  log_record(dict(time=now(),event="cycle_crashed",error=type(exc).__name__,
+                  duration_seconds=round(time.monotonic()-started,2)))
+  raise
+ log_record(dict(time=now(),event="cycle_finished",exit=code,
+                 duration_seconds=round(time.monotonic()-started,2)))
+ return code
+
 def connect():
  c=sqlite3.connect(ROOT/"coverage.sqlite3",timeout=20)
  c.execute("PRAGMA journal_mode=WAL")
  c.execute("""CREATE TABLE IF NOT EXISTS areas (state TEXT, city TEXT NOT NULL DEFAULT '', source TEXT, last_attempt TEXT, last_success TEXT, next_retry TEXT, attempts INTEGER DEFAULT 0, last_exit INTEGER, last_error TEXT DEFAULT '', PRIMARY KEY(state,city,source))""")
+ # Reset only old ZERO-yield coverage once when switching provider method.
+ # Without this, the repaired adapter stays idle behind seven-day legacy holds.
+ c.execute("CREATE TABLE IF NOT EXISTS coverage_method_migrations(method TEXT PRIMARY KEY,applied_at TEXT NOT NULL,reset_areas INTEGER NOT NULL)")
+ method="selfhosted-directory-v1"
+ if os.environ.get("OPENLEADS_SEARCH_MODE","local_forks")=="local_forks" and not c.execute("SELECT 1 FROM coverage_method_migrations WHERE method=?",(method,)).fetchone():
+  changed=c.execute("UPDATE areas SET next_retry=NULL,last_error='provider_method_changed' WHERE source='directory' AND last_error IN ('zero_source_yield','no_machine_readable_yield')").rowcount
+  c.execute("INSERT INTO coverage_method_migrations VALUES(?,?,?)",(method,now(),changed))
  c.commit()
  return c
 def command(args,seconds=180):
@@ -22,7 +46,7 @@ def command(args,seconds=180):
  # whenever the local container or upstream indexes are unhealthy.
  env=os.environ.copy()
  if (len(args)>=2 and args[:2]==['-m','ops.local_law.screen_maps_websites'] or
-     len(args)>=2 and args[:2]==['-m','law_local.worker'] and 'run' in args):
+     len(args)>=2 and args[:2] in (['-m','law_local.worker'],['-m','law_local.maps_first'])):
   env.setdefault('OPENLEADS_SEARCH_MODE','local_forks')
  return subprocess.run([PY,*args],cwd=SRC,text=True,capture_output=True,timeout=seconds,env=env)
 def strict_export():
@@ -74,6 +98,7 @@ def calling_export():
  queue=SqliteQueue(DB)
  try:
   result=queue.export("calling_qualified",ROOT/"call-qualified-law.csv")
+  queue.export("call_qualified_no_email",ROOT/"phone-only-law.csv")
  finally:
   queue.close()
  print(json.dumps({"event":"calling_export","eligible_qualified":result,"file":str(ROOT/"call-qualified-law.csv")}))
@@ -191,7 +216,8 @@ def cycle():
   except subprocess.TimeoutExpired:
    with (ROOT/"campaign-runs.log").open("a") as log:
     log.write(json.dumps(dict(time=now(),local_maps_cycle_error="timeout"))+"\n")
-  # Any firm size is eligible. Screen Maps phone leads directly
+  # Maps screening is research only. Firmwide 2–10 remains mandatory.
+  # Screen phone prospects directly
   # against independently functioning website-search providers; fail closed.
   try:
    screened=command(["-m","ops.local_law.screen_maps_websites","--max","12"],120)
@@ -201,6 +227,14 @@ def cycle():
   except subprocess.TimeoutExpired:
    with (ROOT/"campaign-runs.log").open("a") as log:
     log.write(json.dumps(dict(time=now(),maps_site_screen_error="timeout"))+"\n")
+  # Reconnect Maps research to the missing firmwide-size verification stage.
+  try:
+   sized=command(["-m","law_local.maps_first","--db",str(DB),
+                  "--max-profiles","8","--seconds","65"],100)
+   log_record(dict(time=now(),maps_headcount_exit=sized.returncode,
+                   output=(sized.stdout+sized.stderr)[-1600:]))
+  except subprocess.TimeoutExpired:
+   log_record(dict(time=now(),maps_headcount_error="timeout"))
   # Publicly listed phone + no owned site field: a research prospect only.
   # Separate file so it cannot inflate qualified calls or email campaigns.
   try:
@@ -226,7 +260,7 @@ def cycle():
   # Bounded research-only two-index check, with known-owned-site preflight.
   # Cap per hour to avoid hammering the upstream free search engines.
   try:
-   plea_sites=command(["-m","ops.local_law.plea_source","audit-sites","--max","4"],55)
+   plea_sites=command(["-m","ops.local_law.plea_source","audit-sites","--max","4"],110)
    with (ROOT/"campaign-runs.log").open("a") as log:
     log.write(json.dumps(dict(time=now(),plea_site_audit_exit=plea_sites.returncode,
                              output=(plea_sites.stdout+plea_sites.stderr)[-650:]))+"\n")
@@ -248,16 +282,16 @@ def cycle():
   if archive_script.exists():
    try:
     triage=command(["ops/local_law/archive_triage.py","--max","25"],100)
-    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),archive_triage_exit=triage.returncode,output=(triage.stdout+triage.stderr)[-1200:]))+"\n")
+    log_record(dict(time=now(),archive_triage_exit=triage.returncode,output=(triage.stdout+triage.stderr)[-1200:]))
    except subprocess.TimeoutExpired:
-    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),archive_triage_error="timeout"))+"\n")
+    log_record(dict(time=now(),archive_triage_error="timeout"))
   # Reuse historic source records in the original Mac verifier; bounded, no
   # duplicated archive or new service. Candidate import is NOT qualification.
   try:
    moved=command(["ops/local_law/bridge_archive.py","--max","20"],25)
-   (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),bridge_exit=moved.returncode,output=(moved.stdout+moved.stderr)[-500:]))+"\n")
+   log_record(dict(time=now(),bridge_exit=moved.returncode,output=(moved.stdout+moved.stderr)[-500:]))
   except subprocess.TimeoutExpired:
-   (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),bridge_error="timeout"))+"\n")
+   log_record(dict(time=now(),bridge_error="timeout"))
   # Keep a diverse private 1,000-row unverified research queue refreshed from
   # the existing 9,037 source-linked records. This is NOT the calling export.
   try:
@@ -291,7 +325,7 @@ def cycle():
    if outcome!="candidates_added":
     error=outcome
   except subprocess.TimeoutExpired:rc=124;log="deadline exceeded";error=log
-  (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=started,state=st,exit=rc,output=log))+"\n")
+  log_record(dict(time=started,state=st,exit=rc,output=log))
   success=bool(rc==0 and error=="")
   retry=(datetime.now(timezone.utc)+timedelta(days=7 if error=="zero_source_yield" else 1)).isoformat(timespec="seconds")
   cov.execute("UPDATE areas SET last_attempt=?,last_success=CASE WHEN ? THEN ? ELSE last_success END,next_retry=?,attempts=attempts+1,last_exit=?,last_error=? WHERE state=? AND city='' AND source='directory'",(started,int(success),now(),retry,rc,error,st))
@@ -306,11 +340,11 @@ def cycle():
   harvey_cycle()
   if os.environ.get("LAW_SHEETS_CREDENTIALS"):
    sync=subprocess.run([str(ROOT/".venv/bin/python"),str(ROOT/"sync_sheet.py")],capture_output=True,text=True,timeout=120)
-   (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),sync_exit=sync.returncode,output=(sync.stdout+sync.stderr)[-1500:]))+"\n")
+   log_record(dict(time=now(),sync_exit=sync.returncode,output=(sync.stdout+sync.stderr)[-1500:]))
   print(json.dumps(dict(state=st,discovery_exit=rc,verification_exit=verify_exit,calling_qualified=phone_count,strict_qualified=count)))
   return 0 if rc==0 and verify_exit==0 else 1
 if __name__=="__main__":
  if len(sys.argv)>1 and sys.argv[1]=="export": calling_export();strict_export()
  elif len(sys.argv)>1 and sys.argv[1]=="coverage":
   con=connect();print(json.dumps([dict(zip(["state","city","source","last_attempt","last_success","next_retry","attempts","last_exit","last_error"],r)) for r in con.execute("SELECT * FROM areas ORDER BY state")]))
- else:sys.exit(cycle())
+ else:sys.exit(scheduled_cycle())
