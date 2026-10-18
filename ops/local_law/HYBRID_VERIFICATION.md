@@ -168,3 +168,20 @@ Two independent browser sources in the existing Mac Chrome passed the AXS owned-
 - Metrics `strictQualified` now counts exactly the same source/time/status-gated `SqliteQueue._verified_rows(('strict_eligible',))` as strict CSV. It is not simply the DB status row count. New `legacyPhoneOnly` exposes the difference from the broader existing calling list. Only current/new recorded hourly history uses the strict count; prior hourly measurements are retained as originally observed, not backfilled. HTML labels and system requirements now accurately state 2–10 firmwide + published usable email + matched business phone + verified absence of attributable owned website.
 - Fixed dashboard provider-health precedence: an old manual `final-provider-health.log` reading `degraded` was overruling fresh passing hourly campaign results. A campaign diagnostic from the last two hours now takes precedence; stale campaign health falls back to explicit older probe instead of implying the provider is live. Regression test reproduced and passed.
 - Fresh Mac test suite: 140 law-local + 118 operations tests, 258 passing; JS syntax checked, `git diff --check` clean. Verified real eight-record main-queue run with Yandex/Yep: both providers passed AXS Law Group known-domain control; eight were placed in website review, zero false strict promotions. Regenerated `strict-qualified-law.csv` with exactly 3 records. Installed updated `publish_metrics.py` on local scheduler source path, retained timestamped backup, published aggregate-only snapshot to existing unlisted Gist successfully: strict 3, broader calling 8, legacy phone-only 5, provider healthy. No contact emails/names/phone numbers published.
+
+## Harvey source adapter and ChatGPT subscription, October 19 2026
+
+- Harvey cloned separately under openleads-vendors, with isolated Python
+  venv and Codex CLI 0.159.3. Existing Codex CLI 0.163.0 untouched.
+- ChatGPT authentication is present but the refresh token is expired;
+  native refresh failed. User must complete official Codex browser login.
+- Source-of-truth strict firms sync into private Harvey Companies only,
+  with provenance and business email, no invented named contacts.
+  Live mirror: 3 strict firms imported, 0 prospects/campaigns/outbox.
+- Optional Harvey OSM source enters OpenLeads research-only queue,
+  preserving explicit website holds. Public Overpass pilot returned
+  HTTP 406/500; no new source leads, no misleading empty-source claim.
+  Automatic Overpass querying stays off pending a real passing probe.
+- Main Mac campaign mirrors strict-only data hourly, does not run Harvey
+  mail agent; outbound sending is disabled in Harvey configuration.
+- See ops/local_law/HARVEY_INTEGRATION.md for exact commands and rollback.

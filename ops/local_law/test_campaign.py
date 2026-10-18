@@ -64,6 +64,28 @@ class ExportTests(unittest.TestCase):
  def test_stale_evidence_excluded(self):
   self.add(checked=(datetime.now(timezone.utc)-timedelta(days=40)).isoformat())
   self.assertEqual(campaign.strict_export(),0)
+class HarveySourceSchedulerTests(unittest.TestCase):
+ def test_hourly_sync_is_strict_only_and_no_autosend_or_unhealthy_discovery(self):
+  with tempfile.TemporaryDirectory() as work, patch.object(campaign,'ROOT',Path(work)), \
+       patch.object(campaign,'command',return_value=CompletedProcess([],0,'{"strict_companies":3}','')) as runner, \
+       patch.dict(campaign.os.environ,{},clear=True):
+   campaign.harvey_cycle()
+   self.assertEqual(runner.call_count,1)
+   self.assertEqual(runner.call_args.args[0],['-m','ops.local_law.harvey_bridge','sync-strict'])
+   self.assertNotIn('run',str(runner.call_args.args[0]))
+   history=(Path(work)/'campaign-runs.log').read_text()
+   self.assertIn('harvey_strict_sync_exit',history)
+   self.assertNotIn('harvey_osm_exit',history)
+ def test_osm_discovery_needs_explicit_opt_in_and_small_batch(self):
+  with tempfile.TemporaryDirectory() as work, patch.object(campaign,'ROOT',Path(work)), \
+       patch.object(campaign,'command',return_value=CompletedProcess([],0,'{}','')) as runner, \
+       patch.dict(campaign.os.environ,{'HARVEY_OSM_AUTOMATIC':'1'}):
+   campaign.harvey_cycle()
+   self.assertEqual(runner.call_count,2)
+   discovery=runner.call_args.args[0]
+   self.assertEqual(discovery[:3],['-m','ops.local_law.harvey_bridge','discover-osm'])
+   self.assertEqual(discovery[-2:],['--max','25'])
+
 class NewSourceSchedulerTests(unittest.TestCase):
  def test_free_index_is_included_without_disabling_other_sources(self):
   source=Path(__file__).parent.joinpath('campaign.py').read_text()

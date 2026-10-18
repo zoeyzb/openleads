@@ -95,6 +95,34 @@ def discovery_result(exit_code,output):
             return "candidates_added" if int(r.get("added",0))>0 else "zero_source_yield"
     return "no_machine_readable_yield"
 
+def harvey_cycle():
+    """Mirror STRICT-only firms to Harvey, never start its outreach loop.
+
+    Free OSM ingestion remains explicitly opt-in: volunteer Overpass mirrors
+    recently returned HTTP 406/500. It must be healthy before scheduled use.
+    """
+    try:
+        run=command(["-m","ops.local_law.harvey_bridge","sync-strict"],45)
+        with (ROOT/"campaign-runs.log").open("a") as log:
+            log.write(json.dumps(dict(time=now(),harvey_strict_sync_exit=run.returncode,
+                         result=(run.stdout+run.stderr)[-380:]))+"\n")
+    except (subprocess.TimeoutExpired,OSError) as exc:
+        with (ROOT/"campaign-runs.log").open("a") as log:
+            log.write(json.dumps(dict(time=now(),harvey_strict_sync_error=type(exc).__name__))+"\n")
+    if os.environ.get("HARVEY_OSM_AUTOMATIC")!="1":
+        return
+    cities=("chicago","miami","houston","atlanta","philadelphia")
+    city=cities[datetime.now(timezone.utc).toordinal()%len(cities)]
+    try:
+        scan=command(["-m","ops.local_law.harvey_bridge","discover-osm",
+                      "--city",city,"--max","25"],175)
+        with (ROOT/"campaign-runs.log").open("a") as log:
+            log.write(json.dumps(dict(time=now(),harvey_osm_exit=scan.returncode,
+                         research_result=(scan.stdout+scan.stderr)[-400:]))+"\n")
+    except (subprocess.TimeoutExpired,OSError) as exc:
+        with (ROOT/"campaign-runs.log").open("a") as log:
+            log.write(json.dumps(dict(time=now(),harvey_osm_error=type(exc).__name__))+"\n")
+
 def process_backlog():
     """Service pending candidates without ever bypassing site-proof gates.
 
@@ -249,7 +277,7 @@ def cycle():
   if not rows:
    print("no area due; processing existing verification queue")
    verify_exit=process_backlog()
-   calling_export();strict_export()
+   calling_export();strict_export();harvey_cycle()
    return 0 if verify_exit==0 else 1
   st=rows[0][0]
   started=now()
@@ -275,6 +303,7 @@ def cycle():
   verify_exit=process_backlog()
   phone_count=calling_export()
   count=strict_export()
+  harvey_cycle()
   if os.environ.get("LAW_SHEETS_CREDENTIALS"):
    sync=subprocess.run([str(ROOT/".venv/bin/python"),str(ROOT/"sync_sheet.py")],capture_output=True,text=True,timeout=120)
    (ROOT/"campaign-runs.log").open("a").write(json.dumps(dict(time=now(),sync_exit=sync.returncode,output=(sync.stdout+sync.stderr)[-1500:]))+"\n")
