@@ -25,6 +25,64 @@ def _read_bounded_json():
     return payload
 
 
+def parse_osm_map_xml(data,city,state,limit):
+    """Parse one tiny official OpenStreetMap bbox into research-only hints.
+
+    The OSM editing API returns map geometry rather than a business directory.
+    Keep only physically tagged office=lawyer features. Empty website tags
+    never establish the absence of a firm-owned domain.
+    """
+    import xml.etree.ElementTree as ET
+    if len(data)>12_000_000:
+        raise ValueError("OSM map response too large")
+    root=ET.fromstring(data)
+    if root.tag!="osm":
+        raise ValueError("not an OSM map document")
+    rows=[]
+    for element in root:
+        if element.tag not in ("node","way","relation"):
+            continue
+        tags={tag.attrib.get("k"):tag.attrib.get("v","") for tag in element.findall("tag")}
+        if tags.get("office")!="lawyer" or not tags.get("name"):
+            continue
+        source_id=element.attrib.get("id","")
+        if not source_id.isdecimal() or len(source_id)>20:
+            continue
+        url=f"https://www.openstreetmap.org/{element.tag}/{source_id}"
+        website=tags.get("website") or tags.get("contact:website") or ""
+        rows.append({
+            "name":tags["name"],"phone":tags.get("phone") or tags.get("contact:phone") or "",
+            "website":website,"has_website":bool(website),
+            "source_url":url,"external_id":f"osm:{element.tag}/{source_id}",
+            "category":"lawyer","address":" ".join(x for x in
+                (tags.get("addr:housenumber",""),tags.get("addr:street","")) if x),
+            "city":city,"state":state,
+        })
+        if len(rows)>=limit:
+            break
+    return rows
+
+
+async def official_osm_bbox(client,args):
+    """One small OpenStreetMap map API request, never a citywide scrape."""
+    lat=float(args.lat);lon=float(args.lon)
+    bbox=",".join(f"{x:.5f}" for x in
+                  (lon-0.005,lat-0.005,lon+0.005,lat+0.005))
+    async with client.stream(
+        "GET","https://api.openstreetmap.org/api/0.6/map",
+        params={"bbox":bbox},
+        headers={"Accept":"application/xml",
+            "User-Agent":"OpenLeads-Law-Evidence/1.0 (+https://github.com/zoeyzb/openleads)"}) as response:
+        response.raise_for_status()
+        chunks=[];total=0
+        async for chunk in response.aiter_bytes():
+            total+=len(chunk)
+            if total>12_000_000:
+                raise ValueError("OSM map response too large")
+            chunks.append(chunk)
+    return parse_osm_map_xml(b"".join(chunks),args.city,args.state,args.limit)
+
+
 async def discover_osm(args):
     import httpx
     from harvey.collectors.discover import OpenStreetMap, DiscoveryQuery, TIMEOUT
@@ -60,7 +118,15 @@ async def discover_osm(args):
             return await super().post(url,content=content,**kwargs)
 
     async with FormEncodedOverpassClient(timeout=TIMEOUT, follow_redirects=True) as client:
-        found = await provider.fetch(client, {}, query)
+        try:
+            found=await provider.fetch(client,{},query)
+        except (httpx.HTTPError,RuntimeError,ValueError):
+            # Volunteer Overpass servers currently return 406/500 from the
+            # authorized Mac. The primary OSM API supports *small bbox map*
+            # downloads. Never issue a broad city/country scrape here.
+            rows=await official_osm_bbox(client,args)
+            return {"provider":"harvey:osm","transport":"osm_public_api_bbox",
+                    "found":len(rows),"rows":rows,"strict_qualified_added":0}
     rows = []
     for item in found[:args.limit]:
         rows.append({
@@ -70,7 +136,7 @@ async def discover_osm(args):
             "category": item.category, "address": item.address,
             "city": args.city, "state": args.state,
         })
-    return {"provider": "harvey:osm", "found": len(rows), "rows": rows,
+    return {"provider": "harvey:osm", "transport":"overpass", "found": len(rows), "rows": rows,
             "strict_qualified_added": 0}
 
 

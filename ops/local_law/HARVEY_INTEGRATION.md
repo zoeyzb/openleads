@@ -73,22 +73,45 @@ Re-sync is idempotent, and a revoked strict lead is marked withdrawn.
 Three strict companies were imported live; zero contacts, campaigns,
 outbox messages or outbound deliveries were created.
 
-## OSM upstream limitation and recovery
+## API-key-free OSM discovery: verified working 2026-10-19
 
-Harvey's real OpenStreetMap collector runs in its isolated venv, adapted
-to return bounded public law-office listings to OpenLeads. Source records
-are held with origin and timestamps. Blank website listings enter the
-existing unverified map-headcount research stage ONLY, never qualified.
-Explicit website evidence remains on hold even if later OSM data omits
-the website field. Existing phone/name research IDs are deduplicated.
+Harvey's actual OpenStreetMap adapter runs in the isolated Python venv,
+with no Codex model call, paid API, or API-key authorization. When a public
+Overpass mirror returns an HTTP error (the sampled upstream servers returned
+406/500), a bounded fallback now fetches **one tiny 0.01 by 0.01 degree
+neighborhood** from the official, free OpenStreetMap API. It parses
+OSM office=lawyer map features, matching the same OSM identity
+(osm:node/ID, osm:way/ID) and source link as Harvey. The HTTP response
+is capped at 12 MB, and only up to 80 entries are considered.
 
-Public Overpass instances returned HTTP 406/500 from the actual Mac.
-Although a few tiny probes returned HTTP 200, bounded full queries
-failed. Automatic Harvey OSM source runs remain DISABLED; even if the
-HARVEY_OSM_AUTOMATIC environment flag is enabled later, errors result
-in a six-hour retry cooldown and zero qualification claims.
-The community Overpass API is not an unlimited hosted substitute.
-No paid service or rate-limit workaround is installed.
+The official API is intended for small interactive map views, not bulk
+business extraction. **Do not replace the existing PLEA/Maps discovery
+infrastructure with citywide OSM API harvesting.** Source errors remain
+errors (the program exits nonzero), and each sampled city waits at least
+24 hours before another automatic attempt. A city with zero map-tagged
+law offices does not imply the city has zero law firms or no prospects.
+
+Verified end-to-end on the user's Mac: 9 approximately 1 km city-center
+samples (Chicago IL, Miami FL, Atlanta GA, Philadelphia PA, Houston TX,
+Dover DE, Fort Madison IA, Lake Stevens WA, Jackson MS). Research database
+now records **27 distinct published-name, phone and website-linked law-office
+features** as listed_website_hold; **zero OSM no-website-field hints** and
+**zero new strict-eligible leads**. The Chicago official map API also
+returned additional law offices without a usable phone; correctly held
+out of any calling/research candidate queue.
+
+The new provider is technically healthy, but produces **no usable
+no-website, published-email, 2–10-attorney law firm** from these nine
+tiny samples. Therefore HARVEY_OSM_AUTOMATIC remains **off** rather
+than repeatedly hitting donated public map servers for zero expected
+qualified leads. The Mac hourly campaign still uses its existing
+free, bounded source-first and local SearXNG discovery and automatically
+syncs verified strict firms to Harvey.
+
+The research-only contract is unchanged. A missing OSM website tag never
+proves absence, and a website positively listed on an OSM feature remains
+on hold even if a later edit removes that tag. No Harvey AI model was
+called, no contact email sent, no ChatGPT subscription allowance used.
 
 ## Reproduction and rollback
 

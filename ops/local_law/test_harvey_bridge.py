@@ -87,6 +87,29 @@ class HarveyResearchBoundaryTests(unittest.TestCase):
         self.assertEqual(report['error'],'TimeoutError')
         self.assertEqual(report['strict_qualified_created'],0)
         self.assertEqual(sqlite3.connect(self.research).execute("SELECT status FROM harvey_osm_runs").fetchone()[0], 'failed')
+    def test_failed_free_source_has_daily_backoff_and_never_fake_zero(self):
+        attempt=datetime(2026,10,19,tzinfo=timezone.utc)
+        fired=[]
+        def failed(*a,**kw):
+            fired.append(1)
+            raise TimeoutError('upstream OSM server outage')
+        first=bridge.discover_osm('miami',self.research,self.queue,self.vendor,
+                runner=failed,now=attempt)
+        self.assertEqual(first['error'],'TimeoutError')
+        self.assertEqual(first['strict_qualified_created'],0)
+        second=bridge.discover_osm('miami',self.research,self.queue,self.vendor,
+                runner=failed,now=attempt)
+        self.assertEqual(second['reason'],'provider_cooldown')
+        self.assertEqual(len(fired),1)
+        self.assertFalse(second['city_coverage_complete'])
+
+    def test_successful_micro_sample_does_not_claim_a_city_was_covered(self):
+        data=bridge.discover_osm('chicago',self.research,self.queue,self.vendor,
+                                 runner=self.fake_osm)
+        self.assertFalse(data['city_coverage_complete'])
+        self.assertEqual(data['geography_scope'],'one_small_map_bbox')
+        self.assertEqual(data['strict_qualified_created'],0)
+
     def test_no_arbitrary_source_url_or_false_blank_field(self):
         self.assertTrue(bridge._validate_osm_source('https://www.openstreetmap.org/node/55'))
         for url in ('https://example.com/node/55','http://127.0.0.1/node/55',

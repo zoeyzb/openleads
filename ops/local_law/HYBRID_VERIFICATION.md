@@ -185,3 +185,28 @@ Two independent browser sources in the existing Mac Chrome passed the AXS owned-
 - Main Mac campaign mirrors strict-only data hourly, does not run Harvey
   mail agent; outbound sending is disabled in Harvey configuration.
 - See ops/local_law/HARVEY_INTEGRATION.md for exact commands and rollback.
+
+
+## Verified free OSM source recovery, October 19 2026
+
+- Reproduced public Overpass network errors from Mac across multiple known
+  endpoints; confirmed official OSM API small map bbox requests return
+  valid XML containing real Chicago law offices and positively listed
+  websites. Only use the official map endpoint for *tiny* research samples
+  (0.01-degree bbox, max 12 MB body); not bulk city/state scraping.
+- Implemented a failure-triggered, API-key-free official OSM small-bbox
+  fallback in the isolated Harvey sidecar, with source-specific OSM
+  identity, exact office=lawyer tag, website/phone fields, 24h cooldown
+  and no false zero-lead success on network errors.
+- Executed nine real city-center pilots and source-staged 27 distinct
+  firms with matching public phones and OSM website-tagged links as
+  listed_website_hold (candidate-owned sites, not independently confirmed), zero new no-website-field phone research rows,
+  zero new strictly qualified 2–10/email/no-site law firms. Positive
+  website evidence remains sticky even if a later OSM response is blank.
+  These areas were *not* exhaustively mapped.
+- Automatic OSM runs remain off due to observed zero prospect yield,
+  public OSM service etiquette, and lack of headcount/email evidence.
+  Free PLEA, Maps and local two-index discovery continue on the Mac,
+  without ChatGPT usage. Separate Harvey strict-firm mirror stays active.
+- Added source parser/bbox/size-cap/negative-success regression tests;
+  official API fallback successful without ChatGPT authentication or key.

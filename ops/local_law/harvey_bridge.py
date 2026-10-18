@@ -27,6 +27,10 @@ CITIES = {
     "houston": ("Houston", "TX", 29.7604, -95.3698),
     "atlanta": ("Atlanta", "GA", 33.7490, -84.3880),
     "philadelphia": ("Philadelphia", "PA", 39.9526, -75.1636),
+    "fort-madison": ("Fort Madison", "IA", 40.6298, -91.3151),
+    "dover": ("Dover", "DE", 39.1582, -75.5244),
+    "lake-stevens": ("Lake Stevens", "WA", 48.0151, -122.0638),
+    "jackson": ("Jackson", "MS", 32.2988, -90.1848),
 }
 
 
@@ -143,10 +147,11 @@ def discover_osm(city_key="chicago",research_db=ROOT/"research_catalog.sqlite3",
         if prior and not force:
             try:
                 timestamp=datetime.fromisoformat(prior[0].replace('Z','+00:00'))
-                cooldown=timedelta(days=1) if prior[1]=='ok' else timedelta(hours=6)
+                cooldown=timedelta(days=1)
                 if timestamp.tzinfo is not None and timedelta(0) <= now-timestamp < cooldown:
                     return {"city":city_key,"skipped_recent":True,"research_only":True,
-                            "strict_qualified_created":0,"reason":"provider_cooldown"}
+                            "strict_qualified_created":0,"reason":"provider_cooldown",
+                            "city_coverage_complete":False}
             except (ValueError,TypeError):pass
         args=_sidecar_command("discover-osm",vendor)+[
             "--city",city,"--state",state,"--lat",str(lat),"--lon",str(lon),
@@ -165,7 +170,8 @@ def discover_osm(city_key="chicago",research_db=ROOT/"research_catalog.sqlite3",
                (city_key,now.isoformat(timespec="seconds"),'failed',type(exc).__name__,0))
             research.commit()
             return {"city":city_key,"error":type(exc).__name__,"reason":str(exc)[:170],
-                    "research_only":True,"strict_qualified_created":0}
+                    "research_only":True,"strict_qualified_created":0,
+                    "city_coverage_complete":False}
         seen=added=without_field=had_field=filtered=0
         leads=sqlite3.connect(leads_db,timeout=30)
         try:
@@ -224,7 +230,10 @@ def discover_osm(city_key="chicago",research_db=ROOT/"research_catalog.sqlite3",
                (city_key,now.isoformat(timespec="seconds"),'ok','',seen))
             research.commit()
         finally:leads.close()
-        return {"city":city_key,"provider":"harvey:osm","discovered_with_valid_law_phone":seen,
+        return {"city":city_key,"provider":"harvey:osm",
+                "transport":output.get("transport","harvey_osm"),
+                "city_coverage_complete":False,"geography_scope":"one_small_map_bbox",
+                "discovered_with_valid_law_phone":seen,
                 "source_has_website":had_field,"no_website_field_only":without_field,
                 "new_unverified_map_research":added,"skipped_invalid":filtered,
                 "strict_qualified_created":0,"research_only":True}
@@ -266,5 +275,7 @@ def main():
     elif args.command=="sync-strict":result=sync_verified()
     else:result=discover_osm(args.city,force=args.force,limit=args.max)
     print(json.dumps(result,sort_keys=True))
+    if result.get("error"):
+        raise SystemExit(3)
 
 if __name__=="__main__":main()
