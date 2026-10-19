@@ -10,13 +10,13 @@ class SiteProviderHealthTests(unittest.TestCase):
         ])
         self.assertEqual(ok["status"],"usable")
         self.assertTrue(ok["positive_control_found"])
-    def test_fl_bar_profile_counts_as_positive_control(self):
-        ok=audit_provider_health(lambda control:[
+    def test_bar_profile_without_owned_domain_is_not_positive_control(self):
+        result=audit_provider_health(lambda control:[
             {"responded":True,"urls":[]},
             {"responded":True,"urls":["https://www.floridabar.org/directories/find-mbr/profile/?num=55683"]},
         ])
-        self.assertEqual(ok["status"],"usable")
-        self.assertTrue(ok["positive_control_found"])
+        self.assertEqual(result["status"],"degraded")
+        self.assertFalse(result["positive_control_found"])
     def test_both_http_ok_but_offtopic_invalid(self):
         result=audit_provider_health(lambda control:[
             {"responded":True,"urls":["https://dan.org/","https://reubensbrews.com/"]},

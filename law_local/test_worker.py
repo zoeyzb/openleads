@@ -67,6 +67,13 @@ class QualityTests(unittest.TestCase):
         html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys at this location.","4 attorneys for defendant.")
         self.assertEqual(evaluate_published_source(html,LEAD)["attorneys"],0)
 
+    def test_unknown_attorney_count_does_not_block_email_qualification(self):
+        html=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys at this location.","")
+        searches=[{"responded":True,"urls":[]},{"responded":True,"urls":[]}]
+        record=evaluate_candidate(LEAD,html,searches,mx_check=lambda domain:True)
+        self.assertEqual(record["status"],"strict_eligible")
+        self.assertEqual(record["attorneys"],0)
+
     def test_search_outage_does_not_certify_absence(self):
         found=classify_search_results([{"responded":False,"urls":[]},{"responded":True,"urls":[]}])
         self.assertEqual(found["status"],"inconclusive")

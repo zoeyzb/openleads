@@ -15,16 +15,14 @@ from law_local import worker
 CONTROL={"firm":"Culmer & Davidson","phone":"3216382002",
          "city":"Rockledge","state":"FL"}
 KNOWN_DOMAIN="brevardtrialattorneys.com"
-CONTROL_BAR_PROFILE="floridabar.org/directories/find-mbr/profile/?num=55683"
 
 def _positive_control_hit(raw):
     try:
         url=worker.search_target(raw).lower()
     except Exception:
         return False
-    if KNOWN_DOMAIN in url:
-        return True
-    return CONTROL_BAR_PROFILE in url.replace("https://www.", "https://")
+    host=(urlparse(url).hostname or "").lower().removeprefix("www.")
+    return host==KNOWN_DOMAIN or host.endswith("."+KNOWN_DOMAIN) or KNOWN_DOMAIN in url
 
 def audit_provider_health(lookups=None):
     lookups=lookups or worker.search_for_firm

@@ -52,14 +52,16 @@ def permitted_bar_source(url):
     )
 
 def extract_inbar_firm(url,html):
-    """Only publish an employer with a firm-specific 2–10 declaration and professional phone."""
+    """Publish an employer with professional phone; firm size is optional metadata."""
     if not permitted_bar_source(url):
         return None,"untrusted_source"
     parts=[str(x).strip() for x in reader(html).parts if str(x).strip()]
     text=" ".join(parts)
     match=SIZE_RE.search(text)
-    if not match or not (2<=int(match.group(1))<=int(match.group(2))<=10):
-        return None,"missing_or_out_of_range_firm_size"
+    attorney_range=None
+    if match:
+        lo,hi=int(match.group(1)),int(match.group(2))
+        attorney_range=(lo,hi)
     try:
         start=next(i for i,v in enumerate(parts) if norm(v)=="professional information")
     except StopIteration:
@@ -88,8 +90,11 @@ def extract_inbar_firm(url,html):
     if not phones:
         return None,"no_published_professional_phone"
     phone=phones[0]
-    return {"firm":firm,"phone":phone,"state":"IN","city":"",
-            "source_url":url},"candidate"
+    payload={"firm":firm,"phone":phone,"state":"IN","city":"",
+             "source_url":url}
+    if attorney_range:
+        payload["attorney_range"]=attorney_range
+    return payload,"candidate"
 
 def bar_seed_harvest(db,urls=PUBLIC_BAR_SEEDS,fetch_fn=None,seconds=100,max_pages=30):
     fetch_fn=fetch_fn or fetch_public

@@ -90,7 +90,7 @@ def listing_firms(html):
         if not m:
             continue
         count=int(m.group(1))
-        if 2<=count<=10:
+        if count>=1:
             qualifying.append((target,count))
     # Distinct profile hrefs are authoritative; ignore duplicates in nav/footer.
     return {"all_profiles":all_links,"candidates":list(dict.fromkeys(qualifying))}
@@ -108,11 +108,7 @@ def parse_roster_profile(html,url):
         return None,"not_private_firm"
     text=" ".join(reader(html).parts)
     m=COUNT_PROFILE.search(text)
-    if not m:
-        return None,"missing_current_active_count"
-    count=int(m.group(1))
-    if not 2<=count<=10:
-        return None,"outside_2_to_10"
+    count=int(m.group(1)) if m else 0
     top=text.split("Active attorneys (",1)[0]
     phone_match=PHONE_PROFILE.search(top)
     phone=normalize_phone(phone_match.group(1)) if phone_match else ""
@@ -172,7 +168,7 @@ def discover_listings(db,fetch_fn=fetch_public,max_pages=156,seconds=150,
         db.conn.commit()
         stats["pages_fetched"]+=1
         stats["profiles_seen"]+=found["all_profiles"]
-        stats["sized_2_to_10_listings"]+=len(found["candidates"])
+        stats["listed_with_attorney_count"]+=len(found["candidates"])
         if polite_wait:time.sleep(polite_wait)
     return dict(stats)
 
@@ -207,7 +203,9 @@ def verify_profiles(db,fetch_fn=fetch_public,max_profiles=300,seconds=260,
         try:
             html=fetch_fn(row["url"],timeout=10)
             lead,status=parse_roster_profile(html,row["url"])
-            if lead and lead["published_active_attorneys"]!=row["listed_attorneys"]:
+            if (lead and row["listed_attorneys"]>0
+                    and lead.get("published_active_attorneys",0)>0
+                    and lead["published_active_attorneys"]!=row["listed_attorneys"]):
                 return row["url"],None,"listing_profile_count_mismatch"
             return row["url"],lead,status
         except Exception as exc:

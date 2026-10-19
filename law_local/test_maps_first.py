@@ -36,7 +36,7 @@ class MapsFirstTests(unittest.TestCase):
             stats=verify_map_headcounts(db,fetch_fn=lambda url,timeout=8: HTML,
                   source_resolver=found,seconds=20,max_profiles=5)
             self.assertEqual(stats["actual_directory_links"],1)
-            self.assertEqual(stats["identity_phone_size_matches"],1)
+            self.assertEqual(stats["identity_phone_matches"],1)
             self.assertEqual(stats["added_to_final_audit"],1)
             self.assertEqual(db.counts()["pending"],1)
             self.assertEqual(db.counts()["calling_qualified"],0)

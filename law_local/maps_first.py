@@ -17,7 +17,7 @@ from law_local.search_sources import real_profile_urls
 from law_local.maps_extract import COUNTRY_STATE
 from law_local.worker import (
     SqliteQueue, _extract_directory_profile, normalize_phone, norm,
-    fetch_public, utc_now, evaluate_published_source,
+    fetch_public, utc_now, firm_identity_matches,
 )
 
 def ingest_maps_candidates(db,path):
@@ -80,7 +80,7 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
     counts={"maps_checked":0,"source_cooldown_skips":0,
             "searches":0,"responsive_searches":0,
             "actual_directory_links":0,"profile_requests":0,
-            "identity_phone_size_matches":0,
+            "identity_phone_matches":0,
             "added_to_final_audit":0,"fetch_failures":0,"directory_hits":0}
     raw=db.conn.execute("""SELECT * FROM maps_raw_candidates
         WHERE status='unverified_headcount' ORDER BY added_at LIMIT 100""").fetchall()
@@ -148,14 +148,13 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
                 lead={"firm":record["firm"],"phone":record["phone"],
                       "city":record["city"],"state":record["state"],
                       "source_url":url}
-                evidence=evaluate_published_source(html,lead)
-                if 2<=evidence["attorneys"]<=10:
+                if firm_identity_matches(html,lead):
                     candidate=lead
-            status="not_matching_sourced_size_phone"
+            status="not_matching_sourced_identity_phone"
             if candidate:
                 candidate["state"]=record["state"]
                 candidate["city"]=record["city"]
-                counts["identity_phone_size_matches"]+=1
+                counts["identity_phone_matches"]+=1
                 counts["added_to_final_audit"]+=int(db.add(candidate))
                 status="candidate_for_independent_website_and_email_check"
                 had_match=True

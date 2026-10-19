@@ -132,11 +132,8 @@ def evaluate_published_source(html,lead):
         range_match=re.search(r"\b(?:firm size|office size|firm/organization size)\s*:?\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\b",raw_text,re.I)
         if range_match:
             lo,hi=map(int,range_match.groups())
-            if 2<=lo<=hi<=10:
-                attorney_range=(lo,hi)
-                attorneys=lo
-            else:
-                attorneys=0
+            attorney_range=(lo,hi)
+            attorneys=lo
         else:
             m=re.search(r"\b(?:firm size|firm/organization size|number of attorneys|attorneys at this firm)\s*:?\s*(\d{1,2})(?!\s*(?:\+|[-–]|to\b|employees?\b|staff\b))\s*(?:attorneys?|lawyers?)?\b",raw_text,re.I)
             attorneys=int(m.group(1)) if m else 0
@@ -223,17 +220,17 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
         return {**evidence,"status":"owned_site_or_untrusted_source"}
     if not firm_identity_matches(source_html,lead):
         return {**evidence,"status":"unverified_identity"}
-    if source["attorneys"]<2 or source["attorneys"]>10:
-        return {**evidence,"status":"unverified_size"}
     if source["website_candidates"]:
         return {**evidence,"status":"review_website","website_candidates":source["website_candidates"]}
     site=classify_search_results(search_results)
     evidence["site_status"]=site["status"]
+    evidence["search_results"]=search_results
     if site["status"]!="screened_no_site":
         return {**evidence,"status":site["status"],"site_evidence":site}
     # PHONE-FIRST CONTRACT: email is an optional, source-published bonus.
-    # Missing/invalid email never disqualifies an independently verified
-    # law firm with 2-10 attorneys, a published phone, and no owned site.
+    # Missing/invalid email never disqualifies phone-lane eligibility when
+    # identity, published phone, and independent no-owned-site checks pass.
+    # Attorney count is optional metadata only and never blocks qualification.
     for email in source["emails"]:
         domain=email.rsplit("@",1)[-1]
         try:
@@ -270,8 +267,9 @@ class SqliteQueue:
             );
             CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status);
         """)
-        # Re-evaluate old records previously rejected solely for no email.
+        # Re-evaluate old records previously rejected solely for no email or size.
         self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status='call_ready_no_email'")
+        self.conn.execute("UPDATE candidates SET status='pending', attempts=0 WHERE status='unverified_size'")
         self.conn.commit()
     @staticmethod
     def _id(lead):
@@ -291,7 +289,9 @@ class SqliteQueue:
     def pending(self,limit):
         rows=self.conn.execute("""SELECT * FROM candidates
              WHERE status='pending' OR (status='inconclusive' AND attempts < 3)
-             ORDER BY updated ASC LIMIT ?""",(int(limit),)).fetchall()
+             ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,
+                      CASE WHEN result_json LIKE '%"email":%' AND result_json NOT LIKE '%"email": ""%' THEN 0 ELSE 1 END,
+                      updated ASC LIMIT ?""",(int(limit),)).fetchall()
         return [dict(row) for row in rows]
     def record(self,lead,result):
         self.conn.execute("""UPDATE candidates
@@ -302,6 +302,7 @@ class SqliteQueue:
     def counts(self):
         totals=dict(self.conn.execute("SELECT status,COUNT(*) FROM candidates GROUP BY status").fetchall())
         totals["calling_qualified"]=totals.get("strict_eligible",0)+totals.get("call_qualified_no_email",0)
+        totals["email_qualified"]=totals.get("strict_eligible",0)
         return totals
     def export(self,status,path):
         statuses=("strict_eligible","call_qualified_no_email") if status=="calling_qualified" else (status,)
@@ -385,7 +386,6 @@ def apply_verified_bar_contact_proof(db,lead,result):
                     "website_evidence_source":proof["email_source"]}
     if (result.get("status")!="call_qualified_no_email"
             or result.get("site_status")!="screened_no_site"
-            or not 2<=int(result.get("attorneys") or 0)<=10
             or normalize_phone(result.get("phone"))!=expected_phone):
         return result
     for proof in supported:
@@ -475,27 +475,36 @@ def _duckduckgo_lite_search(query, timeout=12, retries=4):
     return {"responded":False,"urls":[]}
 
 
+def _bing_rss_search(query, firm, timeout=12):
+    url="https://www.bing.com/search?format=rss&"+urlencode({"q":query})
+    try:
+        page=fetch_public(url,timeout=timeout)
+        root=ET.fromstring(page)
+        if not root.tag.lower().endswith("rss"):
+            return {"responded":False,"urls":[]}
+        links=[(item.findtext("link") or "").strip() for item in root.findall(".//item")]
+        links=[v for v in links if _public_http_url(v)]
+        if not _bing_rss_looks_valid(firm, links):
+            return {"responded":False,"urls":[]}
+        return {"responded":True,"urls":links}
+    except Exception:
+        return {"responded":False,"urls":[]}
+
+
 def search_for_firm(lead):
-    """Two independent DuckDuckGo Lite queries (Bing RSS is unreliable from CI/cloud IPs)."""
+    """Independent providers: DuckDuckGo Lite + relevance-validated Bing RSS."""
     firm=str(lead.get("firm") or "").replace('"',"").strip()
     phone=normalize_phone(lead.get("phone"))
     city=str(lead.get("city") or "").strip()
     state=str(lead.get("state") or "").strip()
     loc=" ".join(part for part in (city, state) if part)
-    if state == "FL" and loc:
-        secondary=f'"{firm}" {loc} site:floridabar.org'
-    elif loc:
-        secondary=f'"{firm}" {loc} attorney official website'
-    else:
-        secondary=f'"{firm}" "{phone}" attorney official website'
-    queries=[
-        f'"{firm}" "{phone}" law firm website',
-        secondary.strip(),
+    ddg_query=f'"{firm}" "{phone}" law firm website'
+    bing_query=(f'"{firm}" {loc} law firm official website'.strip() if loc
+                else f'"{firm}" "{phone}" law firm official website')
+    return [
+        _duckduckgo_lite_search(ddg_query),
+        _bing_rss_search(bing_query, firm),
     ]
-    out=[]
-    for query in queries:
-        out.append(_duckduckgo_lite_search(query))
-    return out
 
 def domain_has_mail(domain):
     if not re.fullmatch(r"(?i)[a-z0-9.-]{4,253}",domain):
@@ -522,7 +531,31 @@ def _government_or_non_private_firm(firm):
     )
 
 
-def process_candidate(lead):
+def _reusable_site_search(stored_json, max_age_days=14):
+    try:
+        data=json.loads(stored_json or "{}")
+    except json.JSONDecodeError:
+        return None
+    if data.get("site_status")!="screened_no_site":
+        return None
+    searches=data.get("search_results")
+    if not isinstance(searches,list) or len(searches)<2:
+        return None
+    if not all(item.get("responded") for item in searches[:2]):
+        return None
+    checked=data.get("checked_at") or ""
+    try:
+        when=datetime.fromisoformat(checked.replace("Z","+00:00"))
+        if when.tzinfo is None:
+            when=when.replace(tzinfo=timezone.utc)
+        if abs((datetime.now(timezone.utc)-when).total_seconds())>max_age_days*86400:
+            return None
+    except (ValueError,TypeError,OverflowError):
+        return None
+    return searches
+
+
+def process_candidate(lead, stored_result_json=""):
     try:
         if _government_or_non_private_firm(lead.get("firm")):
             return {"status":"review_nonlaw_employer","checked_at":utc_now(),
@@ -531,7 +564,11 @@ def process_candidate(lead):
         if not firm_identity_matches(html,lead):
             return {"status":"unverified_identity","source_url":lead["source_url"],"checked_at":utc_now()}
         source=evaluate_published_source(html,lead)
-        search=search_for_firm(lead) if 2<=source["attorneys"]<=10 and not source["website_candidates"] else []
+        search=_reusable_site_search(stored_result_json)
+        if search is None and not source["website_candidates"]:
+            search=search_for_firm(lead)
+        elif search is None:
+            search=[]
         return evaluate_candidate(lead,html,search,mx_check=domain_has_mail)
     except Exception as exc:
         return {"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
@@ -580,7 +617,7 @@ def run_batch(db,max_rows=100,workers=4,seconds=600):
             if time.monotonic()>=deadline:
                 break
             batch=candidates[offset:offset+concurrency]
-            future_to_lead={pool.submit(process_candidate,row):row for row in batch}
+            future_to_lead={pool.submit(process_candidate,row,row.get("result_json") or ""):row for row in batch}
             for future in as_completed(future_to_lead):
                 lead=future_to_lead[future]
                 try:
@@ -706,8 +743,7 @@ def _extract_directory_profile(url,html):
         if not phone:
             continue
         candidate={"firm":firm,"phone":phone,"city":"","state":"","source_url":url}
-        if 2<=evaluate_published_source(html,candidate)["attorneys"]<=10:
-            return candidate
+        return candidate
     return None
 
 
