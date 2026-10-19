@@ -255,6 +255,15 @@ def cycle():
    log_record(dict(time=now(),irela_contacts_exit=irela.returncode,output=(irela.stdout+irela.stderr)[-1200:]))
   except subprocess.TimeoutExpired:
    log_record(dict(time=now(),irela_contacts_error="timeout"))
+  # Public Wisconsin local-bar officers: scoped law-office phone/email
+  # with an active term, robots compliance and a one-day fetch cooldown.
+  # Identity and independent website checks remain mandatory.
+  try:
+   wi=command(["-m","law_local.wisconsin_local_bars","--db",str(DB)],50)
+   log_record(dict(time=now(),wisbar_contacts_exit=wi.returncode,
+                   output=(wi.stdout+wi.stderr)[-1200:]))
+  except subprocess.TimeoutExpired:
+   log_record(dict(time=now(),wisbar_contacts_error="timeout"))
   # Official public active-lawyer contacts: bounded and persisted; no ID guessing.
   try:
    bar=command(["-m","law_local.wsba_source","--db",str(DB),"--seconds","45"],65)
@@ -276,7 +285,7 @@ def cycle():
   # Bounded research-only two-index check, with known-owned-site preflight.
   # Cap per hour to avoid hammering the upstream free search engines.
   try:
-   plea_sites=command(["-m","ops.local_law.plea_source","audit-sites","--max","4"],110)
+   plea_sites=command(["-m","ops.local_law.plea_source","audit-sites","--max","12"],160)
    with (ROOT/"campaign-runs.log").open("a") as log:
     log.write(json.dumps(dict(time=now(),plea_site_audit_exit=plea_sites.returncode,
                              output=(plea_sites.stdout+plea_sites.stderr)[-650:]))+"\n")

@@ -40,10 +40,11 @@ firm,phone,city,state,source_url
 ```
 
 Do not put made-up rows or guessed emails into the input. Existing CSVs may
-need their column names adapted. The primary acquisition path is now `florida_roster`: it fetches the real
-published Florida-law-directory firm-index pages, filters firms with 2–10
-**active attorneys**, and checks the same firm's published office phone on
-the actual firm page. Each profile enters `pending`, NOT call/email eligible.
+need their column names adapted. The `florida_roster` adapter fetches public firm profiles and checks a
+source-published office phone. Attorney count is optional metadata, **never
+a filtering requirement**. Source-backed PLEA, Wisconsin local-bar and other
+directory contacts feed the same canonical verifier; every new profile enters
+`pending`, NOT call/email eligible.
 The old search engine/guessed Lawyer.com discovery is deprecated for production.
 All records are checkpointed in `fl_roster_frontier` to avoid scanning the same
 firm twice. The last real first source-first run (#37841289197) discovered
@@ -58,10 +59,13 @@ An export row requires all of the following:
 
 1. A source page from a recognized third-party public legal directory or bar.
 2. An exact firm identity and a matching published US phone on that page.
-3. An explicit firm-attorney count from 2–10 on that source page.
-4. A bounded two-provider negative owned-website search, with **both providers
+3. A verified active U.S. private law-practice identity; size is optional,
+   including solo practices and firms with unknown numbers of attorneys.
+4. A bounded two-provider no-owned-website screen, with **both providers
    responding successfully**. Owned-site hints trigger review, not acceptance.
-Email is OPTIONAL for the **calling-qualified** pool. The export status `calling_qualified` combines verified phone-only firms (`call_qualified_no_email`) with the smaller `strict_eligible` subset that also has a source-published MX-checked email. Missing email never blocks the calling pool.
+5. For `strict_eligible`: an exact source-published email with domain MX
+   validation. Personal mailbox deliverability is not proven by MX alone.
+Email is OPTIONAL only for the separate **phone-only** calling pool. The export status `calling_qualified` combines verified phone-only firms (`call_qualified_no_email`) with the smaller `strict_eligible` subset that also has a source-published MX-checked email. Missing email never blocks the calling pool.
 Historical `call_ready_no_email` rows are automatically requeued for screening. A published phone's syntax is screened, but
 this process does **not** place a call to verify that it actually rings.
 

@@ -28,7 +28,7 @@ import xml.etree.ElementTree as ET
 
 USER_AGENT = "OpenLeads-Law-Evidence/1.0 (+https://github.com/zoeyzb/openleads)"
 DIRECTORY_DOMAINS = (
-    "lawyers.com", "lawyer.com", "avvo.com", "justia.com", "inbar.org",
+    "lawyers.com", "lawyer.com", "avvo.com", "justia.com", "inbar.org", "wisbar.org",
     "findthelawfirms.com", "findthelawyers.com", "floridalawdirectory.com",
     "findlaw.com", "martindale.com", "superlawyers.com",
     "floridabar.org", "mywsba.org", "wsba.org", "americanbar.org", "lawinfo.com",
@@ -54,6 +54,13 @@ DIRECTORY_DOMAINS = (
     "reachattorneys.com", "bestprosintown.com", "wanderboat.ai",
     "111things.com", "sullivanauctioneers.com", "irela.org",
     "uscompanies.net", "waze.com", "irela.org",
+    # Independent legal directories, marketplaces and editorial sources;
+    # none is the prospect law firm's owned domain.
+    "lawful.com", "thatcarhitme.com", "bestlawyersreviews.com",
+    "lawyersattorneysguide.com", "florida.intercreditreport.com",
+    "expertise.com", "signalhire.com", "qdexx.com",
+    "uslawlist.com", "law360.com", "twitter.com", "medium.com",
+    "bloomberg.com", "manta.com",
     # Search-result noise from public directories, social link pages, and
     # editorial databases. None is proof of an owned firm website. Unknown
     # domains still fail closed for attribution review.
@@ -164,6 +171,13 @@ def evaluate_published_source(html,lead):
         blocks=[exact_contact_block(html,lead["firm"],lead["phone"],r["email"],lead["source_url"]) for r in matches]
         html=" ".join(b for b in blocks if b)
         if not html:return {"attorneys":0,"emails":[],"website_candidates":[],"scoped_contact_matched":False}
+    if host == "wisbar.org":
+        from law_local.wisconsin_local_bars import scoped_contact
+        card=scoped_contact(html,lead.get("firm",""),lead.get("phone",""))
+        if card is None:
+            return {"attorneys":0,"emails":[],"website_candidates":[],
+                    "scoped_contact_matched":False}
+        return card
     if host == "irela.org":
         from law_local.irela_source import contact
         member, reason = contact(lead.get("source_url", ""), html)
@@ -281,8 +295,8 @@ def clearly_non_private_practice(firm):
     if clearly_non_law_employer(firm) or NON_PRIVATE.search(str(firm or "")):
         return True
     name=str(firm or "")
-    if re.search(r"(?i)\b(?:assistant\s+district\s+attorney|district\s+attorney|"
-                 r"state\s+attorney(?:'s)?\s+office|public\s+defender|"
+    if re.search(r"(?i)\b(?:assistant\s+district\s+attorneys?|district\s+attorneys?|"
+                 r"state\s+attorneys?(?:'s)?\s+office|public\s+defenders?|"
                  r"attorney\s+general|municipal\s+prosecutor)\b",name):
         return True
     practice=bool(re.search(r"(?i)\b(?:law|legal|attorneys?|lawyers?|counsel)\b",name))
@@ -361,6 +375,10 @@ class SqliteQueue:
                 updated TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status);
+            CREATE TABLE IF NOT EXISTS candidate_auto_review_rechecks(
+                candidate_id TEXT PRIMARY KEY, checked_at TEXT NOT NULL,
+                method TEXT NOT NULL
+            );
         """)
         # Only migrate obsolete statuses that were blocked by size or missing
         # email. Never demote already verified phone-qualified candidates.
@@ -382,6 +400,35 @@ class SqliteQueue:
              str(lead["source_url"]).strip(),utc_now()))
         self.conn.commit()
         return cur.rowcount>0
+    @staticmethod
+    def review_only_directories(evidence):
+        """Retry a site hold only when every historic URL is a known third party.
+
+        Explicit owned websites, unknown domains, and source website hints never
+        qualify for this automatic path; each retry still needs fresh evidence.
+        """
+        if (evidence.get("status")!="review_website"
+            or evidence.get("site_status")!="review_website"
+            or evidence.get("website_candidates") or evidence.get("owned_site_url")
+            or evidence.get("eligibility_hold")):
+            return False
+        site=evidence.get("site_evidence")
+        if not isinstance(site,dict) or site.get("reason")!="possible_owned_site":
+            return False
+        providers=site.get("providers",[])
+        # Legacy review records retained a specific URL but not per-provider
+        # metadata; permit a NEW controlled audit, never old-evidence clearance.
+        if providers and (len(providers)<2 or not all(
+                p.get("responded") is True for p in providers[:2])):
+            return False
+        urls=list(site.get("urls",[]))
+        for provider in providers:
+            urls.extend(provider.get("urls",[]))
+        return bool(urls) and all(
+            _public_http_url(url) and _third_party(urlparse(url).hostname or "")
+            for url in urls
+        )
+
     def pending(self,limit):
         # Retry inconclusive sources after a cooldown, not on every hourly
         # campaign. Pending new firms remain eligible immediately.
@@ -396,7 +443,27 @@ class SqliteQueue:
                            WHEN source_url LIKE 'https://www.inbar.org/%' OR
                                 source_url LIKE 'https://inbar.org/%' THEN 0 ELSE 1 END,
                       updated ASC LIMIT ?""",(cutoff,int(limit))).fetchall()
-        return [dict(row) for row in rows]
+        selected=[dict(row) for row in rows]
+        if len(selected)<limit:
+            # Only revisit safe directory-only holds, at most once per week.
+            # Prior captured unknown/owned URLs are never auto-promoted.
+            review_cutoff=(datetime.now(timezone.utc)-timedelta(days=7)).isoformat(timespec="seconds")
+            candidates=self.conn.execute("""SELECT c.* FROM candidates c
+                LEFT JOIN candidate_auto_review_rechecks a ON a.candidate_id=c.id
+                WHERE c.status='review_website'
+                  AND (a.checked_at IS NULL OR a.checked_at<?)
+                ORDER BY CASE WHEN c.source_url LIKE 'https://plea.net/%' THEN 0 ELSE 1 END,
+                         c.updated ASC LIMIT 2500""",(review_cutoff,)).fetchall()
+            for row in candidates:
+                try:
+                    previous=json.loads(row["result_json"] or "{}")
+                except (ValueError,TypeError):
+                    continue
+                if self.review_only_directories(previous):
+                    selected.append(dict(row))
+                    if len(selected)>=limit:
+                        break
+        return selected
     def record(self,lead,result):
         existing=self.conn.execute("SELECT * FROM candidates WHERE id=?",(self._id(lead),)).fetchone()
         prior=json.loads(existing["result_json"] or "{}") if existing else {}
@@ -407,6 +474,17 @@ class SqliteQueue:
         self.conn.execute("INSERT INTO candidate_check_history VALUES(?,?,?)",
                           (self._id(lead),utc_now(),json.dumps(result,sort_keys=True)))
         unresolved=prior.get("status")=="review_website"
+        if unresolved and result.get("review_method")=="automated_directory_only_recheck":
+            # Record attempted reviews even when the new evidence cannot clear
+            # the hold, so an unavailable source cannot loop every campaign.
+            self.conn.execute("""INSERT INTO candidate_auto_review_rechecks(candidate_id,checked_at,method)
+                VALUES(?,?,?) ON CONFLICT(candidate_id) DO UPDATE SET
+                checked_at=excluded.checked_at,method=excluded.method""",
+                (self._id(lead),utc_now(),"directory_only_live_recheck_v1"))
+            if (self.review_only_directories(prior)
+                and result.get("status") in ("strict_eligible","call_qualified_no_email")
+                and self._verified_for_export(existing,result,result["status"])):
+                unresolved=False
         if unresolved and result.get("review_method")=="operator_two_provider_review":
             from ops.local_law.import_site_reviews import validate
             review=result.get("operator_review",{})
@@ -420,7 +498,8 @@ class SqliteQueue:
             unresolved=False
         conclusive_adverse=(result.get("eligibility_hold") or result.get("owned_site_url") or
                             result.get("site_status")=="published_owned_website" or
-                            result.get("status") in ("rejected_inactive","review_inactive"))
+                            result.get("status") in ("rejected_inactive","review_inactive",
+                                                     "review_nonlaw_employer"))
         prior_hold=((unresolved and not conclusive_adverse) or prior.get("eligibility_hold") or
                     prior.get("status") in ("rejected_inactive","review_inactive") or
                     prior.get("owned_site_url") or prior.get("site_status")=="published_owned_website")
@@ -772,6 +851,8 @@ def process_candidate(lead,site_search_usable=True):
         elif (urlparse(source_url).hostname or "").removeprefix("www.") == "irela.org":
             from law_local.irela_source import fetch_profile
             html = fetch_profile(source_url)
+        elif (urlparse(source_url).hostname or "").removeprefix("www.") == "wisbar.org":
+            html=_shared_directory_page(source_url,int(time.time()//300))
         else:
             html=fetch_public(source_url)
         if not firm_identity_matches(html,lead):
@@ -814,6 +895,8 @@ def run_batch(db,max_rows=100,workers=4,seconds=600,site_search_usable=True):
                 except Exception as exc:
                     result={"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
                 result=apply_verified_bar_contact_proof(db,lead,result)
+                if lead.get("status")=="review_website":
+                    result["review_method"]="automated_directory_only_recheck"
                 if result.get("status")=="call_qualified_no_email":
                     from law_local.catalog_email import recover
                     db_file=db.conn.execute("PRAGMA database_list").fetchone()[2]

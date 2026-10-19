@@ -97,6 +97,25 @@ class PleaSourceTests(unittest.TestCase):
   self.assertIn('dc',STATES)
   self.assertIn('wi',STATES)
 
+ def test_personal_mailbox_has_priority_over_member_count_without_size_gate(self):
+  from ops.local_law.plea_source import ensure
+  c=sqlite3.connect(self.path);ensure(c)
+  firms=[('large','Custom Firm LLC',8,'j@customlawfirm.example','3124221836'),
+         ('solo','Solo Attorney Law Office',1,'solo@hotmail.com','6464221836')]
+  for id,firm,count,email,phone in firms:
+   source={'firm':firm,'phone':phone,'states':['NY'],'members':[{'email':email,'person':'Example Attorney',
+      'source_url':'https://plea.net/attorneys/ny/#post_22'}]}
+   c.execute('INSERT INTO plea_firm_research(id,firm,phone,member_count,research_json,collected_at) VALUES(?,?,?,?,?,?)',
+             (id,firm,phone,count,json.dumps(source),'2026-10-17T00:00:00+00:00'))
+  c.commit();c.close()
+  calls=[]
+  def search(lead):
+   calls.append(lead['firm'])
+   return [{'provider':'searxng:yandex','responded':True,'urls':[]},
+           {'provider':'searxng:yep','responded':True,'urls':[]}]
+  audit_sites(self.path,limit=1,search=search,health=lambda:{'status':'usable','positive_control_found':True})
+  self.assertEqual(calls,['Solo Attorney Law Office'])
+
  def test_website_research_prioritizes_two_member_firm_with_public_mailbox(self):
   from ops.local_law.plea_source import ensure
   c=sqlite3.connect(self.path);ensure(c)

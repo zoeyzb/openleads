@@ -31,6 +31,7 @@ class EmployerGateTests(unittest.TestCase):
         self.assertTrue(clearly_non_private_practice(
             "Caroline E Hemphill, Franklin Parish Assistant District Attorney"))
         self.assertTrue(clearly_non_private_practice("State Attorney's Office"))
+        self.assertTrue(clearly_non_private_practice("Public Defenders Office 18th Circuit"))
         self.assertFalse(clearly_non_private_practice("Cahill Law Office"))
 
     def test_generic_attorney_title_is_not_an_identified_practice(self):

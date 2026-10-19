@@ -187,15 +187,15 @@ def audit_sites(catalog=ROOT/'research_catalog.sqlite3',limit=8,search=search_fi
                  WHEN (lower(research_json) LIKE '%@gmail.com%'
                        OR lower(research_json) LIKE '%@yahoo.com%'
                        OR lower(research_json) LIKE '%@aol.com%'
-                       OR lower(research_json) LIKE '%@outlook.com%')
-                     AND member_count>=2 THEN 0
-                 WHEN member_count>=2 THEN 1
-                 WHEN (lower(research_json) LIKE '%@gmail.com%'
-                       OR lower(research_json) LIKE '%@yahoo.com%'
-                       OR lower(research_json) LIKE '%@aol.com%'
-                       OR lower(research_json) LIKE '%@outlook.com%') THEN 2
-                 ELSE 3 END,
-                 member_count DESC,firm,id LIMIT ?''',(int(recheck_screened),due,limit)).fetchall()
+                       OR lower(research_json) LIKE '%@outlook.com%'
+                       OR lower(research_json) LIKE '%@hotmail.com%'
+                       OR lower(research_json) LIKE '%@msn.com%'
+                       OR lower(research_json) LIKE '%@att.net%'
+                       OR lower(research_json) LIKE '%@icloud.com%'
+                       OR lower(research_json) LIKE '%@comcast.net%'
+                       OR lower(research_json) LIKE '%@live.com%') THEN 0
+                 ELSE 1 END,
+                 firm,id LIMIT ?''',(int(recheck_screened),due,limit)).fetchall()
         for record in rows:
             research=json.loads(record['research_json'])
             city=research.get('cities',[''])[0] if len(research.get('cities',[]))==1 else ''
