@@ -76,6 +76,13 @@ DIRECTORY_DOMAINS = (
     "attorneys.org", "bestlawfirms.com", "lawyerpages.law",
     "findpersonalinjurylawyer.com", "datanyze.com",
     "zipleaf.us", "dexknows.com", "lawyersamerica.net",
+    # Verified publisher-owned directories / legal research websites, NOT
+    # domains owned by the attorney appearing on a profile or docket.
+    # Publisher declarations: lexinter.net, lawtally.com/about-us,
+    # attorneyatlaw.com/location/, lawyers.onecle.com/lawyers/, and
+    # pacermonitor.com/about. Checked independently on 2026-10-19.
+    "lexinter.net", "lawtally.com", "attorneyatlaw.com", "onecle.com",
+    "pacermonitor.com",
 )
 EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[\s.()\-]*)?([2-9]\d{2})[\s.()/\-]*([2-9]\d{2})[\s./\-]*(\d{4})(?!\d)")
