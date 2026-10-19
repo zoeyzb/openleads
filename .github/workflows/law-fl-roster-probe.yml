@@ -13,7 +13,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: recover-scrape-mcp
       - name: Respect robots policy and verify actual firm roster format and phone
         run: |
           python3 - <<'PY'

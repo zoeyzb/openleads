@@ -13,7 +13,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: recover-scrape-mcp
           persist-credentials: false
       - name: Run bounded multi-state public Maps queries (no hosted infrastructure)
         shell: bash
