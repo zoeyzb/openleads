@@ -158,7 +158,7 @@ def process_backlog():
     """
     try:
         result=command(["-m","law_local.worker","--db",str(DB),"run",
-                        "--max","60","--workers","2","--seconds","240"],285)
+                        "--max","12","--workers","1","--seconds","240"],285)
         code=result.returncode
         output=(result.stdout+result.stderr)[-5000:]
     except subprocess.TimeoutExpired:
@@ -178,12 +178,28 @@ def process_backlog():
         log.write(json.dumps(record)+"\n")
     return code
 
+def qualification_search_health():
+ from law_local.site_provider_health import audit_provider_health
+ # Match the worker's existing local search default, including launchd.
+ os.environ.setdefault('OPENLEADS_SEARCH_MODE','local_forks')
+ return audit_provider_health()
+
 def cycle():
  import fcntl
  ROOT.mkdir(exist_ok=True)
  with (ROOT/"campaign.lock").open("w") as lock:
   try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
   except BlockingIOError: print('another run is active');return 2
+  health=qualification_search_health()
+  log_record(dict(time=now(),event='qualification_search_preflight',site_provider_health=health))
+  if health.get('status')!='usable':
+   calling=calling_export();email=strict_export()
+   log_record(dict(time=now(),event='paused_qualification_search',
+                   reason='independent_search_controls_failed',calling_qualified=calling,
+                   email_qualified=email,discovery_skipped=True))
+   print(json.dumps(dict(event='paused_qualification_search',site_provider_health=health,
+                         discovery_skipped=True,calling_qualified=calling,email_qualified=email)))
+   return 3
   from ops.local_law.any_size_policy import apply
   from ops.local_law.bridge_contacts import bridge
   log_record(dict(time=now(),any_size_migration=apply(ROOT)))

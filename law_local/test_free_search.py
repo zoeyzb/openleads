@@ -83,7 +83,7 @@ class FreeSearchTests(unittest.TestCase):
         lead={'firm':'AXS Law Group','city':'Miami','state':'FL'}
         with patch.dict('os.environ', {'OPENLEADS_YACY_ENABLED':'0'}), patch('law_local.free_search.searx_engine', side_effect=lambda query,engine,lead=None: {'provider':'searxng:'+engine,'responded':True,'urls':[]} ) as engine:
             sources=free_search.search_firm(lead)
-            self.assertEqual([x['provider'] for x in sources], ['searxng:yandex','searxng:yep'])
+            self.assertEqual([x['provider'] for x in sources], ['searxng:google cse','searxng:yep'])
             self.assertEqual(engine.call_count,4)
 
     def test_truncated_source_name_does_not_hide_possible_owned_site(self):
@@ -187,3 +187,51 @@ class ShortFirmPhoneRelevanceTests(unittest.TestCase):
             lead={'firm':'DC Law Group','phone':'2064940400'})
         self.assertTrue(result['responded'])
         self.assertEqual(result['urls'],['https://lawyers.com/dc-law-group'])
+
+class PhoneFallbackTests(unittest.TestCase):
+    lead={'firm':'Kenneth Lamar Hosford','phone':'8505669318','state':'FL'}
+    def test_exact_phone_result_can_complete_same_engine_check(self):
+        initial={'provider':'searxng:yandex','responded':False,'urls':[],
+            'reason':'no_relevant_candidate_results','query':'name query'}
+        fallback={'provider':'searxng:yandex','responded':True,
+            'urls':['https://floridabar.org/profile/123'],'reason':'results','query':'phone query'}
+        with patch('law_local.free_search.searx_engine',side_effect=[initial,fallback]) as search:
+            got=free_search.candidate_search('name query','yandex',self.lead)
+        self.assertTrue(got['responded'])
+        self.assertEqual(got['query_attempts'],[initial,fallback])
+        self.assertEqual(search.call_args.kwargs['lead']['firm'],'')
+    def test_outage_never_triggers_fallback(self):
+        initial={'provider':'searxng:yandex','responded':False,'urls':[],'reason':'engine_unresponsive'}
+        with patch('law_local.free_search.searx_engine',return_value=initial) as search:
+            self.assertFalse(free_search.candidate_search('name','yandex',self.lead)['responded'])
+            self.assertEqual(search.call_count,1)
+    def test_empty_or_failed_fallback_does_not_clear(self):
+        initial={'provider':'searxng:yandex','responded':False,'urls':[],'reason':'no_relevant_candidate_results'}
+        for reason in ['engine_unresponsive','no_relevant_candidate_results']:
+            with patch('law_local.free_search.searx_engine',side_effect=[initial,{**initial,'reason':reason}]):
+                self.assertFalse(free_search.candidate_search('name','yandex',self.lead)['responded'])
+    def test_phone_only_match_requires_exact_phone_and_legal_context(self):
+        lead={**self.lead,'firm':''}
+        payload={'results':[{'url':'https://owned.example','engine':'yandex',
+            'title':'Kenneth Hosford attorney','content':'850-566-9318'},
+            {'url':'https://other.example','engine':'yandex','title':'Hosford attorney','content':'850-566-9319'}]}
+        got=free_search.searx_engine('phone','yandex',lead=lead,fetch=lambda _:payload)
+        self.assertEqual(got['urls'],['https://owned.example'])
+
+class PacingTests(unittest.TestCase):
+    def test_same_engine_requests_wait_without_retrying_request(self):
+        with patch.dict(free_search._ENGINE_LAST_REQUEST,{'yep':100.0},clear=True), \
+             patch.object(free_search.time,'monotonic',return_value=101.0), \
+             patch.object(free_search.time,'sleep') as sleep, \
+             patch.object(free_search,'_read_json',return_value={'results':[]}) as read:
+            free_search._paced_request('http://127.0.0.1:18888/search','yep')
+            sleep.assert_called_once_with(4.0)
+            read.assert_called_once()
+    def test_supplemental_attempts_retain_per_engine_queries(self):
+        def response(query,engine,lead=None):
+            return dict(provider='searxng:'+engine,responded=True,urls=['https://lawyers.com/fixture'],query=query,checked_at='fixture',reason='results')
+        with patch.object(free_search,'searx_engine',side_effect=response):
+            found=free_search.search_firm(dict(firm='Quinn Legal',phone='3124221836',state='IL'))
+        extra=next(x for x in found if x['provider']=='alias_phone_positive_only')
+        self.assertEqual(len(extra['query_attempts']),4)
+        self.assertEqual({x['provider'] for x in extra['query_attempts']},set(free_search.SITE_PROVIDERS))

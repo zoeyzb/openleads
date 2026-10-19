@@ -69,7 +69,7 @@ class PleaSourceTests(unittest.TestCase):
   searches=[]
   def search(lead):
    searches.append(lead['firm'])
-   return [{'provider':'searxng:yandex','responded':True,'urls':['https://dover-associates.example/']},
+   return [{'provider':'searxng:google cse','responded':True,'urls':['https://dover-associates.example/']},
            {'provider':'searxng:yep','responded':True,'urls':['https://lawyers.com/example']}]
   ok={'status':'usable','positive_control_found':True}
   result=audit_sites(self.path,limit=8,search=search,health=lambda:ok)
@@ -82,7 +82,7 @@ class PleaSourceTests(unittest.TestCase):
   self.assertEqual(again['attempted'],0)
  def test_two_searches_with_only_directories_stage_no_site_not_eligible(self):
   ingest(self.path,states=['de'],fetch=lambda *args,**kwargs:PAGE)
-  def search(_):return [{'provider':'searxng:yandex','responded':True,'urls':['https://www.lawyers.com/example']},
+  def search(_):return [{'provider':'searxng:google cse','responded':True,'urls':['https://www.lawyers.com/example']},
                          {'provider':'searxng:yep','responded':True,'urls':['https://justia.com/attorneys/example']}]
   res=audit_sites(self.path,search=search,health=lambda:{'status':'usable','positive_control_found':True})
   self.assertEqual(res['no_attributable_site_found'],2)
@@ -111,7 +111,7 @@ class PleaSourceTests(unittest.TestCase):
   calls=[]
   def search(lead):
    calls.append(lead['firm'])
-   return [{'provider':'searxng:yandex','responded':True,'urls':[]},
+   return [{'provider':'searxng:google cse','responded':True,'urls':[]},
            {'provider':'searxng:yep','responded':True,'urls':[]}]
   audit_sites(self.path,limit=1,search=search,health=lambda:{'status':'usable','positive_control_found':True})
   self.assertEqual(calls,['Solo Attorney Law Office'])
@@ -128,7 +128,7 @@ class PleaSourceTests(unittest.TestCase):
   called=[]
   def search(lead):
    called.append(lead['firm'])
-   return [{'provider':'searxng:yandex','responded':True,'urls':['https://lawyers.com/example']},
+   return [{'provider':'searxng:google cse','responded':True,'urls':['https://lawyers.com/example']},
            {'provider':'searxng:yep','responded':True,'urls':['https://justia.com/attorneys/example']}]
   result=audit_sites(self.path,limit=1,search=search,
            health=lambda:{'status':'usable','positive_control_found':True})

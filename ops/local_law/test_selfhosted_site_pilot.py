@@ -25,7 +25,7 @@ class LocalPilotTests(unittest.TestCase):
     def found(lead):
         website=lead['firm'].endswith('2')
         result=[]
-        for name in ('yandex','yep'):
+        for name in ('google cse','yep'):
             result.append({'provider':'searxng:'+name,'responded':True,'urls':[f'https://{lead["firm"].replace(" ","").lower()}.com/'] if website else ['https://www.lawyers.com/example/']})
         return result
     def test_source_only_dedup_and_resume(self):
@@ -71,7 +71,7 @@ class LocalPilotTests(unittest.TestCase):
         c=sqlite3.connect(self.root/'research_catalog.sqlite3')
         c.execute("""CREATE TABLE local_selfhosted_site_checks
            (map_id TEXT PRIMARY KEY,firm TEXT,phone TEXT,checked_at TEXT,status TEXT,evidence_json TEXT)""")
-        sources=[{'provider':'searxng:yandex','responded':True,
+        sources=[{'provider':'searxng:google cse','responded':True,
                   'urls':['https://reviews.birdeye.com/example-law']},
                  {'provider':'searxng:yep','responded':True,
                   'urls':['https://www.lawyers.com/example']}]

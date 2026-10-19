@@ -30,6 +30,7 @@ USER_AGENT = "OpenLeads-Law-Evidence/1.0 (+https://github.com/zoeyzb/openleads)"
 DIRECTORY_DOMAINS = (
     "lawyers.com", "lawyer.com", "avvo.com", "justia.com", "inbar.org", "wisbar.org",
     "findthelawfirms.com", "findthelawyers.com", "floridalawdirectory.com",
+    "floridabarmonitor.com", "alumnius.net",
     "findlaw.com", "martindale.com", "superlawyers.com",
     "floridabar.org", "mywsba.org", "wsba.org", "americanbar.org", "lawinfo.com",
     "facebook.com", "linkedin.com", "instagram.com", "youtube.com",
@@ -140,6 +141,9 @@ def firm_identity_matches(html,lead):
     if (urlparse(lead.get("source_url", "")).hostname or "") == "data.ny.gov":
         from law_local.ny_contacts import scoped_contact
         return scoped_contact(html,lead) is not None
+    if (urlparse(lead.get("source_url", "")).hostname or "") == "floridabarmonitor.com":
+        from law_local.flbar_monitor import contact
+        return contact(html,lead) is not None
     p=reader(html)
     text=norm(" ".join(p.parts))
     firm=norm(lead.get("firm",""))
@@ -165,6 +169,10 @@ def evaluate_published_source(html,lead):
     if not firm_identity_matches(html,lead):
         return {"attorneys":0,"emails":[],"website_candidates":[]}
     host=(urlparse(lead.get("source_url","")).hostname or "").removeprefix("www.")
+    if host=="floridabarmonitor.com":
+        from law_local.flbar_monitor import contact
+        return contact(html,lead) or {"attorneys":0,"emails":[],
+            "website_candidates":[],"scoped_contact_matched":False}
     if host=="data.ny.gov":
         from law_local.ny_contacts import scoped_contact
         return scoped_contact(html,lead) or {"attorneys":0,"emails":[],
@@ -321,6 +329,8 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
     # A firm-controlled source URL is itself proof of an owned website,
     # even if both search engines mistakenly return no results.
     host=urlparse(str(lead.get("source_url",""))).hostname or ""
+    if source.get("fl_private_contact"):
+        evidence["fl_private_contact"]=source["fl_private_contact"]
     if source.get("official_contact"):
         evidence["official_contact"]=source["official_contact"]
     if not _third_party(host) and not source.get("official_contact"):
@@ -342,7 +352,7 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
     evidence["site_evidence"]={"checked_at":utc_now(),"providers":[
         {"provider":r.get("provider","unknown"),"responded":bool(r.get("responded")),
          "query":r.get("query",""),"checked_at":r.get("checked_at",""),
-         "reason":r.get("reason",""),
+         "reason":r.get("reason",""),"query_attempts":r.get("query_attempts",[]),
          "urls":[v for v in r.get("urls",[])[:10] if _public_http_url(v)]}
         for r in search_results]}
     if site["status"]!="screened_no_site":
@@ -497,12 +507,18 @@ class SqliteQueue:
                 and self._verified_for_export(existing,result,result["status"])):
                 unresolved=False
         if unresolved and result.get("review_method")=="operator_two_provider_review":
-            from ops.local_law.import_site_reviews import validate
+            from ops.local_law.import_site_reviews import validate,reviewed_hits
             review=result.get("operator_review",{})
             reviewed_lead=validate(review)
-            reviewed={h["url"] for p in review["providers"] for h in p["results"]
+            reviewed={h["url"] for h in reviewed_hits(review)
                       if h["disposition"] in ("directory","social","unrelated")}
-            prior_urls=set(prior.get("website_candidates",[])) | set(prior.get("site_evidence",{}).get("urls",[]))
+            prior_site=prior.get("site_evidence",{})
+            prior_urls=set(prior.get("website_candidates",[])) | set(prior_site.get("urls",[]))
+            # Recent searches preserve URL evidence inside per-engine records,
+            # not only the older top-level `urls` list. All historical
+            # candidate URLs must receive a disposition; missing any is a hold.
+            for provider in prior_site.get("providers",[]):
+                prior_urls.update(provider.get("urls",[]))
             if (not prior_urls or not prior_urls.issubset(reviewed) or
                     self._id(reviewed_lead)!=self._id(lead)):
                 raise ValueError("unresolved website candidates require explicit operator review")
@@ -550,6 +566,14 @@ class SqliteQueue:
                 return False
             if not normalize_phone(row["phone"]) or normalize_phone(row["phone"])!=normalize_phone(evidence.get("phone")):
                 return False
+            if evidence.get('review_method')=='operator_two_provider_review':
+                from ops.local_law.import_site_reviews import validate,reviewed_hits
+                reviewed=validate(evidence.get('operator_review',{}))
+                if (norm(reviewed['firm'])!=norm(row['firm'])
+                    or normalize_phone(reviewed['phone'])!=normalize_phone(row['phone'])
+                    or any(h['disposition'] in ('owned','uncertain')
+                           for h in reviewed_hits(evidence['operator_review']))):
+                    return False
             identity_source=evidence.get("identity_source") or evidence.get("source_url") or row["source_url"]
             if not identity_source:
                 return False
@@ -557,6 +581,9 @@ class SqliteQueue:
                     and evidence.get("source_proof",{}).get("headcount_source")==identity_source
                     and evidence.get("source_proof",{}).get("identity_source")==row["source_url"]):
                 pass  # Complete source provenance is checked below.
+            elif (urlparse(identity_source).hostname or "")=="floridabarmonitor.com":
+                from law_local.flbar_monitor import export_proof_matches
+                if not export_proof_matches(row,evidence):return False
             elif (urlparse(identity_source).hostname or "")=="data.ny.gov":
                 from law_local.ny_contacts import export_proof_matches
                 if not export_proof_matches(row,evidence):return False
@@ -909,12 +936,18 @@ def run_batch(db,max_rows=100,workers=4,seconds=600,site_search_usable=True):
                 break
             batch=candidates[offset:offset+concurrency]
             future_to_lead={pool.submit(process_candidate,row,site_search_usable):row for row in batch}
+            provider_failed=False
             for future in as_completed(future_to_lead):
                 lead=future_to_lead[future]
                 try:
                     result=future.result()
                 except Exception as exc:
                     result={"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
+                providers=result.get('site_evidence',{}).get('providers',[])
+                provider_failed=provider_failed or any(
+                    p.get('responded') is False and p.get('reason') in
+                    ('engine_unresponsive','OSError','TimeoutError','URLError')
+                    for p in providers[:2])
                 result=apply_verified_bar_contact_proof(db,lead,result)
                 if lead.get("status")=="review_website":
                     result["review_method"]="automated_directory_only_recheck"
@@ -926,6 +959,10 @@ def run_batch(db,max_rows=100,workers=4,seconds=600,site_search_usable=True):
                 db.record(lead,result)
                 total[result["status"]]=total.get(result["status"],0)+1
                 print(json.dumps({"event":"law_local_lead_processed","firm":lead["firm"],"status":result["status"]}),flush=True)
+            if provider_failed:
+                print(json.dumps({'event':'batch_paused_search_outage',
+                                  'remaining':max(0,len(candidates)-offset-len(batch))}),flush=True)
+                break
     return total
 
 def import_csv(db,path):

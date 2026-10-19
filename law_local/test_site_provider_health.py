@@ -39,3 +39,11 @@ class SiteProviderHealthTests(unittest.TestCase):
         self.assertEqual(detail["http_status"],429)
         self.assertEqual(detail["retry_after_seconds"],21600)
         self.assertEqual(out["status"],"degraded")
+
+    def test_local_control_avoids_supplemental_alias_requests(self):
+        from unittest.mock import patch
+        from law_local.site_provider_health import control_sources,CONTROL
+        with patch.dict('os.environ',{'OPENLEADS_SEARCH_MODE':'local_forks'}), \
+             patch('law_local.free_search.candidate_search',return_value={'responded':True}) as search:
+            self.assertEqual(len(control_sources(CONTROL)),2)
+            self.assertEqual(search.call_count,2)

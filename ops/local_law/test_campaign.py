@@ -125,6 +125,7 @@ class SchedulerTests(unittest.TestCase):
    with (patch.object(campaign,"ROOT",root),
          patch.object(campaign,"SRC",root/"openleads"),
          patch.object(campaign,"STATES",[]),
+         patch.object(campaign,"qualification_search_health",return_value={"status":"usable"}),
          patch.object(campaign,"command",return_value=CompletedProcess([],0,"{}","")),
          patch.object(campaign,"process_backlog",return_value=0) as verify,
          patch.object(campaign,"calling_export",return_value=0) as calling,
@@ -158,3 +159,18 @@ class NYDiscoveryResultTests(unittest.TestCase):
   payload['added_unverified']=0
   self.assertEqual(campaign.discovery_result(0,json.dumps(payload)),'zero_source_yield')
   self.assertEqual(campaign.discovery_result(1,json.dumps(payload)),'failed')
+
+class ProviderAcquisitionGateTests(unittest.TestCase):
+ def test_outage_exports_existing_proof_but_does_not_collect_or_verify(self):
+  with tempfile.TemporaryDirectory() as root, \
+       patch.object(campaign,'ROOT',Path(root)), \
+       patch.object(campaign,'qualification_search_health',return_value={'status':'degraded'}), \
+       patch.object(campaign,'calling_export',return_value=6), \
+       patch.object(campaign,'strict_export',return_value=3), \
+       patch.object(campaign,'command') as command, \
+       patch.object(campaign,'process_backlog') as verify:
+   self.assertEqual(campaign.cycle(),3)
+   command.assert_not_called();verify.assert_not_called()
+   receipt=(Path(root)/'campaign-runs.log').read_text()
+   self.assertIn('paused_qualification_search',receipt)
+   self.assertIn('"discovery_skipped": true',receipt)

@@ -120,3 +120,48 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(q.conn.execute("SELECT status FROM candidates").fetchone()[0],"rejected_inactive")
             q.close()
 if __name__=="__main__":unittest.main()
+
+class ScopedSourceReviewTests(unittest.TestCase):
+    def test_monitor_source_proof_survives_operator_review_and_export(self):
+        from datetime import datetime,timezone
+        from law_local.test_flbar_monitor import MonitorTests
+        sample=MonitorTests();sample.setUp()
+        review=fixture();review['lead']=sample.lead
+        for provider,name in zip(review['providers'],('searxng:google cse','searxng:yep')):provider['provider']=name
+        review['identity_text']=sample.raw.replace('18 Oct 2026',datetime.now(timezone.utc).strftime('%d %b %Y'))
+        with tempfile.TemporaryDirectory() as d:
+            db=Path(d)/'q.db'
+            self.assertEqual(import_reviews(db,[review])['new_verified'],1)
+            q=SqliteQueue(db)
+            self.assertEqual(q.export('calling_qualified',Path(d)/'calls.csv'),1)
+            import json
+            row=q.conn.execute('SELECT * FROM candidates').fetchone()
+            proof=json.loads(row['result_json'])
+            self.assertTrue(proof['fl_private_contact']['private_practice_confirmed'])
+            proof['fl_private_contact']['phone']='8505669319'
+            self.assertFalse(q._verified_for_export(row,proof,row['status']))
+            q.close()
+
+    def test_monitor_source_website_hint_cannot_be_cleared_by_review_assertion(self):
+        from datetime import datetime,timezone
+        from law_local.test_flbar_monitor import MonitorTests
+        sample=MonitorTests();sample.setUp()
+        review=fixture();review['lead']=sample.lead
+        for provider,name in zip(review['providers'],('searxng:google cse','searxng:yep')):provider['provider']=name
+        review['identity_text']=sample.raw.replace('18 Oct 2026',datetime.now(timezone.utc).strftime('%d %b %Y')).replace('<dd>—</dd>','<dd>https://uncertain.example</dd>')
+        with self.assertRaisesRegex(ValueError,'website hint'):
+            validate(review)
+
+class SupplementalReviewTests(unittest.TestCase):
+    def test_supplemental_urls_resolve_holds_without_fabricated_index_attribution(self):
+        with tempfile.TemporaryDirectory() as d:
+            db=Path(d)/'q.db';review=fixture();q=SqliteQueue(db);q.add(review['lead'])
+            url='https://publication.example/legal-notice'
+            q.record(review['lead'],{'status':'review_website','site_evidence':{'urls':[url]}});q.close()
+            review['supplemental_results']=[dict(url=url,disposition='unrelated',note='Third party newspaper publisher, not practice-owned.',provenance='Combined positive-only search saved in original audit; exact index attribution unavailable.')]
+            self.assertEqual(import_reviews(db,[review])['new_verified'],1)
+            q=SqliteQueue(db);row=q.conn.execute('SELECT * FROM candidates').fetchone()
+            import json
+            proof=json.loads(row['result_json']);proof['operator_review']['supplemental_results'][0]['disposition']='uncertain'
+            self.assertFalse(q._verified_for_export(row,proof,row['status']))
+            q.close()

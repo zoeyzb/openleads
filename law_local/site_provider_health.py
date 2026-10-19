@@ -18,13 +18,25 @@ CONTROL={"firm":"AXS Law Group","phone":"3057030274",
          "city":"Miami","state":"FL"}
 KNOWN_DOMAIN="axslawgroup.com"
 
+def control_sources(control):
+    # Controls need the exact known-site query, not every positive-only alias
+    # query used for ownership review. Avoid redundant free-engine requests.
+    import os
+    if os.environ.get('OPENLEADS_SEARCH_MODE')!='local_forks':
+        return worker.search_for_firm(control)
+    from concurrent.futures import ThreadPoolExecutor
+    from law_local.free_search import candidate_search,SITE_ENGINES
+    query='"'+control['firm']+'" law firm '+control['city']+' '+control['state']
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        return list(pool.map(lambda engine:candidate_search(query,engine,control),SITE_ENGINES))
+
 def bounded_sources(seconds=20):
     """Hard wall clock limit, including HTTP body reads; kill/reap on timeout.
 
     An independent Python entrypoint also works from interactive/stdin callers,
     unlike multiprocessing spawn which tries to reload a nonexistent <stdin>.
     """
-    code="import json; from law_local.worker import search_for_firm; from law_local.site_provider_health import CONTROL; print(json.dumps(search_for_firm(CONTROL)))"
+    code="import json; from law_local.site_provider_health import CONTROL,control_sources; print(json.dumps(control_sources(CONTROL)))"
     try:
         result=subprocess.run([sys.executable,"-c",code],
             cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True,

@@ -11,7 +11,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
-from law_local.worker import SqliteQueue, firm_identity_matches, utc_now, norm
+from law_local.worker import SqliteQueue, firm_identity_matches, evaluate_published_source, utc_now, norm
 from law_local.florida_roster import clearly_non_law_employer
 
 STATES=set("AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC".split())
@@ -27,6 +27,9 @@ def fresh(value, days=7):
     except (TypeError, ValueError, AttributeError):
         return False
 
+def reviewed_hits(review):
+    return [h for p in review.get('providers',[]) for h in p.get('results',[])]+review.get('supplemental_results',[])
+
 def validate(review):
     lead=review["lead"]
     if lead.get("state") not in STATES or not public_url(lead.get("source_url","")):
@@ -35,6 +38,10 @@ def validate(review):
         raise ValueError("private law practice identity required")
     if not firm_identity_matches(review.get("identity_text",""),lead):
         raise ValueError("source text must bind the firm name and published phone")
+    if urlparse(lead['source_url']).hostname in ('floridabarmonitor.com','data.ny.gov'):
+        source=evaluate_published_source(review.get('identity_text',''),lead)
+        if source.get('website_candidates'):
+            raise ValueError('scoped source website hint remains unresolved')
     if not fresh(review.get("checked_at")) or not review.get("reviewer"):
         raise ValueError("fresh dated operator review required")
     providers=review.get("providers",[])
@@ -57,6 +64,11 @@ def validate(review):
         for h in hits:
             if not public_url(h.get("url","")) or not h.get("note") or h.get("disposition") not in ("directory","social","unrelated","owned","uncertain"):
                 raise ValueError("every result needs an explicit ownership review")
+    for hit in review.get('supplemental_results',[]):
+        if (not public_url(hit.get('url','')) or not hit.get('note')
+            or not hit.get('provenance')
+            or hit.get('disposition') not in ('directory','social','unrelated','owned','uncertain')):
+            raise ValueError('supplemental review needs URL, provenance and disposition')
     if not review.get("notes"):
         raise ValueError("review conclusion required")
     return lead
@@ -83,7 +95,7 @@ def import_reviews(db_path,reviews):
             prior=json.loads(existing[0] or "{}")
             if prior.get("eligibility_hold") or prior.get("status") in ("rejected_inactive","review_inactive"):
                 raise ValueError("existing inactive-practice hold requires explicit resolution")
-            flagged=[h for p in review["providers"] for h in p["results"] if h["disposition"] in ("owned","uncertain")]
+            flagged=[h for h in reviewed_hits(review) if h["disposition"] in ("owned","uncertain")]
             # Existing conclusive owned-site evidence cannot be erased by a
             # new negative search. Explicitly resolve it outside this importer.
             prior_owned=prior.get("site_status")=="published_owned_website" or bool(prior.get("owned_site_url"))
@@ -98,8 +110,14 @@ def import_reviews(db_path,reviews):
                 "site_status":"review_website" if flagged else "screened_no_site",
                 "checked_at":review["checked_at"],"email":"","email_source":"",
                 "review_method":"operator_two_provider_review",
-                "site_evidence":{"providers":review["providers"]},
+                "site_evidence":{"providers":[{**p,"urls":[h["url"] for h in p["results"]]} for p in review["providers"]]},
                 "operator_review":review}
+            # Preserve exact dated scoped-source proof for the canonical
+            # export gate. Never replace it with an operator assertion.
+            if urlparse(lead['source_url']).hostname in ('floridabarmonitor.com','data.ny.gov'):
+                scoped=evaluate_published_source(review['identity_text'],lead)
+                for key in ('fl_private_contact','official_contact'):
+                    if key in scoped:result[key]=scoped[key]
             if flagged:
                 result["owned_site_url"]=flagged[0]["url"]
                 stats["owned_or_uncertain"]+=1
