@@ -139,3 +139,53 @@ class FloridaRosterTests(unittest.TestCase):
             db.conn.commit()
             self.assertEqual(add_or_upgrade(db,{**lead,"source_url":URL+"/new"}),"preserved_other_status")
             db.close()
+
+class ListingPolicyCheckpointTests(unittest.TestCase):
+    def test_old_size_filtered_page_is_refreshed_once_without_erasing_holds(self):
+        from law_local.florida_roster import discover_listings
+        with tempfile.TemporaryDirectory() as folder:
+            q=SqliteQueue(Path(folder)/'queue.sqlite')
+            ensure_tables(q)
+            q.conn.execute('INSERT INTO fl_roster_pages VALUES (1,?,?,?)',('2026-10-01',6,4))
+            q.conn.execute('INSERT INTO fl_roster_frontier VALUES (?,?,?,?,?)',
+                (URL,3,'2026-10-01','2026-10-01','confirmed_owned'))
+            q.conn.commit()
+            calls=[]
+            def fetch(url,timeout=11):
+                calls.append(url)
+                return LIST
+            discover_listings(q,fetch_fn=fetch,max_pages=1,seconds=10,polite_wait=0)
+            discover_listings(q,fetch_fn=fetch,max_pages=1,seconds=10,polite_wait=0)
+            self.assertEqual(calls.count(ROOT+'/firms'),1)
+            self.assertIsNotNone(q.conn.execute('SELECT 1 FROM fl_roster_frontier WHERE url=?',
+                (ROOT+'/firm/solo-lawyer',)).fetchone())
+            self.assertEqual(q.conn.execute('SELECT status FROM fl_roster_frontier WHERE url=?',
+                (URL,)).fetchone()[0],'confirmed_owned')
+            q.close()
+
+class ListingBudgetResumeTests(unittest.TestCase):
+    def test_one_page_budget_advances_after_checkpointed_page(self):
+        from law_local.florida_roster import discover_listings
+        with tempfile.TemporaryDirectory() as folder:
+            q=SqliteQueue(Path(folder)/'queue.sqlite')
+            calls=[]
+            def fetch(url,timeout=11):
+                calls.append(url);return LIST
+            for _ in range(2):
+                discover_listings(q,fetch_fn=fetch,max_pages=1,seconds=10,polite_wait=0)
+            self.assertEqual(calls,[ROOT+'/firms',ROOT+'/firms?page=2'])
+            q.close()
+
+class OptionalCountSourceTests(unittest.TestCase):
+    def test_changed_or_unknown_count_does_not_discard_matching_source(self):
+        from law_local.florida_roster import verify_profiles
+        for markup in (PROFILE.replace('3 active','1 active'),PROFILE.replace('Attorneys 3 active','')):
+            with tempfile.TemporaryDirectory() as folder:
+                q=SqliteQueue(Path(folder)/'q.sqlite');ensure_tables(q)
+                q.conn.execute('INSERT INTO fl_roster_frontier VALUES (?,?,?,?,?)',
+                    (URL,3,'2026-10-01',None,'listing_profile_count_mismatch'));q.conn.commit()
+                result=verify_profiles(q,fetch_fn=lambda *a,**k:markup,
+                    max_profiles=1,seconds=5,workers=1,polite_wait=0)
+                self.assertEqual(result.get('added'),1)
+                self.assertEqual(q.counts().get('pending'),1)
+                q.close()

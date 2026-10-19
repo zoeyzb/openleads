@@ -23,6 +23,7 @@ from law_local.worker import (
 
 ROOT="https://www.floridalawdirectory.com"
 FIRM_PREFIX=ROOT+"/firm/"
+LISTING_METHOD="any-size-source-listings-v2"
 COUNT_LIST=re.compile(r"\b(\d{1,4})\s+active\s+attorney",re.I)
 COUNT_PROFILE=re.compile(r"\bAttorneys\s+(\d{1,4})\s+active\b",re.I)
 PHONE_PROFILE=re.compile(r"\bPhone\s+(\(?[2-9]\d{2}\)?[\s.()-]*[2-9]\d{2}[\s.()-]*\d{4})",re.I)
@@ -127,6 +128,10 @@ def ensure_tables(db):
         page INTEGER PRIMARY KEY, checked_at TEXT NOT NULL,
         profiles_seen INTEGER NOT NULL, candidates INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS fl_roster_listing_methods (
+        page INTEGER NOT NULL, method TEXT NOT NULL, checked_at TEXT NOT NULL,
+        PRIMARY KEY(page,method)
+      );
       CREATE TABLE IF NOT EXISTS fl_roster_frontier (
         url TEXT PRIMARY KEY, listed_attorneys INTEGER NOT NULL,
         discovered_at TEXT NOT NULL, checked_at TEXT,
@@ -145,10 +150,13 @@ def discover_listings(db,fetch_fn=fetch_public,max_pages=156,seconds=150,
     ensure_tables(db)
     stats=Counter()
     deadline=time.monotonic()+max(1,seconds)
-    for page in range(1,min(156,max_pages)+1):
-        if time.monotonic()>=deadline:
+    # max_pages is a new-page work budget, not a permanent page-number cap.
+    # Scheduled small batches must advance beyond previously saved pages.
+    for page in range(1,157):
+        if stats["pages_fetched"]>=max(0,int(max_pages)) or time.monotonic()>=deadline:
             break
-        if db.conn.execute("SELECT 1 FROM fl_roster_pages WHERE page=?",(page,)).fetchone():
+        if db.conn.execute("SELECT 1 FROM fl_roster_listing_methods WHERE page=? AND method=?",
+                           (page,LISTING_METHOD)).fetchone():
             stats["pages_checkpointed"]+=1
             continue
         url=ROOT+"/firms"+(f"?page={page}" if page>1 else "")
@@ -169,6 +177,8 @@ def discover_listings(db,fetch_fn=fetch_public,max_pages=156,seconds=150,
                 (uri,attorneys,utc_now())).rowcount>0)
         db.conn.execute("INSERT OR REPLACE INTO fl_roster_pages VALUES (?,?,?,?)",
             (page,utc_now(),found["all_profiles"],len(found["candidates"])))
+        db.conn.execute("INSERT OR REPLACE INTO fl_roster_listing_methods VALUES (?,?,?)",
+                        (page,LISTING_METHOD,utc_now()))
         db.conn.commit()
         stats["pages_fetched"]+=1
         stats["profiles_seen"]+=found["all_profiles"]
@@ -202,14 +212,15 @@ def verify_profiles(db,fetch_fn=fetch_public,max_profiles=300,seconds=260,
     ensure_tables(db)
     start=time.monotonic()
     rows=[dict(r) for r in db.conn.execute("""SELECT url,listed_attorneys
-        FROM fl_roster_frontier WHERE status='pending' ORDER BY url LIMIT ?""",
+        FROM fl_roster_frontier WHERE status IN ('pending','listing_profile_count_mismatch') ORDER BY url LIMIT ?""",
         (max_profiles,)).fetchall()]
     def one(row):
         try:
             html=fetch_fn(row["url"],timeout=10)
             lead,status=parse_roster_profile(html,row["url"])
-            if lead and lead["published_active_attorneys"]!=row["listed_attorneys"]:
-                return row["url"],None,"listing_profile_count_mismatch"
+            # Listing counts can change or be absent. The current profile's
+            # identity, phone and explicit inactivity check are authoritative;
+            # optional count disagreement never blocks a practice.
             return row["url"],lead,status
         except Exception as exc:
             return row["url"],None,"network_"+type(exc).__name__

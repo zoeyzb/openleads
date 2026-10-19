@@ -21,8 +21,8 @@ def cleared():
                 source_url=LEAD["source_url"],checked_at=utc_now(),
                 site_status="screened_no_site",qualification_scope="law_no_owned_website_email",
                 email="office@gmail.com",email_source=LEAD["source_url"],email_mx_ok=True,
-                site_evidence={"providers":[{"provider":"searxng:yandex","responded":True,"urls":[]},
-                                           {"provider":"searxng:yep","responded":True,"urls":[]}],
+                site_evidence={"providers":[{"provider":"searxng:yandex","responded":True,"urls":["https://lawyer.com/firm/example-partner-law.html"]},
+                                           {"provider":"searxng:yep","responded":True,"urls":["https://lawyers.com/example-partner-law"]}],
                                "checked_at":utc_now()})
 
 class DirectoryOnlyWebsiteHoldTests(unittest.TestCase):

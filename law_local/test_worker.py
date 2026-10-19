@@ -510,3 +510,10 @@ class EndToEndTests(unittest.TestCase):
 
 if __name__=="__main__":
     unittest.main()
+
+class CachedCandidateRelevanceExportTests(unittest.TestCase):
+    def test_old_local_search_clearance_without_relevant_hits_is_withheld(self):
+        sources=[{'provider':'searxng:yandex','responded':True,'urls':['https://lawyers.com/example']},
+                 {'provider':'searxng:yep','responded':True,'urls':[]}]
+        proof=evaluate_candidate(LEAD,PROFILE,sources,lambda _:True)
+        self.assertFalse(SqliteQueue._verified_for_export(LEAD,proof,proof['status']))

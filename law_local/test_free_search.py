@@ -133,12 +133,12 @@ class FreeSearchTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 self.assertFalse(free_search.searx_engine(q,'yandex',fetch=lambda _:payload)['responded'])
 
-    def test_requested_engine_result_with_irrelevant_legal_article_is_completed(self):
+    def test_requested_engine_result_with_irrelevant_legal_article_is_inconclusive(self):
         q='"unknown distinct firm" law firm'
         payload={'query':q,'results':[{'url':'https://news.example/irrelevant',
                  'engine':'yandex','title':'Unrelated legal news'}], 'unresponsive_engines':[]}
         got=free_search.searx_engine(q,'yandex',lead={'firm':'Unknown Distinct Firm'},fetch=lambda _:payload)
-        self.assertTrue(got['responded'])
+        self.assertFalse(got['responded'])
         self.assertEqual(got['urls'],[])
 
     def test_search_engine_error_fails_closed(self):
@@ -153,3 +153,37 @@ class FreeSearchTests(unittest.TestCase):
             checker.assert_called_once_with(lead)
 
 if __name__=='__main__':unittest.main()
+
+class CandidateRelevanceTests(unittest.TestCase):
+    def test_irrelevant_hits_never_complete_candidate_negative(self):
+        lead={'firm':'Example Quinn Law','state':'FL'}
+        payload={'query':'exact query','results':[{'url':'https://unrelated.example/',
+            'engine':'yep','title':'Florida weather'}],'unresponsive_engines':[]}
+        result=free_search.searx_engine('exact query','yep',fetch=lambda _:payload,lead=lead)
+        self.assertFalse(result['responded'])
+        self.assertEqual(result['reason'],'no_relevant_candidate_results')
+
+    def test_empty_candidate_search_never_establishes_absence(self):
+        payload={'query':'exact query','results':[],'unresponsive_engines':[]}
+        result=free_search.searx_engine('exact query','yep',fetch=lambda _:payload,
+            lead={'firm':'Example Quinn Law'})
+        self.assertFalse(result['responded'])
+
+    def test_relevant_directory_completes_candidate_search_with_query(self):
+        payload={'query':'exact query','results':[{'url':'https://lawyers.com/example-quinn',
+            'engine':'yep','title':'Example Quinn Law Florida attorneys'}],'unresponsive_engines':[]}
+        result=free_search.searx_engine('exact query','yep',fetch=lambda _:payload,
+            lead={'firm':'Example Quinn Law'})
+        self.assertTrue(result['responded'])
+        self.assertEqual(result['query'],'exact query')
+
+class ShortFirmPhoneRelevanceTests(unittest.TestCase):
+    def test_short_practice_name_still_matches_exact_phone_and_legal_context(self):
+        payload={'results':[{'url':'https://lawyers.com/dc-law-group','engine':'yep',
+            'title':'DC Law Group lawyers (206) 494-0400'},
+            {'url':'https://unrelated.example','engine':'yep','title':'Unrelated lawyers'}],
+            'unresponsive_engines':[]}
+        result=free_search.searx_engine('phone query','yep',fetch=lambda _:payload,
+            lead={'firm':'DC Law Group','phone':'2064940400'})
+        self.assertTrue(result['responded'])
+        self.assertEqual(result['urls'],['https://lawyers.com/dc-law-group'])

@@ -39,3 +39,26 @@ class AnySizePolicyTests(unittest.TestCase):
   from law_local.florida_roster import NON_PRIVATE
   for firm in ('IRS','Internal Revenue Service','DoAH','Fish & Wildlife Conservation Commission','Division of Administrative Hearings'):
    self.assertTrue(NON_PRIVATE.search(firm),firm)
+
+class OperatorRecoveryTests(unittest.TestCase):
+ def test_recovers_only_complete_fresh_active_review_without_alias_holds(self):
+  from ops.local_law.test_import_site_reviews import fixture,import_reviews
+  for unsafe in ('none','inactive_alias','expired','incomplete'):
+   with self.subTest(unsafe=unsafe),tempfile.TemporaryDirectory() as folder:
+    root=Path(folder);review=fixture()
+    review['active_practice_evidence']={'url':review['lead']['source_url'],
+        'checked_at':review['checked_at'],'note':'Current active private practice, fixture only'}
+    import_reviews(root/'law-leads.sqlite3',[review])
+    q=SqliteQueue(root/'law-leads.sqlite3')
+    row=q.conn.execute('SELECT * FROM candidates').fetchone();e=json.loads(row['result_json'])
+    e['status']='review_firmwide_headcount';e['qualification_hold']='prior_any_size_policy_not_current_qualification'
+    if unsafe=='expired':e['operator_review']['checked_at']='2000-01-01T00:00:00+00:00'
+    if unsafe=='incomplete':e['operator_review']['providers'][1]['results']=[]
+    q.conn.execute("UPDATE candidates SET status='pending',result_json=?",(json.dumps(e),));q.conn.commit()
+    if unsafe=='inactive_alias':
+     alias={**review['lead'],'firm':'Other Alias Law'};q.add(alias)
+     q.record(alias,{'status':'rejected_inactive','eligibility_hold':{'reason':'retired'}})
+    q.close()
+    out=apply(root)
+    self.assertEqual(out.get('operator_reviews_restored',0),int(unsafe=='none'))
+    self.assertEqual(apply(root).get('operator_reviews_restored',0),0)

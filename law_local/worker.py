@@ -332,6 +332,8 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
     evidence["site_status"]=site["status"]
     evidence["site_evidence"]={"checked_at":utc_now(),"providers":[
         {"provider":r.get("provider","unknown"),"responded":bool(r.get("responded")),
+         "query":r.get("query",""),"checked_at":r.get("checked_at",""),
+         "reason":r.get("reason",""),
          "urls":[v for v in r.get("urls",[])[:10] if _public_http_url(v)]}
         for r in search_results]}
     if site["status"]!="screened_no_site":
@@ -582,6 +584,13 @@ class SqliteQueue:
                 return False
             if len(providers)<2 or not all(p.get("responded") is True for p in providers[:2]):
                 return False
+            # Historical local adapter records could say responded=True after
+            # filtering every candidate hit as irrelevant. Do not grandfather
+            # that false negative into exports or retry evidence retention.
+            for provider in providers[:2]:
+                if str(provider.get("provider","")).startswith("searxng:") and not any(
+                        _public_http_url(url) for url in provider.get("urls",[])):
+                    return False
             return True
         except (ValueError,TypeError,KeyError,AttributeError):
             return False

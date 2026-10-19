@@ -8,7 +8,7 @@ SRC=ROOT/"openleads"
 DB=ROOT/"law-leads.sqlite3"
 OUT=ROOT/"strict-qualified-law.csv"
 PY="/opt/homebrew/bin/python3.11"
-STATES=["TX","GA","NC","PA","OH","MI","IL","CA"]
+STATES=["TX","GA","NC","PA","OH","MI","IL","CA","FL"]
 def now(): return datetime.now(timezone.utc).isoformat(timespec="seconds")
 def log_record(record):
  with (ROOT/"campaign-runs.log").open("a") as log:

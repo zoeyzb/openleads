@@ -9,6 +9,7 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
@@ -70,8 +71,6 @@ def _urls(items, field, lead=None):
         if lead is not None:
             # Search indexes sometimes return unrelated geographic/keyword hits.
             # Require every distinctive firm token in the actual hit metadata.
-            if not distinctive:
-                continue
             context = ' '.join(str(item.get(key) or '') for key in ('title', 'content', 'description'))
             context += ' ' + re.sub(r'[^a-z0-9]+', ' ', (parsed.hostname or '').lower())
             words = set(re.findall(r'[a-z0-9]+', context.lower()))
@@ -84,7 +83,7 @@ def _urls(items, field, lead=None):
                                     all(token in host_fold for token in distinctive))
             phone=re.sub(r"\D", "", str((lead or {}).get("phone", "")))[-10:]
             phone_match=bool(len(phone)==10 and phone in re.sub(r"\D", "", context))
-            name_match=all(token in words or (len(token)>=5 and any(w.startswith(token) for w in words)) for token in distinctive)
+            name_match=bool(distinctive) and all(token in words or (len(token)>=5 and any(w.startswith(token) for w in words)) for token in distinctive)
             if not direct_firm_domain and not phone_match and not name_match:
                 continue
             # Namesake obituaries and non-law businesses should not be treated
@@ -102,7 +101,8 @@ def _urls(items, field, lead=None):
 def searx_engine(query, engine, origin=None, fetch=None, lead=None):
     if engine not in ("google", "bing", "google cse", "yahoo", "yandex", "yep"):
         raise ValueError("unsupported named independent search engine")
-    output = {"provider": "searxng:" + engine, "responded": False, "urls": [], "reason": "unavailable"}
+    output = {"provider": "searxng:" + engine, "responded": False, "urls": [], "reason": "unavailable",
+              "query": query, "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     try:
         url = local_origin(origin or os.environ.get("OPENLEADS_SEARXNG_URL", "http://127.0.0.1:18888"), 18888)
         payload = _read_json(url + "/search?" + urlencode({"q": query, "format": "json", "engines": engine, "language": "en-US"}), fetch)
@@ -131,9 +131,13 @@ def searx_engine(query, engine, origin=None, fetch=None, lead=None):
         completed_empty=(not payload["results"] and
                          payload.get("query")==query and
                          "unresponsive_engines" in payload)
-        output["responded"] = bool(entries) or completed_empty
+        # A healthy control proves index access, not candidate relevance.
+        # Neither irrelevant entries nor an empty SERP can clear a practice.
+        output["responded"] = (bool(output["urls"]) if lead is not None
+                               else bool(entries) or completed_empty)
         output["reason"] = ("results" if output["urls"] else
-                           "completed_no_attributed_results" if output["responded"]
+                           "no_relevant_candidate_results" if lead is not None
+                           else "completed_no_attributed_results" if output["responded"]
                            else "empty_or_wrong_engine")
     except (ValueError, OSError, TimeoutError, TypeError, json.JSONDecodeError) as exc:
         output["reason"] = type(exc).__name__
