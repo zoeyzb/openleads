@@ -8,7 +8,7 @@ SRC=ROOT/"openleads"
 DB=ROOT/"law-leads.sqlite3"
 OUT=ROOT/"strict-qualified-law.csv"
 PY="/opt/homebrew/bin/python3.11"
-STATES=["TX","GA","NC","PA","OH","MI","IL","CA","FL"]
+STATES=["TX","GA","NC","PA","OH","MI","IL","CA","FL","NY"]
 def now(): return datetime.now(timezone.utc).isoformat(timespec="seconds")
 def log_record(record):
  with (ROOT/"campaign-runs.log").open("a") as log:
@@ -115,6 +115,8 @@ def discovery_result(exit_code,output):
             if int(d.get("candidates_added",0))==0:
                 return "zero_source_yield"
             return "candidates_added"
+        if isinstance(payload.get("official_ny_acquisition"),dict):
+            return "candidates_added" if int(payload.get("added_unverified",0))>0 else "zero_source_yield"
         r=payload.get("fl_roster_profiles")
         if isinstance(r,dict):
             return "candidates_added" if int(r.get("added",0))>0 else "zero_source_yield"
@@ -340,7 +342,12 @@ def cycle():
    return 0 if verify_exit==0 else 1
   st=rows[0][0]
   started=now()
-  args=(["-m","law_local.florida_roster","--db",str(DB),"--max-pages","3","--max-profiles","50","--seconds","90"] if st=="FL" else ["-m","law_local.worker","--db",str(DB),"discover","--states",st,"--max-queries","5","--max-pages","25","--seconds","100","--delay","2"])
+  if st=="NY":
+   args=["-m","law_local.ny_contacts","--db",str(DB),"--max","20"]
+  elif st=="FL":
+   args=["-m","law_local.florida_roster","--db",str(DB),"--max-pages","3","--max-profiles","50","--seconds","90"]
+  else:
+   args=["-m","law_local.worker","--db",str(DB),"discover","--states",st,"--max-queries","5","--max-pages","25","--seconds","100","--delay","2"]
   error=""
   try:
    r=command(args,130);rc=r.returncode

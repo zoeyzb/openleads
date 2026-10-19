@@ -210,3 +210,12 @@ Two independent browser sources in the existing Mac Chrome passed the AXS owned-
   without ChatGPT usage. Separate Harvey strict-firm mirror stays active.
 - Added source parser/bbox/size-cap/negative-success regression tests;
   official API fallback successful without ChatGPT authentication or key.
+
+
+## October 19 continuation — canonical verification and official NY adapter
+
+Read `ops/local_law/VERIFICATION_EXECUTION_2026-10-19.md` for the current complete repair receipt, live observations, limitations and next steps. Initial handoff counts and provider-outage diagnosis were stale. Repair 85929bb fixes irrelevant/empty candidate search clearance, cached export proof, short-name phone matching, old Florida size-filtered listing checkpoints, non-advancing page budgets, missing Florida scheduler coverage, optional-count mismatch gating and recovery of intact fresh operator reviews with shared-phone hold protection.
+
+Current re-export/readback: six unique calling phones, three email-qualified rows included in those six; two historical Texas reviews restored, zero genuinely new qualifications this continuation; gap 9,994. The Sheet retains four historical calling rows explicitly marked WITHHELD, plus six accepted rows. Notes and original identities remain. Strict tab retains two explicit holds plus three accepted rows. No scheduled Sheets sync claim.
+
+The new exact-scope NY official-source adapter was tested on live public registration data and integrated with the existing canonical verifier/export and bounded state rotation. Twenty distinct-phone contacts were staged; real live checks produced website holds and four non-private employer holds, no new qualified leads. The standalone 24-row verifier and 15-observation NY pilot overlap; never sum them as unique practices. Both local engines can pass broad controls yet miss a known small-practice owned site; candidate relevance and assisted attribution remain necessary. Tests: 211 core +151 operations =362 passed. SQLite quick_check ok; no dependencies, paid API, deployment, outreach or unrelated deletion. Source evidence and databases remain private on Mac.

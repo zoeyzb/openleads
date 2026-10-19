@@ -150,3 +150,11 @@ class IrelaCampaignTest(unittest.TestCase):
   source=Path(campaign.__file__).read_text()
   self.assertIn('law_local.irela_source","--db",str(DB)',source)
   self.assertIn('irela_contacts_exit',source)
+
+class NYDiscoveryResultTests(unittest.TestCase):
+ def test_official_contact_staging_is_counted_as_discovery_only(self):
+  payload={'official_ny_acquisition':{'groups_fetched':500},'added_unverified':20,'qualified_created':0}
+  self.assertEqual(campaign.discovery_result(0,json.dumps(payload)),'candidates_added')
+  payload['added_unverified']=0
+  self.assertEqual(campaign.discovery_result(0,json.dumps(payload)),'zero_source_yield')
+  self.assertEqual(campaign.discovery_result(1,json.dumps(payload)),'failed')

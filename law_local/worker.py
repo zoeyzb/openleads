@@ -137,6 +137,9 @@ def generic_practice_label(value):
     }
 
 def firm_identity_matches(html,lead):
+    if (urlparse(lead.get("source_url", "")).hostname or "") == "data.ny.gov":
+        from law_local.ny_contacts import scoped_contact
+        return scoped_contact(html,lead) is not None
     p=reader(html)
     text=norm(" ".join(p.parts))
     firm=norm(lead.get("firm",""))
@@ -162,6 +165,10 @@ def evaluate_published_source(html,lead):
     if not firm_identity_matches(html,lead):
         return {"attorneys":0,"emails":[],"website_candidates":[]}
     host=(urlparse(lead.get("source_url","")).hostname or "").removeprefix("www.")
+    if host=="data.ny.gov":
+        from law_local.ny_contacts import scoped_contact
+        return scoped_contact(html,lead) or {"attorneys":0,"emails":[],
+            "website_candidates":[],"scoped_contact_matched":False}
     if host=="plea.net":
         from ops.local_law.plea_source import parse_directory
         from ops.local_law.promote_source_verified import exact_contact_block
@@ -314,7 +321,9 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
     # A firm-controlled source URL is itself proof of an owned website,
     # even if both search engines mistakenly return no results.
     host=urlparse(str(lead.get("source_url",""))).hostname or ""
-    if not _third_party(host):
+    if source.get("official_contact"):
+        evidence["official_contact"]=source["official_contact"]
+    if not _third_party(host) and not source.get("official_contact"):
         return {**evidence,"status":"owned_site_or_untrusted_source"}
     if not firm_identity_matches(source_html,lead) or source.get("scoped_contact_matched") is False:
         return {**evidence,"status":"unverified_identity"}
@@ -548,6 +557,9 @@ class SqliteQueue:
                     and evidence.get("source_proof",{}).get("headcount_source")==identity_source
                     and evidence.get("source_proof",{}).get("identity_source")==row["source_url"]):
                 pass  # Complete source provenance is checked below.
+            elif (urlparse(identity_source).hostname or "")=="data.ny.gov":
+                from law_local.ny_contacts import export_proof_matches
+                if not export_proof_matches(row,evidence):return False
             elif not _third_party(urlparse(identity_source).hostname or ""):
                 # Operator reviews may use a client's public publication to
                 # bind identity/phone. Revalidate the complete review rather
