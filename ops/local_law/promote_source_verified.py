@@ -96,7 +96,7 @@ def named_practitioners_proof(html,firm,names):
 
 
 def qualify(db_path,review,fetch=fetch_public,search=search_firm,
-            health=None,mx=domain_has_mail):
+            health=None,mx=domain_has_mail,site_probe=None):
     """Atomic candidate promotion for a reviewed, source-backed eligible map record."""
     lead=review.get('lead',{})
     phone=normalize_phone(lead.get('phone'))
@@ -104,13 +104,11 @@ def qualify(db_path,review,fetch=fetch_public,search=search_firm,
     expected_map_id=str(review.get('map_id',''))
     report={'new_qualified':0,'reason':'unverified','firm':lead.get('firm','')}
     if (not phone or not expected_map_id or not review.get('private_practice_confirmed') is True or
-        not review.get('reviewer') or not EMAIL_RE.fullmatch(email) or
-        not 2<=len(review.get('named_attorneys',[]))<=10 or
-        not review.get('firmwide_2_10_review_confirmed') is True):
+        not review.get('reviewer') or not EMAIL_RE.fullmatch(email)):
         return {**report,'reason':'incomplete_review_requirements'}
     sources=review.get('sources',{})
     if any(not (isinstance(sources.get(key),str) and sources[key].startswith('https://'))
-           for key in ('identity','email','headcount')):
+           for key in ('identity','email')):
         return {**report,'reason':'missing_public_source_urls'}
     # Source pages must be independent business listings. A firm's own
     # contact page proves the existence of an owned website immediately.
@@ -145,20 +143,20 @@ def qualify(db_path,review,fetch=fetch_public,search=search_firm,
         try:
             identity_html=fetch(sources['identity'],timeout=12)
             email_html=fetch(sources['email'],timeout=12) if sources['email']!=sources['identity'] else identity_html
-            count_html=fetch(sources['headcount'],timeout=12)
         except Exception as exc:
             return {**report,'reason':'public_source_unavailable','error':type(exc).__name__}
         if (not exact_contact_block(identity_html,lead['firm'],phone,email,sources['identity']) or
                 not exact_contact_block(email_html,lead['firm'],phone,email,sources['email'])):
             return {**report,'reason':'no_scoped_published_phone_and_email'}
-        if not named_practitioners_proof(count_html,lead['firm'],review['named_attorneys']):
-            return {**report,'reason':'headcount_source_not_matched'}
         try:
             domain=email.rsplit('@',1)[1]
             if not mx(domain):
                 return {**report,'reason':'email_mx_not_verified'}
         except Exception:
             return {**report,'reason':'email_mx_not_verified'}
+        from law_local.worker import email_domain_websites
+        if (site_probe or email_domain_websites)([email]):
+            return {**report,'reason':'owned_site_or_unknown','site_signal':'published_email_domain_live'}
         checked=health() if health is not None else audit_provider_health(lookups=search)
         if checked.get('status')!='usable' or not checked.get('positive_control_found'):
             return {**report,'reason':'website_positive_control_failed'}
@@ -169,12 +167,11 @@ def qualify(db_path,review,fetch=fetch_public,search=search_firm,
         if site['status']!='screened_no_site':
             return {**report,'reason':'owned_site_or_unknown','site_signal':site['status']}
         evidence={'firm':lead['firm'],'phone':phone,'status':'strict_eligible',
-            'qualification_scope':'law_no_owned_website_2_10_email',
+            'qualification_scope':'law_no_owned_website_email',
             'source_qualification_method':'reviewed_named_team_published_email',
-            'attorneys':len(review['named_attorneys']),
-            'firmwide_2_10_review_confirmed':True,'headcount_total_attested':True,
-            'named_attorneys':review['named_attorneys'],
-            'headcount_source':sources['headcount'],'source_url':sources['identity'],
+            'attorneys':len(review.get('named_attorneys',[])) or None,
+            'named_attorneys':review.get('named_attorneys',[]),
+            'headcount_source':sources.get('headcount',''),'source_url':sources['identity'],
             'email':email,'email_source':sources['email'], 'email_mx_ok':True,
             'private_practice_confirmed':True,
             'site_status':'screened_no_site',
@@ -183,8 +180,8 @@ def qualify(db_path,review,fetch=fetch_public,search=search_firm,
                              'control':checked,'checked_at':utc_now()},
             'review_method':'live_source_verified_named_team',
             'source_proof':{'identity_source':sources['identity'],'email_source':sources['email'],
-                 'headcount_source':sources['headcount'],'reviewer':review['reviewer'],
-                 'verified_at':utc_now(), 'headcount_basis':'named 2–10 lawyers with reviewed firmwide scope'},
+                 'headcount_source':sources.get('headcount',''),'reviewer':review['reviewer'],
+                 'verified_at':utc_now(), 'headcount_basis':'optional metadata; attorney count not required'},
             'checked_at':utc_now()}
         # Verify the evidence contract before altering the live calling DB.
         if not db._verified_for_export({'phone':phone,'source_url':sources['identity']},

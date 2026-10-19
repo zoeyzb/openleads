@@ -56,7 +56,7 @@ def _urls(items, field, lead=None):
     if not isinstance(items, list):
         raise ValueError("search results not a list")
     result = []
-    ignored = {"law", "firm", "group", "office", "legal", "attorney", "attorneys", "lawyer", "lawyers", "the", "and", "llc", "llp", "pllc", "pc"}
+    ignored = {"law", "firm", "group", "office", "offices", "off", "legal", "attorney", "attorneys", "lawyer", "lawyers", "the", "and", "llc", "llp", "pllc", "pc"}
     distinctive = [t for t in re.findall(r"[a-z0-9]+", str((lead or {}).get('firm', '')).lower()) if len(t) >= 3 and t not in ignored]
     for item in items[:30]:
         if not isinstance(item, dict):
@@ -82,7 +82,10 @@ def _urls(items, field, lead=None):
             host_fold=re.sub(r'[^a-z0-9]', '', host_label.lower())
             direct_firm_domain=bool(len(distinctive)>=2 and
                                     all(token in host_fold for token in distinctive))
-            if not direct_firm_domain and not all(token in words for token in distinctive):
+            phone=re.sub(r"\D", "", str((lead or {}).get("phone", "")))[-10:]
+            phone_match=bool(len(phone)==10 and phone in re.sub(r"\D", "", context))
+            name_match=all(token in words or (len(token)>=5 and any(w.startswith(token) for w in words)) for token in distinctive)
+            if not direct_firm_domain and not phone_match and not name_match:
                 continue
             # Namesake obituaries and non-law businesses should not be treated
             # as potentially attributable law practice websites.
@@ -153,6 +156,29 @@ def search_firm(lead):
     # reducing a two-provider outage from ~16s to ~8s per firm.
     with ThreadPoolExecutor(max_workers=2) as pool:
         result=list(pool.map(lambda engine:searx_engine(query,engine,lead=lead),SITE_ENGINES))
+    # Directory labels may abbreviate Offices, merge a suffix, or retain a
+    # middle initial absent on the actual site. Search names and exact phone
+    # independently of that label. Extra queries are positive-only: they cannot
+    # substitute for the two controlled provider checks above.
+    ignored={"law","firm","group","office","offices","off","legal","attorney",
+             "attorneys","lawyer","lawyers","the","and","llc","llp","pllc","pc"}
+    names=[v for v in re.findall(r"[a-z]+",str(lead.get("firm","")).lower())
+           if len(v)>=3 and v not in ignored]
+    phone=re.sub(r"\D","",str(lead.get("phone","")))[-10:]
+    extra_queries=[]
+    if names:extra_queries.append(" ".join(names)+" lawyer "+str(lead.get("state","")))
+    if len(phone)==10:extra_queries.append('"'+phone[:3]+"-"+phone[3:6]+"-"+phone[6:]+'" lawyer')
+    def extra(engine):
+        urls=[]
+        for term in extra_queries:
+            urls.extend(searx_engine(term,engine,lead=lead)["urls"])
+        return urls
+    hints=[]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for urls in pool.map(extra,SITE_ENGINES):hints.extend(urls)
+    if hints:
+        result.append({"provider":"alias_phone_positive_only","responded":False,
+                       "urls":list(dict.fromkeys(hints)),"reason":"broader_identity_search"})
     # Source-published custom email domains are a positive ownership hint.
     # Query the domain without the possibly misspelled directory firm label.
     # A missing result never contributes to negative certification.

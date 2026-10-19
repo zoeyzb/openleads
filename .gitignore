@@ -40,3 +40,6 @@ Thumbs.db
 
 # Private browser queue — generated on the authorized Mac only
 /site/law-dashboard/local-queue.json
+
+# Local scraper runtime and generated source-contact exports
+/state/

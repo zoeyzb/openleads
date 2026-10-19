@@ -62,17 +62,17 @@ class CommonCrawlProfileTests(unittest.TestCase):
   self.assertEqual((lead['firm_size_low'],lead['firm_size_high']),(4,4))
  def test_solo_is_research_candidate_not_qualified(self):
   page='<h2>Miller & Stone LLP</h2><h2>Miller & Stone LLP</h2><div>Firm Size: 1</div><div>Call 312-422-1836</div>'
-  self.assertEqual(m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)[1],'outside_firm_size')
+  self.assertEqual(m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)[1],'candidate_needs_site_audit')
  def test_large_firm_is_research_candidate(self):
   page='<h2>Miller & Stone LLP</h2><h2>Miller & Stone LLP</h2>Firm Size: 2-25 Attorneys Call 312-422-1836'
-  self.assertEqual(m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)[1],'outside_firm_size')
+  self.assertEqual(m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)[1],'candidate_needs_site_audit')
 if __name__=='__main__':unittest.main()
 
 class NoSizeTests(unittest.TestCase):
  def test_missing_size_does_not_block_source_bound_phone(self):
   page='<h2>Miller & Stone LLP</h2><h2>Miller & Stone LLP</h2><div>Call 312-422-1836</div>'
   lead,status=m.extract_profile('https://www.lawyer.com/firm/miller-stone.html',page)
-  self.assertEqual(status,'no_explicit_size')
+  self.assertEqual(status,'candidate_needs_site_audit')
   self.assertIsNone(lead['firm_size_low'])
 
 class PolicyRecoveryTests(unittest.TestCase):

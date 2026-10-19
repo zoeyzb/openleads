@@ -20,13 +20,16 @@ def bridge(catalog,queue,limit=20):
         return dict(scanned=0,added_unverified=0,skipped=0,qualified=0,reason="pending_queue_cap_100")
     limit=min(limit,100-active)
     con=sqlite3.connect(f"file:{Path(catalog).resolve()}?mode=ro",uri=True)
+    known={r[0] for r in queue.conn.execute("SELECT id FROM candidates")}
+    con.create_function("not_queued",3,lambda firm,phone,state:
+        int(queue._id(dict(firm=firm,phone=phone,state=state)) not in known))
     selected=con.execute("""
         SELECT r.firm,r.phone,r.city,r.state,r.source_url,r.reported_attorneys
         FROM source_research r
         LEFT JOIN source_triage t ON t.lead_id=r.lead_id
         WHERE r.proof_status='needs_firmwide_size_and_owned_site'
           AND (t.status IS NULL OR t.status IN ('needs_independent_firmwide_size_and_site','needs_independent_site_audit'))
-          AND length(r.phone)>=10
+          AND length(r.phone)>=10 AND not_queued(r.firm,r.phone,r.state)
         ORDER BY CASE WHEN t.status='needs_independent_firmwide_size_and_site' THEN 0 ELSE 1 END,
                  r.lead_id LIMIT ?
     """,(max(1,limit*6),)).fetchall()

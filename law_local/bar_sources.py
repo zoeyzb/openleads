@@ -63,14 +63,12 @@ def permitted_bar_source(url):
     )
 
 def extract_inbar_firm(url,html):
-    """Only publish an employer with a firm-specific 2–10 declaration and professional phone."""
+    """Only publish a private law employer with a professional phone."""
     if not permitted_bar_source(url):
         return None,"untrusted_source"
     parts=[str(x).strip() for x in reader(html).parts if str(x).strip()]
     text=" ".join(parts)
     match=SIZE_RE.search(text)
-    if not match or not (2<=int(match.group(1))<=int(match.group(2))<=10):
-        return None,"missing_or_out_of_range_firm_size"
     try:
         start=next(i for i,v in enumerate(parts) if norm(v)=="professional information")
     except StopIteration:

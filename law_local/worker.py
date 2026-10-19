@@ -12,6 +12,7 @@ import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 import hashlib
+from functools import lru_cache
 from html import unescape
 from html.parser import HTMLParser
 import json
@@ -30,7 +31,7 @@ DIRECTORY_DOMAINS = (
     "lawyers.com", "lawyer.com", "avvo.com", "justia.com", "inbar.org",
     "findthelawfirms.com", "findthelawyers.com", "floridalawdirectory.com",
     "findlaw.com", "martindale.com", "superlawyers.com",
-    "floridabar.org", "mywsba.org", "americanbar.org", "lawinfo.com",
+    "floridabar.org", "mywsba.org", "wsba.org", "americanbar.org", "lawinfo.com",
     "facebook.com", "linkedin.com", "instagram.com", "youtube.com",
     "yelp.com", "google.com", "bing.com", "duckduckgo.com",
     "mapquest.com", "yellowpages.com", "chamberofcommerce.com",
@@ -127,6 +128,22 @@ def evaluate_published_source(html,lead):
     """Require actual firm name AND exact published phone before trusting size/email."""
     if not firm_identity_matches(html,lead):
         return {"attorneys":0,"emails":[],"website_candidates":[]}
+    host=(urlparse(lead.get("source_url","")).hostname or "").removeprefix("www.")
+    if host=="plea.net":
+        from ops.local_law.plea_source import parse_directory
+        from ops.local_law.promote_source_verified import exact_contact_block
+        state=urlparse(lead["source_url"]).path.strip("/").split("/")[-1]
+        matches=[r for r in parse_directory(html,state) if norm(r["firm"])==norm(lead["firm"])
+                 and normalize_phone(r["phone"])==normalize_phone(lead["phone"])]
+        blocks=[exact_contact_block(html,lead["firm"],lead["phone"],r["email"],lead["source_url"]) for r in matches]
+        html=" ".join(b for b in blocks if b)
+        if not html:return {"attorneys":0,"emails":[],"website_candidates":[],"scoped_contact_matched":False}
+    if host in ("mywsba.org",):
+        from law_local.wsba_source import contact
+        member,reason=contact(lead.get("source_url",""),html)
+        if not member or norm(member["firm"])!=norm(lead["firm"]) or normalize_phone(member["phone"])!=normalize_phone(lead["phone"]):
+            return {"attorneys":0,"emails":[],"website_candidates":[],"scoped_contact_matched":False}
+        return {"attorneys":0,"attorney_range":None,"emails":member["emails"],"website_candidates":member["website_candidates"]}
     p=reader(html)
     raw_text=" ".join(p.parts)
     text=norm(raw_text)
@@ -146,7 +163,7 @@ def evaluate_published_source(html,lead):
         range_match=re.search(r"\b(?:firm size|firm/organization size)\s*:?\s*(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\b",raw_text,re.I)
         if range_match:
             lo,hi=map(int,range_match.groups())
-            if 2<=lo<=hi<=10:
+            if 0<=lo<=hi:
                 attorney_range=(lo,hi)
                 attorneys=lo
             else:
@@ -157,8 +174,7 @@ def evaluate_published_source(html,lead):
     else:
         attorneys=int(m.group(1))
     # State-active roster counts are discovery metadata, not firmwide size.
-    # Eligibility requires an explicit firm-specific 2-10 count/range from a
-    # source whose scope is the firm, not a jurisdiction-only registration tally.
+    # All attorney counts/ranges are optional metadata, never eligibility gates.
     # Emails must be literally published in this identity-matched page.
     emails=sorted(set(v.lower() for v in EMAIL_RE.findall(unescape(html))))
     # Provider footer addresses are not prospect contact evidence.
@@ -233,23 +249,18 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
     host=urlparse(str(lead.get("source_url",""))).hostname or ""
     if not _third_party(host):
         return {**evidence,"status":"owned_site_or_untrusted_source"}
-    if not firm_identity_matches(source_html,lead):
+    if not firm_identity_matches(source_html,lead) or source.get("scoped_contact_matched") is False:
         return {**evidence,"status":"unverified_identity"}
     # A direct owned-site hint always wins, even when firmwide size is unresolved.
     if source["website_candidates"]:
         return {**evidence,"status":"review_website","website_candidates":source["website_candidates"]}
 
-    # Both pools require source-attested firmwide size; phone-only is separate.
-    evidence["qualification_scope"]="law_no_owned_website_2_10_phone"
-    if (urlparse(str(lead.get("source_url",""))).hostname or "").lower().removeprefix("www.")=="floridalawdirectory.com":
-        from law_local.florida_roster import clearly_non_law_employer
-        if clearly_non_law_employer(lead.get("firm","")):
-            return {**evidence,"status":"review_nonlaw_employer",
-                    "reason":"Roster lists an in-house or non-law business employer"}
-    if not (2 <= int(source.get("attorneys") or 0) <= 10):
-        return {**evidence,"status":"review_firmwide_headcount",
-                "reason":"firmwide_2_10_not_source_verified"}
-    evidence["headcount_scope"]="firmwide"
+    # Attorney count is optional metadata under the 2026-10-19 user policy.
+    evidence["qualification_scope"]="law_no_owned_website_any_size"
+    from law_local.florida_roster import clearly_non_law_employer, NON_PRIVATE
+    if clearly_non_law_employer(lead.get("firm","")) or NON_PRIVATE.search(lead.get("firm","")):
+        return {**evidence,"status":"review_nonlaw_employer",
+                "reason":"In-house or non-private-law employer"}
     site=classify_search_results(search_results)
     evidence["site_status"]=site["status"]
     evidence["site_evidence"]={"checked_at":utc_now(),"providers":[
@@ -271,13 +282,7 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
             evidence["email_source"]=lead.get("source_url","")
             break
     if evidence["email"]:
-        # An MX-checked business email does not waive the 2–10-attorney
-        # requirement of the STRICT qualified pool. Do not count one-lawyer,
-        # large or unknown-size practices as strict leads.
-        if not (2 <= int(source.get("attorneys") or 0) <= 10):
-            return {**evidence,"status":"review_firmwide_headcount",
-                    "reason":"published_email_but_firmwide_2_10_unverified"}
-        evidence["qualification_scope"]="law_no_owned_website_2_10_email"
+        evidence["qualification_scope"]="law_no_owned_website_email"
         evidence["email_mx_ok"]=True
         return {**evidence,"status":"strict_eligible"}
     return {**evidence,"status":"call_qualified_no_email"}
@@ -331,7 +336,8 @@ class SqliteQueue:
         rows=self.conn.execute("""SELECT * FROM candidates
              WHERE status='pending' OR
                    (status='inconclusive' AND attempts < 3 AND updated <= ?)
-             ORDER BY CASE WHEN source_url LIKE 'https://www.inbar.org/%' OR
+             ORDER BY CASE WHEN source_url LIKE 'https://plea.net/%' THEN -1
+                                  WHEN source_url LIKE 'https://www.inbar.org/%' OR
                                   source_url LIKE 'https://inbar.org/%' THEN 0 ELSE 1 END,
                       CASE WHEN status='pending' THEN 0 ELSE 1 END,
                       updated ASC LIMIT ?""",(cutoff,int(limit))).fetchall()
@@ -390,23 +396,14 @@ class SqliteQueue:
                 return False
             if evidence.get("status")!=status or evidence.get("site_status")!="screened_no_site":
                 return False
-            # Never let an old any-size policy bypass the current user contract.
+            # Accept dated historical policies, but never require a headcount.
             if evidence.get("qualification_scope") not in (
-                    "law_no_owned_website_2_10_phone", "law_no_owned_website_2_10_email"):
-                return False
-            count=int(evidence.get("attorneys") or 0)
-            rng=evidence.get("attorney_range")
-            if (not 2 <= count <= 10 or not evidence.get("headcount_source") or
-                (rng is not None and (not isinstance(rng,(tuple,list)) or len(rng)!=2 or
-                 not 2 <= int(rng[0]) <= int(rng[1]) <= 10))):
-                return False
-            # Legacy notes may reveal jurisdiction-only rather than firmwide proof.
-            size_note=str(evidence.get("headcount_note", ""))
-            if re.search(r"(?i)WSBA members|state.registered|jurisdiction.active|Florida.active",size_note):
+                    "law_no_owned_website_any_size","law_no_owned_website_email",
+                    "law_no_owned_website_2_10_phone","law_no_owned_website_2_10_email"):
                 return False
             if not normalize_phone(row["phone"]) or normalize_phone(row["phone"])!=normalize_phone(evidence.get("phone")):
                 return False
-            identity_source=evidence.get("headcount_source") or row["source_url"]
+            identity_source=evidence.get("identity_source") or evidence.get("source_url") or row["source_url"]
             if not identity_source:
                 return False
             if (evidence.get("source_qualification_method")=="reviewed_named_team_published_email"
@@ -430,13 +427,9 @@ class SqliteQueue:
             if evidence.get("source_qualification_method")=="reviewed_named_team_published_email":
                 proof=evidence.get("source_proof",{})
                 if (status!="strict_eligible" or
-                    evidence.get("qualification_scope")!="law_no_owned_website_2_10_email" or
+                    evidence.get("qualification_scope") not in ("law_no_owned_website_2_10_email","law_no_owned_website_email") or
                     evidence.get("review_method")!="live_source_verified_named_team" or
-                    evidence.get("firmwide_2_10_review_confirmed") is not True or
-                    evidence.get("headcount_total_attested") is not True or
                     evidence.get("private_practice_confirmed") is not True or
-                    not 2<=int(evidence.get("attorneys",0))<=10 or
-                    len(evidence.get("named_attorneys",[]))!=int(evidence.get("attorneys",0)) or
                     not proof.get("reviewer") or
                     proof.get("identity_source")!=row["source_url"] or
                     proof.get("email_source")!=evidence.get("email_source") or
@@ -444,15 +437,8 @@ class SqliteQueue:
                     evidence.get("email_mx_ok") is not True):
                     return False
             if status=="strict_eligible":
-                count=int(evidence.get("attorneys") or 0)
-                rng=evidence.get("attorney_range")
-                if (not 2 <= count <= 10 or
-                    (rng is not None and
-                     (not isinstance(rng,(tuple,list)) or len(rng)!=2 or
-                      not 2 <= int(rng[0]) <= int(rng[1]) <= 10)) or
-                    not EMAIL_RE.fullmatch(evidence.get("email", "")) or
-                    not evidence.get("email_source") or
-                    not evidence.get("headcount_source")):
+                if (not EMAIL_RE.fullmatch(evidence.get("email", "")) or
+                    not evidence.get("email_source")):
                     return False
             providers=evidence.get("site_evidence",{}).get("providers",[])
             named=[p.get("provider") for p in providers[:2]]
@@ -529,7 +515,7 @@ def apply_verified_bar_contact_proof(db,lead,result):
     """Join published/matched Florida Bar contacts only after site clearance.
 
     This is strictly a final evidence join, NOT a shortcut around the
-    independent phone, firmwide 2–10 size and no-owned-site checks.
+    independent phone, identity and no-owned-site checks.
     An attributed owned site always revokes calling/strict eligibility.
     """
     lead_id=db._id(lead)
@@ -582,6 +568,7 @@ def apply_verified_bar_contact_proof(db,lead,result):
     if (result.get("status")!="call_qualified_no_email"
             or result.get("site_status")!="screened_no_site"
             or result.get("qualification_scope") not in (
+                "law_no_owned_website_any_size", "law_no_owned_website_email",
                 "law_no_owned_website_2_10_phone", "law_no_owned_website_2_10_email")
             or normalize_phone(result.get("phone"))!=expected_phone):
         return result
@@ -594,7 +581,7 @@ def apply_verified_bar_contact_proof(db,lead,result):
         if domain.endswith(BLOCKED_SUFFIXES) or _third_party(domain):
             continue
         return {**result,"status":"strict_eligible","email":email,"email_mx_ok":True,
-                "qualification_scope":"law_no_owned_website_2_10_email",
+                "qualification_scope":"law_no_owned_website_email",
                 "email_source":proof["email_source"]}
     return result
 
@@ -691,15 +678,43 @@ def domain_has_mail(domain):
     except (OSError,subprocess.TimeoutExpired):
         return False
 
+def email_domain_websites(emails,fetch=None):
+    """A live published mail domain is an ownership-review signal, not clearance."""
+    fetch=fetch or fetch_public
+    free_mail={"gmail.com","googlemail.com","yahoo.com","aol.com","outlook.com",
+               "hotmail.com","live.com","icloud.com","msn.com","att.net","comcast.net",
+               "sbcglobal.net","verizon.net","bellsouth.net","proton.me","protonmail.com"}
+    domains=sorted({str(e).rsplit("@",1)[-1].lower() for e in emails if "@" in str(e)})
+    found=[]
+    for domain in domains[:2]:
+        if domain in free_mail or not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+",domain):continue
+        for scheme in ("https","http"):
+            url=scheme+"://"+domain+"/"
+            try:
+                body=fetch(url,timeout=3)
+                if len(body)>150:
+                    found.append(url);break
+            except (ValueError,OSError,TimeoutError):continue
+    return found
+
+@lru_cache(maxsize=64)
+def _shared_directory_page(url,five_minute_bucket):
+    return fetch_public(url)
+
 def process_candidate(lead,site_search_usable=True):
     try:
-        html=fetch_public(lead["source_url"])
+        source_url=lead["source_url"]
+        if (urlparse(source_url).hostname or "").removeprefix("www.")=="plea.net":
+            html=_shared_directory_page(urlparse(source_url)._replace(fragment="").geturl(),int(time.time()//300))
+        else:
+            html=fetch_public(source_url)
         if not firm_identity_matches(html,lead):
             return {"status":"unverified_identity","source_url":lead["source_url"],"checked_at":utc_now()}
         source=evaluate_published_source(html,lead)
-        # Do not spend two search queries on an unknown-size or solo firm.
-        size_ready=2 <= int(source.get("attorneys") or 0) <= 10
-        search=search_for_firm({**lead,"emails":source["emails"]}) if site_search_usable and size_ready and not source["website_candidates"] else []
+        mail_sites=email_domain_websites(source["emails"]) if not source["website_candidates"] else []
+        search=search_for_firm({**lead,"emails":source["emails"]}) if site_search_usable and not source["website_candidates"] and not mail_sites else []
+        if mail_sites:
+            search.append({"provider":"published_email_domain_http_positive_only","responded":False,"urls":mail_sites})
         return evaluate_candidate(lead,html,search,mx_check=domain_has_mail)
     except Exception as exc:
         return {"status":"inconclusive","reason":str(exc)[:200],"checked_at":utc_now()}
@@ -860,9 +875,7 @@ def _extract_directory_profile(url,html):
             continue
         candidate={"firm":firm,"phone":phone,"city":"","state":"","source_url":url}
         if firm_identity_matches(html,candidate):
-            proof=evaluate_published_source(html,candidate)
-            if 2 <= int(proof.get("attorneys") or 0) <= 10:
-                return candidate
+            return candidate
     return None
 
 

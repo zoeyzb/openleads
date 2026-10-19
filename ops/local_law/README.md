@@ -1,155 +1,19 @@
-# Current eligibility and Mac execution — 2026-10-18
+# Mac law pipeline
 
-The current user contract supersedes older any-size/phone-first notes below. Strict qualified requires real US law practice, firmwide 2–10 source evidence, independent no-owned-site screening and source-published usable email. Keep phone-only separate. Current measurements and fixes: [repair record](REPAIR_2026-10-18.md).
+Current contract: attorney count is optional. Strict leads require real US private law-firm identity, matched public business phone, literally source-published usable email/MX, independently screened no owned website, dated evidence and deduplication. Phone-only and unverified research remain separate. See [project state](../../SCRAPER_PROJECT_STATUS.md) and [current run report](ANY_SIZE_EMAIL_POLICY_2026-10-19.md).
 
-Install/reinstall the existing hourly job: `/opt/homebrew/bin/python3.11 -m ops.local_law.install_worker`. It executes `ops.local_law.campaign` from the canonical repository, with local SearXNG. It does not copy campaign.py. The old `~/lead-workspace/campaign.py` copy is no longer the scheduled entrypoint.
+The canonical queue is `~/lead-workspace/law-leads.sqlite3`; research is in the existing sibling `research_catalog.sqlite3`. Never commit these databases, prospect CSVs, credentials or personal configuration.
 
-Historical operational notes follow; their former qualification and copy instructions are superseded.
+Install the existing hourly launchd job with `python3.11 -m ops.local_law.install_worker`. It runs `python3.11 -m ops.local_law.campaign` from the repository. Do not copy campaign.py to a second scheduled entrypoint. `company.recoverrevenue.metricsfeed` likewise runs the repository module `ops.local_law.publish_metrics` every ten minutes and publishes aggregate-only metrics.
 
-# Mac local law lead controller — October 12, 2026
-Run from macOS, not Railway or Render. The existing law_local worker and SQLite are used without modifying core verification behavior.
+The campaign takes a nonblocking lock, applies the evidence-preserving size-policy migration, prioritizes published-email contacts, advances archive/Maps/source discovery checkpoints, processes bounded verifier batches, exports and mirrors strict records to the existing local CRM. It does not initiate outreach. Failed/blocked sources cool down; they never certify no website. No Railway, Render or paid hosting is used.
 
-- campaign.py: bounded source discovery, state retry ledger, lock, local verification, strict-only export. Florida and New York excluded as fresh-area defaults because prior research already covered Florida and NY grouping is not firm count.
-- sync_sheet.py: non-destructive, stable-key Google Sheets upsert; fails closed until LAW_SHEETS_CREDENTIALS points to a service account JSON with access to the existing Sheet.
-- test_campaign.py: five isolated strict-export tests.
+```sh
+/opt/homebrew/bin/python3.11 -m ops.local_law.campaign export
+/opt/homebrew/bin/python3.11 -m unittest discover -s law_local
+/opt/homebrew/bin/python3.11 -m unittest discover -s ops/local_law
+```
 
-Run: python3 ops/local_law/campaign.py export ; python3 -m unittest discover -s ops/local_law -q
+Private files: `strict-qualified-law.csv` contains strict email leads; `phone-only-law.csv` contains only the additional no-email lane; `call-qualified-law.csv` is their verified union. `law-research-1000-UNVERIFIED.csv` is source research, not 1,000 qualified leads.
 
-Local existing launchd schedule points at ~/lead-workspace/campaign.py, not this repository file. Copy reviewed changes to that path when upgrading. Do not commit any credentials, SQLite DB, raw emails or candidate CSV. Do not conflate candidate counts, calling_qualified and strict_eligible. Search-provider negative controls must pass and source email must be attributed to the firm before strict promotion. Main repository PolyForm Noncommercial license governs use; obtain commercial-use authorization before commercial deployment.
-
-## Calling-first campaign output
-The primary operational CSV is `~/lead-workspace/call-qualified-law.csv`, exported using the existing `calling_qualified` status. This includes the source-screened phone-qualified records with or without a published email. Email discovery must not block this calling queue. `strict-qualified-law.csv` is an additional email-verified subset and is never a substitute for the calling count. Both remain subject to firm-specific 2–10 attorney evidence and independent no-owned-website checks. No phone connectivity is asserted from formatting alone.
-
-## October 13 audit and source recovery
-- Real source artifacts are restored privately under `~/lead-workspace/research_archives/fl` and `.../ny`.
-- `python3 ops/local_law/research_index.py` builds a **research-only**, deduplicated `~/lead-workspace/research_catalog.sqlite3` (5,575 FL + 3,488 NY - 26 duplicates = 9,037 identities). It does **not** populate the calling queue.
-- The Florida roster's "N active" refers to jurisdiction-active attorneys, not necessarily nationwide firm size. It is now held in `review_headcount_scope` until a separate firmwide size source is obtained. Non-law employer signals are held separately.
-- The real CLI verifier now preflights Bing/DDG site providers using a known owned-domain positive control before processing non-FL leads. A failed preflight has process exit 3 and **does not consume candidate attempts**. The current Mac provider health is degraded (1/2 responded, known-positive site missed).
-- Calling CSV export independently checks supporting headcount source, exact phone, 2–10 firmwide size, website search evidence and freshness; an invalid status label alone is insufficient.
-- The Mac campaign controller records zero yielded candidates as `zero_source_yield` rather than a successful discovery region. It cools down ineffective queries and does not mark an area complete.
-- Live local database after scope recheck: 47 headcount-scope reviews and 2 non-law employer reviews, 0 calling-qualified. Do not put these 49 on the calling sheet.
-- Execute tests: `/opt/homebrew/bin/python3.11 -m unittest discover -s law_local -q` and `/opt/homebrew/bin/python3.11 -m unittest discover -s ops/local_law -q`.
-- Production has not been proven to produce phone-qualified output; do not increase concurrency or reuse generic dead search sources to manufacture throughput.
-
-### Website provider health guard
-The Mac controller runs the known-owned-website positive control before verifier batches. When either provider is unhealthy or the positive control is not recovered, it skips candidate website queries and records blocked_website_provider. This prevents wasted HTTP requests but does not certify any website-free firm.
-
-### Recovered archive source triage
-`archive_triage.py --max 25` researches recovered firm source pages in resumable SQLite batches; it records explicit firm-owned website hints, source-unavailable errors, and identity/phone mismatches. It does not pretend Florida-local registered count establishes firm-wide 2–10 lawyers or turn missing source links into proof of no website. The Mac controller invokes this batch before geographic query discovery. Each result is checkpointed in `research_catalog.sqlite3`.
-
-## Phone-first Google Sheets export (2026-10-13)
-The verified calling-output Sheet is **Verified Calling Queue** in Recover Revenue — Law Lead Live Tracker. Run `python3 ~/lead-workspace/sync_sheet.py --preview` to inspect sanitized phone-qualified rows without Google credentials. The unattended local upsert requires authorized credentials (`LAW_SHEETS_CREDENTIALS`); it will not claim any Sheet write without authentication. ChatGPT’s connected Drive task can handle a separate six-hour sync. Do not confuse this calling-qualified list (email optional) with the stricter email-evidenced eligible subset.
-
-Mac browser probes: Lawyers.com, Justia and Martindale returned HTTP 403; a subsequent FindLaw fetch also returned 403, and a headless Google known-website query failed the positive-domain control. Browser access alone does NOT repair owned-website absence verification; do not bypass challenges.
-
-Critical operational fix: archive_triage.py now inserts its repository root in sys.path before importing law_local.worker, because the scheduled file-path subprocess otherwise failed ModuleNotFoundError and processed zero archived leads.
-
-## Dashboard live Mac metrics feed (2026-10-16)
-The static, redesigned dashboard is `site/law-dashboard/`. Its browser JS reads a versionless URL for an **unlisted GitHub Gist** containing public, aggregate-only metrics; the Mac runs `ops/local_law/publish_metrics.py` from `~/lead-workspace/publish_metrics.py` via a single `launchd` publisher every ten minutes. This is intentionally a near-live feed rather than exposing local SQLite or adding a hosted scraper. The unlisted Gist URL is accessible to anyone who knows it; no lead names, phones, emails, firm URLs, credentials, or raw DB are published. Do not treat an unlisted Gist as private authentication.
-
-To install the Mac publisher: copy `ops/local_law/publish_metrics.py` to `~/lead-workspace/publish_metrics.py`, authenticate GitHub CLI with `gist` permission, run the publisher once to create `~/lead-workspace/metrics-feed-config.json`, and schedule it with macOS `launchd`. The script requires `gh` from `/opt/homebrew/bin/gh`. Do not commit the personal Gist config or business lead files. The dashboard labels snapshots older than 30 minutes as stale; the browser polls once per minute without touching the Mac directly.
-
-### Live analytics charts
-Dashboard now includes interactive bar/donut charts of FL/NY research sources and candidate-status bars, derived from real aggregate Mac SQLite data. The publisher exports sourceBreakdown every ten minutes. Visual reference: MIT-licensed shreyvijayvargiya/crm-saas; no additional Next.js service was installed and no source components were copied.
-Verified in Chrome at 1440px and 390px with no overflow, including bar/donut switch.
-
-### October 2026 repair pass
-- Controller no longer raises UnboundLocalError when website verifier is intentionally skipped, and handles site-provider preflight timeout as an explicit controlled failure (exit 3). This does not make degraded providers valid or promote prospects.
-- Public aggregate Mac metrics publisher now preserves genuine hourly observations in private local metrics-history.json and publishes up to 168 observed hourly snapshots (no backfilled or synthetic history).
-- Dashboard has a live historical trend chart with qualified / triaged / candidates switches and a usable mobile navigation menu.
-- Connected hourly ChatGPT Google Sheets task upserts source-verified calling leads directly through connected Google Sheets, without expecting an absent local service account. The local sync_sheet.py credential-based path remains unavailable until authorized credentials are provided. Qualified rows are still 0; no fabricated sync rows.
-
-## October 16 repair
-- Fixed Mac controller so a degraded website-provider health check returns a controlled scheduler result (code 0 with verify_exit=3 recorded); source/acquisition subprocess failures still return nonzero. Unbound pending and preflight timeouts remain guarded.
-- Metrics Gist now exposes lastVerification timestamp/exit/siteHealth from local log without source URLs, names or phones; dashboard uses the latest recorded verification state, not an old one-off provider probe.
-- Connected Google Sheets tab Verified Calling Queue was verified present (header A:L, zero eligible rows). Its hourly connected sync is active; local service-account writer remains blocked pending Google credentials, so do not claim native unattended local API upsert is configured.
-- 0 real qualified calling leads, independent firmwide headcount and website absence still not solved. Never count raw contacts as qualified.
-
-## October 16 geographic and archive selection fixes
-- The Mac job was observed to finish with exit 0 after controller crash repair; verification exit 3 still records degraded site screening separately.
-- Existing coverage.sqlite3 contained leftover FL and NY generic source rows. Queries now constrain scheduled generic discovery to configured STATES, preventing stale checkpoint rows from forcing repeated Florida/NY runs.
-- Archive triage now includes NY registrations, with NY prioritized to ensure the previously excluded source is actually tested. State registration counts remain *research-only*, never firmwide headcount proof.
-- These fixes improve scheduling and coverage but do not cure search-provider health or produce qualified calling leads.
-
-### Website search provider diagnostics (2026-10-16)
-Live Mac probes show Bing RSS serving unrelated Wikipedia, Microsoft and gaming links to firm-name/domain queries; DuckDuckGo HTML is blocked. Do not permit irrelevant HTTP 200 payloads to certify website absence. The site preflight now emits per-provider responded/result_count diagnostics; the fail-closed behavior remains intact.
-The calling verifier still classifies no-email firms as `call_qualified_no_email` after all firm-size, website and phone gates pass. Published email harvesting is a bonus.
-
-## Current audit — 2026-10-16
-
-**Eligibility source of truth:** phone-first; firm-wide 2–10, genuinely no owned website, published and matching business phone, real law practice. Email enriches, but never gates phone qualification.
-
-Fresh Mac provider preflight: DEGRADED (0/2 usable; known-positive owned domain unrecovered). Verified zero calling/exported and zero strict-email rows. Active DB: 11 pending / 47 scope review / 2 non-law. Historic research: 9,037 FL+NY. Source triage: 281 requiring independent proof, 9 identity/phone mismatch, 7 unavailable, 1 owned-site exclusion; counts are **research** not call-ready. Recent macOS scheduler exited 0 while verifier_exit 3 remained blocked: do not equate launcher success to verification health. Sheet exists and is header-only; local service-account authentication remains missing and connected hourly task has no verified writes yet.
-
-**Do not hide the missing source problem with UI, more workers, or zero-yield discovery loops.** Require a validated firm-wide size source plus *two genuinely independent* healthy owned-site searches, demonstrated on known-owned controls and ordinary firms; archive and cite each evidence URL. Preserve optional email discovery. Follow the prioritized remediation and acceptance tests in the repository root README.
-
-## 2026-10-16 lightweight recovery pass
-- Previous Railway metric snapshots show 177 call-ready and ~1,608 headcount-verified records (2026-10-02), not 10,000 verified law leads/hour. Do not conflate plumbing throughput, research discovery volume, and qualified law firms.
-- Keep plumbing and law independently configured; no new Railway/Render, Redis daemon, hosted worker, or second canonical lead database.
-- Archive triage now uses a single SQLite indexed query, prioritizing records with state-reported 2-10 attorney *hints* and an existing published phone. The state count is strictly scheduling metadata, **not firmwide eligibility proof**.
-- Records processed in source_triage are checkpointed; no duplicate full copy of the 9,037 records is created. The prerequisite independent website and firmwide evidence remains blocked; this does not raise verified qualified counts.
-
-## 2026-10-16 archive reuse
-Old Railway snapshot (Oct 2): 177 call-ready, ~1608 size-verified; not evidence of 10000 qualified law/hour. Plumbing rates should not be counted as law.
-Existing catalog feeds a bounded 20-per-run candidate bridge without a second database or new service. SQLite dedupes and caps pending queue at 100. Ten sourced research candidates imported during test. They are NOT qualified leads. Firm-wide 2-10 and independently checked no-owned-site remain required, phone is mandatory, published email bonus only.
-
-## 2026-10-16 — remove all-or-nothing verifier outage
-- Previous controller skipped the entire 20-row verification batch when website provider preflight failed. Now the verifier continues accessible source/identity/headcount/positive-owned-site checks without calling unhealthy site search adapters. Any firm requiring independent negative website proof remains inconclusive; no email required for calling eligibility.
-- The verifier preflight remains visible in logs; known-owned-site controls are not bypassed. This avoids stalling source triage while external search is down; **it does not certify no website**.
-- Live bounded test against the Mac queue processed 2 sourced candidates (both inconclusive), no false qualified leads. 87 core tests passed, including outage no-search regression.
-- No new repository, hosted runtime, database, or worker service created.
-
-## 2026-10-16 — UI and portfolio branch (not deployed)
-- Actual GitHub branch includes a black/charcoal/red Law Operations skin plus a searchable and exportable **aggregate-only** CRM source explorer. This is not a fake row-level contacts table and does not expose personal leads to a public website.
-- Separate `site/marketing.html` is the portfolio/agency case-study landing page; primary hero leads to custom website / automation inquiries and the real dashboard. Local preview: `cd site && python3 -m http.server 8765`, then visit `/marketing.html` and `/law-dashboard/`. No hosted scraper, paid service or second website project.
-- Website-verification search providers are still degraded; firmwide count verification incomplete. Continue using source-based strict guards; never fabricate lead success or statistics. Production Vercel was **not deployed** at user request.
-
-## 2026-10-16 CRM experience and accessibility pass
-- Converted the existing static operations page into six working hash-addressable views (Overview, Qualification, Coverage, System Health, Lead Workspace, Sources/Exports). This is navigational state on **one static page**, not extra services or fake data.
-- Fixed white-on-white state-card contrast with consistent graphite surfaces and readable labels, and normalized warning/success/blocked accents.
-- Added a private-by-design calling lead workspace: it displays the genuine qualified count and opens the existing authorized Google Sheet. Contact details and evidence are intentionally **not** published in the anonymous Gist or static Vercel page.
-- Source explorer still searches real aggregate source and queue counts and exports its CSV. No invented trends, new source records, or qualified leads.
-- Headless Chrome validated all six views at 1440 and 390 pixels, zero horizontal overflow and no page JS exceptions. Website and firmwide verification bottlenecks remain unresolved; UI work does not change the qualification rule. No Vercel deploy requested.
-
-## 2026-10-16 — minimal operator-first dashboard
-- Consolidated navigation from six sections to Dashboard, Queue, Sources, Coverage and System. Reduced the oversized hero and metric-card heights, elevated meaningful next actions and preserved real-only charts and local source details.
-- Dashboard's action block directs operators to the queue and provider diagnostics; existing calling rule remains firm-wide 2–10, no owned site, published business phone, email bonus only. No invented blockers counts or qualified data.
-- Local headless Chrome verified all five views at 1440px and 390px: no JS errors and no horizontal overflow. Static site stays on localhost; no Vercel deployment.
-
-## 2026-10-16 Deep black readability pass
-- Overrode old green/yellow/cream UI treatments with near-black, neutral gray, white and restrained red for brand and genuine critical blocks. Increased small operational copy to readable 13px+ and reduced visual bulk. Replaced unclear research/queue KPI labels with concise descriptions; retained real metrics and the five-view navigation.
-- Browser validation on 1440px and 390px, existing local browser smoke and 87 core tests. Production Vercel not deployed by request.
-
-## 2026-10-16 chart rendering regression fix
-- Found directly hard-coded green and yellow in JavaScript donut gradients and bar/queue CSS. Replaced with restrained red and graphite, explicitly overriding bar classes rather than relying on unused theme variables. Removed the redundant giant qualification/system panels from the Overview layout, retaining System diagnostics in its separate tab.
-- Verified all five local views at 1440px and 390px without JavaScript exceptions or horizontal overflow; 87 core tests pass. No changes to lead counts or source-validation rules. No Vercel deployment.
-
-## 2026-10-16 — actual minimal CRM rebuild
-- Replaced the old layered law-dashboard markup, charts, and CSS rather than appending overrides. Five focused tabs: Dashboard, Queue, Sources, Coverage, System. Consistent deep black / gray / restrained red with 13–15px readable operational text.
-- Real Mac aggregate feed powers four KPIs, candidate breakdown, searchable source/status table, state coverage, and diagnostics. Phone is required, email optional. No invented leads or fake time-series. Source CSV exports are aggregate-only; firm contacts stay in authorized local/Sheet storage.
-- Mac Chrome Playwright checks: 5/5 views at desktop 1440 and mobile 390, no JS page errors or horizontal viewport overflow. No Vercel deployment.
-
-## 2026-10-16 — operator CRM functional upgrade
-- Added real-history chart for source-triage totals (24h/3d/7d, only captured snapshots) and ranked candidate-status distribution with no fabricated conversion percentages or lead success.
-- Queue now has real pending/needs-proof status filters, Sources has category controls, full-text filtering and verified aggregate CSV download. These views do not publish private individual contacts.
-- Local Chrome regression: all five views at 1440 and 390 without JS errors or horizontal overflow; extra click tests validated history period, queue filters, Sources category/search and actual CSV download. No Vercel deployment.
-
-## 2026-10-16 — operator homepage consolidation
-- Removed equal-weight dashboard KPI cards and generic analytics layout. A single prominent call-ready counter, three supporting figures, two precise evidence blockers, a compact review status list, and real hourly activity now form the homepage. All remain sourced from the Mac feed.
-- Kept five existing navigation routes and source controls. Desktop (1440) and mobile (390) Chrome checks passed across 5 routes with no page exceptions or overflow. No Vercel deployment.
-
-## 2026-10-16 CSS corruption fix
-- Root cause of white unstyled localhost screenshot: `site/law-dashboard/style.css` accidentally contained a complete duplicate of the HTML document (served as `text/css`). Restored actual CSS and checked served bytes, computed styles, desktop/mobile browser render. Preserve CSS content checks in reviews.
-- No changes to the user's separate pending scraper work or Vercel deployment.
-
-## 2026-10-16 — Private Mac candidate review table
-- Real, row-level local candidate data now powers Queue search, pagination and evidence inspection. The snapshot is generated from existing SQLite by `python3 ops/local_law/export_local_crm.py`, capped at 250 rows, and kept in gitignored `site/law-dashboard/local-queue.json` with 0600 permissions. The browser only loads private rows when running on localhost; public deployment retains aggregate-only information.
-- Candidate rows are **not** qualified lead claims; independent firm-wide 2–10 attorney evidence, no owned website and a published callable business phone remain hard gates; email is optional.
-
-## 2026-10-16 Mac and Sheet sync
-Existing 10-minute metrics launch agent now refreshes private local-queue.json from SQLite before publishing aggregate Gist metrics. Mac-local producer import path is fixed; live launchd kickstart produced a 176-row private snapshot and a successful aggregate Gist publication. No new services.
-Google Sheet Verified Calling Queue read succeeded with header-only data; latest strict calling export yielded 0 entries. Native Mac Sheets writer still lacks LAW_SHEETS_CREDENTIALS. Connected hourly task is enabled to perform verified source-backed idempotent Sheets upserts when qualifying rows exist. No unqualified candidate must ever be uploaded.
-
-## October 16: owned-site evidence reconciliation
-
-Run `python3 -m ops.local_law.reconcile_owned_sites` from the repository root after researching sources. This conservative, idempotent Mac-only step joins `research_catalog.sqlite3.external_evidence` to the existing `law-leads.sqlite3` verifier by exact lead ID, firm, phone, and state. It marks direct, corroborated owned-site cases as `review_website` / `published_owned_website` without increasing verification attempts or losing prior size evidence. Directory profile URLs and ambiguous identity/phone claims are not treated as direct firm websites. It does not promote any lead. The script was run once against the local queue and reconciled four prior pending firms; a second run changed zero. Eleven reconciliation/Common Crawl tests passed. The calling and strict exports remain zero; Google Sheets remains unchanged. This utility is manual and is not yet wired into the campaign scheduler.
+Previous diagnostics and failed approaches remain in [the prior repair report](REPAIR_2026-10-18.md) and git history. Their former 2–10 eligibility rules are superseded.

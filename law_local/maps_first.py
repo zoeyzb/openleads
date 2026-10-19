@@ -162,8 +162,7 @@ def verify_map_headcounts(db,fetch_fn=None,seconds=100,max_profiles=30,source_re
                       "city":record["city"],"state":record["state"],
                       "source_url":url}
                 evidence=evaluate_published_source(html,lead)
-                if (2<=evidence["attorneys"]<=10
-                        and firm_identity_matches(html,lead)):
+                if firm_identity_matches(html,lead):
                     candidate=lead
             status="not_matching_sourced_size_phone"
             if candidate:

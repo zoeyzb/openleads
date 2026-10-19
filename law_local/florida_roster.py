@@ -31,7 +31,10 @@ NON_PRIVATE=re.compile(
     r"office of the attorney general|county attorney|city attorney|"
     r"department of|county government|circuit court|judicial circuit|"
     r"courthouse|legal aid society|university|law school|"
-    r"department of justice|bank|mortgage|insurance company)\b",re.I)
+    r"department of justice|internal revenue service|irs|doah|division of|"
+    r"fish (?:and|&) wildlife|commission|bureau of|city of|county of|"
+    r"office of administrative hearings|general counsel|corporate counsel|"
+    r"bank|mortgage|insurance company)\b",re.I)
 H1=re.compile(r"<h1\b[^>]*>(.*?)</h1>",re.I|re.S)
 # Roster includes in-house counsel at businesses. A size count by itself
 # NEVER proves an organization is a private law firm.

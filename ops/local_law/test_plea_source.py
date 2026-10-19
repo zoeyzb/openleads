@@ -64,7 +64,7 @@ class PleaSourceTests(unittest.TestCase):
          health=lambda:{'status':'degraded','positive_control_found':False})
   self.assertEqual(result['attempted'],0)
   self.assertEqual(result['reason'],'positive_owned_site_control_failed')
- def test_site_holds_are_not_qualified_and_solo_skipped(self):
+ def test_site_holds_are_not_qualified_and_solo_is_included(self):
   ingest(self.path,states=['de'],fetch=lambda *args,**kwargs:PAGE)
   searches=[]
   def search(lead):
@@ -73,10 +73,10 @@ class PleaSourceTests(unittest.TestCase):
            {'provider':'searxng:yep','responded':True,'urls':['https://lawyers.com/example']}]
   ok={'status':'usable','positive_control_found':True}
   result=audit_sites(self.path,limit=8,search=search,health=lambda:ok)
-  self.assertEqual(result['attempted'],1)
-  self.assertEqual(result['possible_owned_sites'],1)
+  self.assertEqual(result['attempted'],2)
+  self.assertEqual(result['possible_owned_sites'],2)
   self.assertEqual(result['strict_qualified_created'],0)
-  self.assertEqual(searches,['Dover & Associates LLP'])
+  self.assertEqual(searches,['Dover & Associates LLP','Solo Law Office'])
   again=audit_sites(self.path,limit=8,search=lambda *_:(_ for _ in ()).throw(AssertionError('hold repeated')),
                     health=lambda:ok)
   self.assertEqual(again['attempted'],0)
@@ -85,7 +85,7 @@ class PleaSourceTests(unittest.TestCase):
   def search(_):return [{'provider':'searxng:yandex','responded':True,'urls':['https://www.lawyers.com/example']},
                          {'provider':'searxng:yep','responded':True,'urls':['https://justia.com/attorneys/example']}]
   res=audit_sites(self.path,search=search,health=lambda:{'status':'usable','positive_control_found':True})
-  self.assertEqual(res['no_attributable_site_found'],1)
+  self.assertEqual(res['no_attributable_site_found'],2)
   c=sqlite3.connect(self.path)
   self.assertEqual(c.execute("SELECT website_status FROM plea_firm_research WHERE member_count=2").fetchone()[0],'screened_no_site')
   self.assertEqual(c.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='candidates'").fetchone()[0],0)

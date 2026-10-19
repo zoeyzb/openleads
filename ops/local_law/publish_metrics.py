@@ -29,7 +29,7 @@ def snapshot():
   try:
    qualified=int(q.counts().get("calling_qualified",0))
    # Count only rows that pass the SAME full source and freshness gates as
-   # the strict export, including the source-verified email and 2-10 lawyers.
+   # the strict export, including the source-verified email with attorney count optional.
    strict_qualified=sum(1 for _ in q._verified_rows(("strict_eligible",)))
   finally:q.close()
  except Exception: pass
@@ -62,7 +62,7 @@ def snapshot():
  catalog=count(ROOT/"research_catalog.sqlite3","source_research")
  sources=rows(ROOT/"research_catalog.sqlite3","SELECT source,COUNT(*) FROM source_research GROUP BY source ORDER BY source")
  return {"schema":1,"updatedAt":datetime.now(timezone.utc).isoformat(timespec="seconds"),"host":"Mac local worker","research":catalog,"sourceBreakdown":{str(k):int(v) for k,v in sources},"callingQualified":qualified,"strictQualified":strict_qualified,
-         "legacyPhoneOnly":max(0,qualified-strict_qualified),"candidateStatuses":statuses,"triageStatuses":{k:v for k,v in triage},"coverage":coverage,"providerHealth":provider,"lastVerification":last_verification,"source":"mac-sqlite-aggregate","note":"Strict eligible requires source-confirmed 2–10 attorneys, no attributable owned website, matching business phone and a usable published email. Legacy phone-only is not strict."}
+         "legacyPhoneOnly":max(0,qualified-strict_qualified),"candidateStatuses":statuses,"triageStatuses":{k:v for k,v in triage},"coverage":coverage,"providerHealth":provider,"lastVerification":last_verification,"source":"mac-sqlite-aggregate","note":"Strict eligible requires no attributable owned website, matching business phone and a usable published email. Legacy phone-only is not strict."}
 def api(args,body=None):
  command=["/opt/homebrew/bin/gh","api",*args]
  r=subprocess.run(command,input=json.dumps(body) if body else None,text=True,capture_output=True,timeout=25)

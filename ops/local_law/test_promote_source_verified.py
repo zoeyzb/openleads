@@ -43,7 +43,8 @@ class StrictConversionTests(unittest.TestCase):
  def health(): return {'status':'usable','positive_control_found':True}
  def call(self,review=None,**kwargs):
   return qualify(self.db,review or REVIEW,fetch=self.source,search=kwargs.pop('search',self.search),
-                 health=kwargs.pop('health',self.health),mx=kwargs.pop('mx',lambda _:True))
+                 health=kwargs.pop('health',self.health),mx=kwargs.pop('mx',lambda _:True),
+                 site_probe=kwargs.pop('site_probe',lambda emails:[]))
  def test_single_member_association_profile_scopes_published_contact(self):
   profile='<div class="memberDirectoryDetailsContainer"><div class="memberDirectoryDetailsHeaderContainer"><h2>Rebecca Rodriguez</h2><h3>Sauk Valley Law Group, LLC</h3></div><h4>Member profile details</h4><div class="fieldLabel"><span>Email</span></div><div class="fieldBody"><span><a href="mailto:rodriguez@saukvalleylaw.com">rodriguez@saukvalleylaw.com</a></span></div><div class="fieldLabel"><span>Phone</span></div><div class="fieldBody"><span>815-535-6769</span></div></div></div><div class="gadgetContentEditableArea">Association footer <a href="mailto:info@irela.org">info@irela.org</a></div>'
   self.assertTrue(exact_contact_block(profile,'Sauk Valley Law Group, LLC','8155356769',
@@ -74,14 +75,14 @@ class StrictConversionTests(unittest.TestCase):
   result=self.call(review)
   self.assertEqual(result['new_qualified'],0)
   self.assertEqual(result['reason'],'no_scoped_published_phone_and_email')
- def test_headcount_source_missing_named_lawyer_cannot_promote(self):
+ def test_optional_headcount_does_not_block_contact_qualification(self):
   review={**REVIEW,'named_attorneys':['Gregory Morris','Sam Impossible']}
   result=self.call(review)
-  self.assertEqual(result['reason'],'headcount_source_not_matched')
- def test_absent_firmwide_review_cannot_promote(self):
+  self.assertEqual(result['new_qualified'],1)
+ def test_absent_firmwide_review_is_optional(self):
   review={**REVIEW,'firmwide_2_10_review_confirmed':False}
   result=self.call(review)
-  self.assertEqual(result['reason'],'incomplete_review_requirements')
+  self.assertEqual(result['new_qualified'],1)
  def test_site_positive_control_failure_cannot_promote(self):
   result=self.call(health=lambda:{'status':'degraded','positive_control_found':False})
   self.assertEqual(result['reason'],'website_positive_control_failed')
@@ -124,7 +125,7 @@ class StrictConversionTests(unittest.TestCase):
   ev=json.loads(r['result_json']);ev['email_mx_ok']=False
   self.assertFalse(q._verified_for_export(r,ev,'strict_eligible'))
   ev=json.loads(r['result_json']);ev['attorneys']=1
-  self.assertFalse(q._verified_for_export(r,ev,'strict_eligible'))
+  self.assertTrue(q._verified_for_export(r,ev,'strict_eligible'))
   q.close()
 
 if __name__=='__main__':unittest.main()

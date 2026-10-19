@@ -84,7 +84,31 @@ class FreeSearchTests(unittest.TestCase):
         with patch.dict('os.environ', {'OPENLEADS_YACY_ENABLED':'0'}), patch('law_local.free_search.searx_engine', side_effect=lambda query,engine,lead=None: {'provider':'searxng:'+engine,'responded':True,'urls':[]} ) as engine:
             sources=free_search.search_firm(lead)
             self.assertEqual([x['provider'] for x in sources], ['searxng:yandex','searxng:yep'])
-            self.assertEqual(engine.call_count,2)
+            self.assertEqual(engine.call_count,4)
+
+    def test_truncated_source_name_does_not_hide_possible_owned_site(self):
+        lead={'firm':'The Law Office of Kyle Thompso','state':'KY'}
+        data={'results':[{'url':'https://actual-practice.example/','engine':'yandex',
+                          'title':'Kyle Thompson, Attorney at Law'}]}
+        out=free_search.searx_engine('Kyle Thompso lawyer','yandex',fetch=lambda _:data,lead=lead)
+        self.assertEqual(out['urls'],['https://actual-practice.example/'])
+
+    def test_phone_match_retains_renamed_practice_for_review(self):
+        lead={'firm':'Old Practice Law Office','phone':'2142997700','state':'TX'}
+        data={'results':[{'url':'https://renamed-law.example/','engine':'yandex',
+                          'title':'Renamed Attorneys','content':'Contact 214-299-7700'}]}
+        out=free_search.searx_engine('214-299-7700','yandex',fetch=lambda _:data,lead=lead)
+        self.assertEqual(out['urls'],['https://renamed-law.example/'])
+
+    def test_alias_queries_cannot_supply_missing_negative_provider(self):
+        def response(query,engine,lead=None):
+            if query.startswith('"'):
+                return {'provider':'searxng:'+engine,'responded':False,'urls':[]}
+            return {'provider':'searxng:'+engine,'responded':True,'urls':['https://owned.example/']}
+        with patch('law_local.free_search.searx_engine',side_effect=response):
+            got=free_search.search_firm({'firm':'Test Office Law','state':'TX'})
+        self.assertFalse(got[0]['responded']);self.assertFalse(got[1]['responded'])
+        self.assertFalse(got[-1]['responded']);self.assertEqual(got[-1]['provider'],'alias_phone_positive_only')
 
     def test_absent_attributed_search_hits_are_not_a_completed_negative(self):
         response={'results':[{'url':'https://unrelated.example/','engine':'bing','title':'Wrong search engine'}], 'unresponsive_engines':[]}

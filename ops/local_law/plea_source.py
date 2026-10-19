@@ -183,8 +183,6 @@ def audit_sites(catalog=ROOT/'research_catalog.sqlite3',limit=8,search=search_fi
         rows=db.execute('''SELECT * FROM plea_firm_research
             WHERE ((? AND website_status='screened_no_site') OR website_status='not_checked' OR
                    (website_status='inconclusive' AND website_checked_at<?))
-              AND (member_count>=2 OR firm LIKE '%&%' OR lower(firm) LIKE '% llp%'
-                   OR lower(firm) LIKE '% law group%')
             ORDER BY CASE WHEN website_status='screened_no_site' THEN 0 ELSE 1 END, CASE
                  WHEN (lower(research_json) LIKE '%@gmail.com%'
                        OR lower(research_json) LIKE '%@yahoo.com%'
@@ -212,7 +210,7 @@ def audit_sites(catalog=ROOT/'research_catalog.sqlite3',limit=8,search=search_fi
                 verdict=classify_search_results(sources)
                 website_status=verdict['status']
                 evidence={'providers':sources,'verdict':verdict,'checked_at':utc_now(),
-                          'disclaimer':'site research only; firmwide size not verified'}
+                          'disclaimer':'site research only; attorney count is optional; identity and email still require live checks'}
             except (ValueError,TypeError,KeyError,OSError) as exc:
                 website_status='inconclusive'
                 evidence={'error':type(exc).__name__,'checked_at':utc_now()}

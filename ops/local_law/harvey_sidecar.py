@@ -165,9 +165,8 @@ async def sync_strict(args):
         if not isinstance(row, dict):
             raise ValueError("bad firm row")
         if (row.get("status") != "strict_eligible" or row.get("site_status") != "screened_no_site"
-                or not 2 <= int(row.get("attorneys") or 0) <= 10
                 or not row.get("email") or "@" not in row["email"]
-                or not row.get("headcount_source") or not row.get("email_source")
+                or not row.get("source_url") or not row.get("email_source")
                 or not row.get("phone") or not row.get("firm") or not row.get("id")):
             raise ValueError("a non-strict lead reached the Harvey import boundary")
         key = row["id"]

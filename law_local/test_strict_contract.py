@@ -7,7 +7,7 @@ from law_local import free_search
 from law_local.site_provider_health import bounded_sources
 
 class ContractTests(unittest.TestCase):
- def test_any_size_labels_and_state_member_ranges_never_export(self):
+ def test_any_size_metadata_does_not_block_but_duplicate_providers_do(self):
   lead={"firm":"Fixture Law","phone":"3124221836","state":"IL","source_url":"https://www.lawyers.com/firm/fixture"}
   base={"phone":lead["phone"],"status":"strict_eligible","attorneys":4,
         "headcount_source":lead["source_url"],"email":"fixture@example.com",
@@ -20,7 +20,7 @@ class ContractTests(unittest.TestCase):
       {"qualification_scope":"law_no_owned_website_any_size"},
       {"site_evidence":{"providers":[{"provider":"one","responded":True}]*2}}):
    with self.subTest(change=change):
-    self.assertFalse(SqliteQueue._verified_for_export(lead,{**base,**change},"strict_eligible"))
+    self.assertEqual(SqliteQueue._verified_for_export(lead,{**base,**change},"strict_eligible"), "site_evidence" not in change)
  def test_selfhosted_discovery_uses_real_urls_and_no_legacy_network(self):
   responses=[{"responded":True,"urls":["https://www.lawyer.com/firm/fixture.html","https://unrelated.example/"]}]*2
   with patch.dict("os.environ",{"OPENLEADS_SEARCH_MODE":"local_forks"}),patch.object(free_search,"searx_engine",side_effect=responses):
@@ -31,8 +31,9 @@ class ContractTests(unittest.TestCase):
    return {"provider":"searxng:"+name,"responded":True,"urls":urls}
   with patch.object(free_search,"searx_engine",side_effect=engine):
    got=free_search.search_firm({"firm":"Typo Frm","emails":["lawyer@typo-free-firm.example"]})
-  self.assertEqual(got[2]["urls"],["https://typo-free-firm.example/contact"])
-  self.assertFalse(got[2]["responded"])
+  hint=next(v for v in got if v["provider"]=="published_email_domain_positive_only")
+  self.assertEqual(hint["urls"],["https://typo-free-firm.example/contact"])
+  self.assertFalse(hint["responded"])
  def test_shared_published_email_is_deduplicated_in_counts_and_csv(self):
   from law_local.worker import evaluate_candidate
   with tempfile.TemporaryDirectory() as root:

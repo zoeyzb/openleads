@@ -41,7 +41,7 @@ def query_url(limit=500,offset=0):
         "$select":"company_name,phone_number,city,state,count(*) as ny_attorneys",
         "$where":QUERY_WHERE,
         "$group":"company_name,phone_number,city,state",
-        "$having":"count(*) between 2 and 10",
+        "$having":"count(*) >= 1",
         "$order":"company_name,phone_number,city",
         "$limit":int(limit),"$offset":int(offset)
     }
@@ -54,7 +54,7 @@ def parse_groups(data):
         phone=normalize_phone(item.get("phone_number") or "")
         try:count=int(item.get("ny_attorneys") or 0)
         except (ValueError,TypeError):continue
-        if not company or not phone or count<2 or count>10:
+        if not company or not phone or count<1:
             continue
         status=evidence_class(company)
         rows.append({"company":company,"phone":phone,"city":str(item.get("city") or "").strip(),
@@ -67,7 +67,7 @@ def ensure(db):
         id TEXT PRIMARY KEY, company TEXT NOT NULL, phone TEXT NOT NULL,
         city TEXT NOT NULL, state TEXT NOT NULL, ny_attorneys INTEGER NOT NULL,
         source_url TEXT NOT NULL, status TEXT NOT NULL, checked_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS ny_registration_pages (
+        CREATE TABLE IF NOT EXISTS ny_registration_pages_any_size_v2 (
         source_version TEXT NOT NULL,page_offset INTEGER NOT NULL,
         count INTEGER NOT NULL,completed_at TEXT NOT NULL,
         PRIMARY KEY(source_version,page_offset));""")
@@ -77,17 +77,21 @@ def collect(db,fetch_fn=None,max_pages=6,page_size=500,seconds=110):
     ensure(db)
     fetch_fn=fetch_fn or fetch_public
     deadline=time.monotonic()+max(1,int(seconds))
-    v="currently_registered_ny_groups_v1"
+    v="currently_registered_ny_groups_any_size_page_"+str(int(page_size))
     stats={"pages":0,"groups_fetched":0,"rows_with_valid_phone":0,
            "possible_private_law_firms":0,"source_groups_stored":0,
            "pages_skipped":0,"source_errors":0}
-    for idx in range(max(1,int(max_pages))):
+    idx=0
+    while stats["pages"]<max(1,int(max_pages)):
         offset=idx*page_size
+        idx+=1
         if time.monotonic()>=deadline:
             break
-        if db.conn.execute("SELECT 1 FROM ny_registration_pages WHERE source_version=? AND page_offset=?",
-                           (v,offset)).fetchone():
+        prior=db.conn.execute("SELECT count FROM ny_registration_pages_any_size_v2 WHERE source_version=? AND page_offset=?",
+                           (v,offset)).fetchone()
+        if prior:
             stats["pages_skipped"]+=1
+            if prior[0]<page_size:break
             continue
         try:
             payload=fetch_fn(query_url(page_size,offset),timeout=15)
@@ -110,7 +114,7 @@ def collect(db,fetch_fn=None,max_pages=6,page_size=500,seconds=110):
                 (key,row["company"],row["phone"],row["city"],row["state"],row["ny_attorneys"],
                  row["source_url"],row["status"],utc_now()))
             stats["source_groups_stored"]+=int(result.rowcount>0)
-        db.conn.execute("INSERT INTO ny_registration_pages VALUES (?,?,?,?)",
+        db.conn.execute("INSERT INTO ny_registration_pages_any_size_v2 VALUES (?,?,?,?)",
                         (v,offset,len(values),utc_now()))
         db.conn.commit()
         stats["pages"]+=1

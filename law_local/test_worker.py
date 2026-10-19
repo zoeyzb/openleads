@@ -240,7 +240,7 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(result["status"],"call_qualified_no_email")
         self.assertEqual(result["email"],"")
 
-    def test_published_email_without_valid_firmwide_size_never_strict_qualifies(self):
+    def test_published_email_qualifies_regardless_of_firm_size(self):
         for wording in ('Keystone & Parker Law Group has 1 attorney.',
                         'Keystone & Parker Law Group has 24 attorneys.',
                         'The attorneys at this location have 4 members.'):
@@ -248,7 +248,7 @@ class QualityTests(unittest.TestCase):
                 html=PROFILE.replace('Keystone & Parker Law Group has 4 attorneys.',wording)
                 result=evaluate_candidate(LEAD,html,[{'responded':True,'urls':[]},
                               {'responded':True,'urls':[]}],mx_check=lambda domain:True)
-                self.assertNotEqual(result['status'],'strict_eligible')
+                self.assertEqual(result['status'],'strict_eligible')
 
     def test_strict_gate_requires_mx_and_two_no_site_checks(self):
         good=evaluate_candidate(LEAD,PROFILE,[{"responded":True,"urls":[]},{"responded":True,"urls":[]}],
@@ -266,7 +266,7 @@ class QualityTests(unittest.TestCase):
         page="<h1>Abrahamson & Uiterwyk Injury Lawyers</h1><p>727-725-9411</p><p>Attorneys 5 active</p>"
         result=evaluate_candidate(lead,page,[{"responded":True,"urls":[]},
                               {"responded":True,"urls":[]}],lambda domain:True)
-        self.assertEqual(result["status"],"review_firmwide_headcount")
+        self.assertEqual(result["status"],"call_qualified_no_email")
         self.assertEqual(result["attorneys"],0)
 
     def test_owned_site_hint_still_trumps_fl_size_scope(self):
@@ -339,16 +339,16 @@ class QualityTests(unittest.TestCase):
             self.assertEqual(db.export("calling_qualified",export_path),1)
             db.close()
 
-    def test_unreported_firmwide_size_is_held_for_evidence(self):
+    def test_unreported_firmwide_size_does_not_block_phone_lane(self):
         page=PROFILE.replace("Keystone & Parker Law Group has 4 attorneys.","")
-        result=evaluate_candidate(LEAD,page,[{"responded":True,"urls":[]},
-             {"responded":True,"urls":[]}],lambda domain:False)
-        self.assertEqual(result["status"],"review_firmwide_headcount")
+        result=evaluate_candidate(LEAD,page,[{"provider":"fixture-one","responded":True,"urls":[]},
+             {"provider":"fixture-two","responded":True,"urls":[]}],lambda domain:False)
+        self.assertEqual(result["status"],"call_qualified_no_email")
         self.assertEqual(result["attorneys"],0)
         with tempfile.TemporaryDirectory() as folder:
             db=SqliteQueue(Path(folder)/"law.sqlite3")
             db.add(LEAD);db.record(LEAD,result)
-            self.assertEqual(db.counts()["calling_qualified"],0)
+            self.assertEqual(db.counts()["calling_qualified"],1)
             db.close()
 
     def test_export_does_not_trust_status_without_verified_evidence(self):
@@ -494,7 +494,8 @@ class EndToEndTests(unittest.TestCase):
                  patch("law_local.worker.search_for_firm",return_value=[
                      {"provider":"fixture-one","responded":True,"urls":[]},{"provider":"fixture-two","responded":True,"urls":[]}
                  ]), \
-                 patch("law_local.worker.domain_has_mail",return_value=True):
+                 patch("law_local.worker.domain_has_mail",return_value=True), \
+                 patch("law_local.worker.email_domain_websites",return_value=[]):
                 result=run_batch(db,max_rows=1,workers=1,seconds=10)
             self.assertEqual(result,{"strict_eligible":1})
             output=Path(folder)/"strict.csv"

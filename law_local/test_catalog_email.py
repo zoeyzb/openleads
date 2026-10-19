@@ -19,7 +19,7 @@ class CatalogEmailTests(unittest.TestCase):
  def tearDown(self):self.tmp.cleanup()
  def call(self,lead=None,result=None,page=PAGE,providers=None):
   return recover(lead or self.lead,result or self.result,self.catalog,
-           lambda *a,**k:page,lambda d:True,lambda l:providers or self.providers)
+           lambda *a,**k:page,lambda d:True,lambda l:providers or self.providers,probe=lambda emails:[])
  def test_exact_public_contact_promotes_with_separate_provenance(self):
   result=self.call()
   self.assertEqual(result["status"],"strict_eligible")
@@ -33,5 +33,5 @@ class CatalogEmailTests(unittest.TestCase):
  def test_new_positive_owned_domain_revokes_prior_negative(self):
   providers=[{**self.providers[0],"urls":["https://practice-owned.example/"]},self.providers[1]]
   self.assertEqual(self.call(providers=providers)["status"],"review_website")
- def test_catalog_email_never_waives_size(self):
-  self.assertEqual(self.call(result={**self.result,"attorneys":1})["status"],"call_qualified_no_email")
+ def test_catalog_email_accepts_solo_firm(self):
+  self.assertEqual(self.call(result={**self.result,"attorneys":1})["status"],"strict_eligible")

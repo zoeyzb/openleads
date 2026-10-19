@@ -47,8 +47,8 @@ class BarSourceTests(unittest.TestCase):
     def test_wrong_size_or_missing_business_phone_never_candidate(self):
         for value in ["1-10","1-5","11-50"]:
             lead,reason=extract_inbar_firm(URL,PROFILE.replace("2-10",value))
-            self.assertIsNone(lead)
-            self.assertEqual(reason,"missing_or_out_of_range_firm_size")
+            self.assertIsNotNone(lead)
+            self.assertEqual(reason,"candidate")
         lead,reason=extract_inbar_firm(URL,PROFILE.replace("(317) 246-8784 (Phone)",""))
         self.assertIsNone(lead)
         self.assertEqual(reason,"no_published_professional_phone")

@@ -156,7 +156,7 @@ def process_backlog():
     """
     try:
         result=command(["-m","law_local.worker","--db",str(DB),"run",
-                        "--max","20","--workers","2","--seconds","90"],140)
+                        "--max","60","--workers","2","--seconds","240"],285)
         code=result.returncode
         output=(result.stdout+result.stderr)[-5000:]
     except subprocess.TimeoutExpired:
@@ -182,6 +182,10 @@ def cycle():
  with (ROOT/"campaign.lock").open("w") as lock:
   try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
   except BlockingIOError: print('another run is active');return 2
+  from ops.local_law.any_size_policy import apply
+  from ops.local_law.bridge_contacts import bridge
+  log_record(dict(time=now(),any_size_migration=apply(ROOT)))
+  log_record(dict(time=now(),email_source_bridge=bridge(ROOT,25)))
   # Restore saved historical raw Maps discoveries idempotently, avoiding a
   # second disconnected CSV queue. Old metadata is never evidence of no site.
   archived=ROOT/"research_archives/fl/maps/no-site-phone-candidates.csv"
@@ -216,7 +220,7 @@ def cycle():
   except subprocess.TimeoutExpired:
    with (ROOT/"campaign-runs.log").open("a") as log:
     log.write(json.dumps(dict(time=now(),local_maps_cycle_error="timeout"))+"\n")
-  # Maps screening is research only. Firmwide 2–10 remains mandatory.
+  # Maps screening is research only; source identity and email still need proof.
   # Screen phone prospects directly
   # against independently functioning website-search providers; fail closed.
   try:
@@ -227,7 +231,7 @@ def cycle():
   except subprocess.TimeoutExpired:
    with (ROOT/"campaign-runs.log").open("a") as log:
     log.write(json.dumps(dict(time=now(),maps_site_screen_error="timeout"))+"\n")
-  # Reconnect Maps research to the missing firmwide-size verification stage.
+  # Reconnect Maps research to matched public firm profiles.
   try:
    sized=command(["-m","law_local.maps_first","--db",str(DB),
                   "--max-profiles","8","--seconds","65"],100)
@@ -245,10 +249,16 @@ def cycle():
   except subprocess.TimeoutExpired:
    with (ROOT/"campaign-runs.log").open("a") as log:
     log.write(json.dumps(dict(time=now(),maps_research_export_error="timeout"))+"\n")
+  # Official public active-lawyer contacts: bounded and persisted; no ID guessing.
+  try:
+   bar=command(["-m","law_local.wsba_source","--db",str(DB),"--seconds","45"],65)
+   log_record(dict(time=now(),wsba_contacts_exit=bar.returncode,output=(bar.stdout+bar.stderr)[-1200:]))
+  except subprocess.TimeoutExpired:
+   log_record(dict(time=now(),wsba_contacts_error="timeout"))
   # Fresh source-published attorney business phone+email directory.
   # Revisit due states daily; unavailable sources cool down for 24 hours.
   # Never promote these records from source contacts or a negative site scan:
-  # current private-practice status and firmwide 2–10 count remain gates.
+  # current private-practice status and source-published email remain gates.
   try:
    plea=command(["-m","ops.local_law.plea_source","ingest"],115)
    with (ROOT/"campaign-runs.log").open("a") as log:

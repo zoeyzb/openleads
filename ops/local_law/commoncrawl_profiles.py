@@ -83,8 +83,6 @@ def extract_profile(url,source):
  # Explicit owned website = exclude from no-website queue.
  lead={'firm':candidate,'phone':phone,'city':'','state':'','source_url':url,'firm_size_low':lo,'firm_size_high':hi,'owned_site_hints':owned[:3]}
  if owned:return lead,'has_owned_website'
- if lo is None or hi is None:return lead,'no_explicit_size'
- if not 2 <= lo <= hi <= 10:return lead,'outside_firm_size'
  return lead,'candidate_needs_site_audit'
 
 def ensure(con):

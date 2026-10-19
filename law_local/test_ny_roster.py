@@ -17,7 +17,7 @@ class NYSourceTests(unittest.TestCase):
     def test_query_stays_in_current_status_and_bounds_size(self):
         qs=parse_qs(urlparse(query_url(100,200)).query)
         self.assertIn("status='Currently registered'",qs["$where"][0])
-        self.assertEqual(qs["$having"][0],"count(*) between 2 and 10")
+        self.assertEqual(qs["$having"][0],"count(*) >= 1")
         self.assertEqual(qs["$offset"][0],"200")
     def test_company_and_address_not_silently_called_law_firms(self):
         self.assertEqual(evidence_class("AAREAL CAPITAL CORPORATION"),"not_law_business")
@@ -27,6 +27,20 @@ class NYSourceTests(unittest.TestCase):
         groups=parse_groups(SAMPLE)
         self.assertEqual(len(groups),4)
         self.assertEqual(sum(v["status"]=="possible_private_law_firm" for v in groups),2)
+    def test_bounded_runs_advance_past_completed_pages_without_skipping_new_page_sizes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db=SqliteQueue(Path(folder)/"state.sqlite");offsets=[]
+            def fetch(url,timeout=15):
+                qs=parse_qs(urlparse(url).query);offsets.append(int(qs['$offset'][0]))
+                return json.dumps(SAMPLE if offsets[-1]==0 else [])
+            collect(db,fetch,max_pages=1,page_size=4)
+            collect(db,fetch,max_pages=1,page_size=4)
+            self.assertEqual(offsets,[0,4])
+            collect(db,fetch,max_pages=1,page_size=4)
+            self.assertEqual(offsets,[0,4])
+            collect(db,fetch,max_pages=1,page_size=10)
+            self.assertEqual(offsets,[0,4,0]);db.close()
+
     def test_checkpointed_ny_groups_never_become_eligible_without_full_checks(self):
         with tempfile.TemporaryDirectory() as folder:
             db=SqliteQueue(Path(folder)/"state.sqlite")
