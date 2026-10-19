@@ -170,7 +170,6 @@ async function collectVerifiedEmailCandidateRows(redis){
       const sourceVerified=lead.law_email_source_verified===true||lead.email_source_verified===true;
       if(!emails.length||!sourceVerified||sourceIsOwnedEmailDomain(emailSource,emails[0]))continue;
       const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
-      if(lead.attorney_count_evidence_verified!==true||attorneyCount<2||attorneyCount>10)continue;
       const evidence=[lead.category,lead.name,lead.description,lead.descriptions].filter(Boolean).join(" ");
       const practiceKeys=[...new Set([
         ...(Array.isArray(lead.practice_keys)?lead.practice_keys:[]),

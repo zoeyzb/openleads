@@ -249,6 +249,12 @@ def cycle():
   except subprocess.TimeoutExpired:
    with (ROOT/"campaign-runs.log").open("a") as log:
     log.write(json.dumps(dict(time=now(),maps_research_export_error="timeout"))+"\n")
+  # Source-published email-first research; shared source crawl reservation and cache.
+  try:
+   irela=command(["-m","law_local.irela_source","--db",str(DB)],45)
+   log_record(dict(time=now(),irela_contacts_exit=irela.returncode,output=(irela.stdout+irela.stderr)[-1200:]))
+  except subprocess.TimeoutExpired:
+   log_record(dict(time=now(),irela_contacts_error="timeout"))
   # Official public active-lawyer contacts: bounded and persisted; no ID guessing.
   try:
    bar=command(["-m","law_local.wsba_source","--db",str(DB),"--seconds","45"],65)

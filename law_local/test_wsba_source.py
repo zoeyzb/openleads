@@ -8,7 +8,7 @@ def profile(size='Law firm with 1 WSBA member',status='Active',site=''):
  return ''.join('<span id="dnn_'+k+'">'+v+'</span>' for k,v in values.items())+'<a id="dnn_hlWebsite" href="'+site+'">Visit website</a>'
 class WsbaTests(unittest.TestCase):
  def test_count_optional_and_source_email_scoped_to_typed_field(self):
-  for size in ('Law firm with 1 WSBA member','Law firm with 100+ WSBA members','Sole practitioner'):
+  for size in ('Law firm with 1 WSBA member','Law firm with 100+ WSBA members','Sole practitioner','','Unknown'):
    h=profile(size)+'<footer>unrelated@footer.example</footer>'
    lead,why=contact(SEED,h);self.assertEqual(why,'candidate')
    self.assertEqual(lead['emails'],['lawyer@fixture.example'])

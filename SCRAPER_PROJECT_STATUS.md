@@ -34,3 +34,11 @@ Reuse source-backed archive records before duplicate scraping. Prioritize identi
 Two independently named SearXNG upstream engines (Yandex and Yep) must pass owned-site controls. Broader name and exact-phone searches plus direct custom-mail-domain checks add positive ownership hints; they cannot supply missing negative provider evidence. PLEA emails are bound to the same firm/phone card, not borrowed from adjacent firms.
 
 The one-time size-only migration preserves prior evidence and requeues candidates for fresh checks; it never auto-qualifies. Prior website/identity/inactive holds remain authoritative. The archive bridge now skips already queued identities so it can progress past its old first-page starvation.
+
+## Continuation repairs — 2026-10-19
+
+See [continuation evidence](ops/local_law/REPAIR_CONTINUATION_2026-10-19.md) for the remaining legacy Node/Sheets size-gate removal, fresh-candidate queue priority, null-MX validation, Washington retries, retained website-provider observations, and the new bounded IRELA public-contact adapter. The canonical SQLite database and hourly Mac launchd job remain in place. No paid services were added. Runtime counts and full-cycle outcomes remain in the Mac campaign log and continuation checkpoint; raw source volume must never be reported as strict-qualified volume.
+
+### October 19, 2026: executed end-to-end checkpoint
+
+See `ops/local_law/REPAIR_CONTINUATION_2026-10-19.md` for test evidence, the independently controlled empty-search fix, business-identity exclusion, live batch/campaign, Mac disk recovery and real counts. At 06:33 UTC the canonical Mac database held 4 strict email-qualified leads plus 8 separate phone-only leads. Targets of 1,000 and 10,000 remain unmet; no headcount gating was restored. Source-email and site-attribution yield are still the primary blockers. The local campaign completed with exit 0; GitHub/cloud artifact state is not automatically the Mac SQLite state.

@@ -81,11 +81,6 @@ export function lawFirmNameShape(value={}){
   return "unknown";
 }
 
-export function isPreferredLawFirmSize(value=0){
-  const n=Number(value||0);
-  return Number.isFinite(n)&&n>=2&&n<=10;
-}
-
 export function normalizeLawPhone(value=""){
   let digits=String(value||"").replace(/\D+/g,"");
   if(digits.length===11&&digits.startsWith("1"))digits=digits.slice(1);
@@ -101,18 +96,15 @@ export function isUsableLawPhone(value=""){
 
 export function qualifiesCallReadyNoWebsiteLawLead(lead={}){
   const website=String(lead.website||lead.website_url||"").trim();
-  const attorneyCount=Number(lead.attorney_count_estimate||lead.attorney_count||0);
-  const sizeEvidenceVerified=lead.attorney_count_evidence_verified===true;
-  return !/^https?:\/\//i.test(website) &&
+  const identityVerified=lead.law_identity_verified===true || lead.attorney_count_evidence_verified===true;
+  return identityVerified && !/^https?:\/\//i.test(website) &&
     lead.no_owned_website_verified===true &&
-    sizeEvidenceVerified &&
-    isPreferredLawFirmSize(attorneyCount) &&
     isUsableLawPhone(lead.phone);
 }
 
 export function qualifiesNoWebsiteLawLead(lead={}){
   // Campaign eligibility: callable law firm + no owned website +
-  // source-verified 2-10 attorney headcount. Email is bonus enrichment.
+  // matched business contact. Size is optional; strict email stays separate.
   return qualifiesCallReadyNoWebsiteLawLead(lead);
 }
 

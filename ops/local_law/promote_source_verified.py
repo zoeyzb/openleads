@@ -184,7 +184,7 @@ def qualify(db_path,review,fetch=fetch_public,search=search_firm,
                  'verified_at':utc_now(), 'headcount_basis':'optional metadata; attorney count not required'},
             'checked_at':utc_now()}
         # Verify the evidence contract before altering the live calling DB.
-        if not db._verified_for_export({'phone':phone,'source_url':sources['identity']},
+        if not db._verified_for_export({'firm':lead['firm'],'phone':phone,'source_url':sources['identity']},
                                         evidence,'strict_eligible'):
             return {**report,'reason':'export_proof_gate_failed'}
         baseline=db.counts()['calling_qualified']

@@ -54,9 +54,23 @@ DIRECTORY_DOMAINS = (
     "reachattorneys.com", "bestprosintown.com", "wanderboat.ai",
     "111things.com", "sullivanauctioneers.com", "irela.org",
     "uscompanies.net", "waze.com", "irela.org",
+    # Search-result noise from public directories, social link pages, and
+    # editorial databases. None is proof of an owned firm website. Unknown
+    # domains still fail closed for attribution review.
+    "lawyerlegion.com", "chambers.com", "checkmyattorney.com",
+    "linktr.ee", "wikipedia.org", "legalrank.co", "usattorneys.com",
+    "bisprofiles.com", "lawyer-map.com", "clearwaylaw.com",
+    "law.usnews.com", "leadiq.com", "contactout.com",
+    "bestlawyers.com", "prabook.com", "2findlocal.com",
+    "citysquares.com", "rocketreach.co", "indeed.com",
+    "theorg.com", "clutch.co", "crunchbase.com",
+    "law.cornell.edu", "allpeople.com", "uslawlist.com",
+    "attorneys.org", "bestlawfirms.com", "lawyerpages.law",
+    "findpersonalinjurylawyer.com", "datanyze.com",
+    "zipleaf.us", "dexknows.com", "lawyersamerica.net",
 )
 EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
-PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[\s.()\-]*)?([2-9]\d{2})[\s.()\-]*([2-9]\d{2})[\s.\-]*(\d{4})(?!\d)")
+PHONE_RE = re.compile(r"(?<!\d)(?:\+?1[\s.()\-]*)?([2-9]\d{2})[\s.()/\-]*([2-9]\d{2})[\s./\-]*(\d{4})(?!\d)")
 NON_EMAIL_PREFIXES = ("noreply@", "no-reply@", "donotreply@", "example@", "test@")
 BLOCKED_SUFFIXES = (".example", ".invalid", ".test", ".localhost")
 
@@ -105,10 +119,22 @@ def reader(html):
     p.feed(str(html or "")[:500000])
     return p
 
+def generic_practice_label(value):
+    """Directory category titles are not attributable firm identities."""
+    label=norm(value)
+    return label in {
+        "attorney","attorneys","lawyer","lawyers","law firm","law firms",
+        "law office","law offices","attorney at law","attorneys at law",
+        "legal services","legal counsel","private law practice",
+        "law practice",
+    }
+
 def firm_identity_matches(html,lead):
     p=reader(html)
     text=norm(" ".join(p.parts))
     firm=norm(lead.get("firm",""))
+    if generic_practice_label(firm):
+        return False
     phone=normalize_phone(lead.get("phone",""))
     published={normalize_phone(m.group()) for m in PHONE_RE.finditer(" ".join(p.parts))}
     # Never match a phone by concatenating unrelated page digits.
@@ -138,6 +164,12 @@ def evaluate_published_source(html,lead):
         blocks=[exact_contact_block(html,lead["firm"],lead["phone"],r["email"],lead["source_url"]) for r in matches]
         html=" ".join(b for b in blocks if b)
         if not html:return {"attorneys":0,"emails":[],"website_candidates":[],"scoped_contact_matched":False}
+    if host == "irela.org":
+        from law_local.irela_source import contact
+        member, reason = contact(lead.get("source_url", ""), html)
+        if not member or norm(member["firm"]) != norm(lead["firm"]) or normalize_phone(member["phone"]) != normalize_phone(lead["phone"]):
+            return {"attorneys":0,"emails":[],"website_candidates":[],"scoped_contact_matched":False}
+        return {"attorneys":0,"attorney_range":None,"emails":member["emails"],"website_candidates":member["website_candidates"]}
     if host in ("mywsba.org",):
         from law_local.wsba_source import contact
         member,reason=contact(lead.get("source_url",""),html)
@@ -238,6 +270,27 @@ def classify_search_results(search_results):
         return {"status":"inconclusive","reason":"search_provider_unavailable"}
     return {"status":"screened_no_site","reason":"two_completed_negative_searches"}
 
+def clearly_non_private_practice(firm):
+    """Known employer categories are not private law practices, even on Bar rosters.
+
+    Do not equate a lawyer's listed employer with the existence of a law firm.
+    Explicit law-practice wording prevents sector keywords in real firm names
+    (e.g. "Medical Law Group") from being rejected solely by industry terms.
+    """
+    from law_local.florida_roster import clearly_non_law_employer, NON_PRIVATE
+    if clearly_non_law_employer(firm) or NON_PRIVATE.search(str(firm or "")):
+        return True
+    name=str(firm or "")
+    if re.search(r"(?i)\b(?:assistant\s+district\s+attorney|district\s+attorney|"
+                 r"state\s+attorney(?:'s)?\s+office|public\s+defender|"
+                 r"attorney\s+general|municipal\s+prosecutor)\b",name):
+        return True
+    practice=bool(re.search(r"(?i)\b(?:law|legal|attorneys?|lawyers?|counsel)\b",name))
+    sector=bool(re.search(
+        r"(?i)\b(?:clinic|hospital|medical\s+center|airlines?|hotel|vacations|"
+        r"medtronic|accenture|siemens|american\s+express|insurance\s+company)\b",name))
+    return sector and not practice
+
 def evaluate_candidate(lead,source_html,search_results,mx_check):
     source=evaluate_published_source(source_html,lead)
     evidence={"firm":lead.get("firm",""),"phone":normalize_phone(lead.get("phone","")),
@@ -251,16 +304,16 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
         return {**evidence,"status":"owned_site_or_untrusted_source"}
     if not firm_identity_matches(source_html,lead) or source.get("scoped_contact_matched") is False:
         return {**evidence,"status":"unverified_identity"}
-    # A direct owned-site hint always wins, even when firmwide size is unresolved.
+    # A Bar directory may list corporate, hospital or government employers.
+    # Filter known non-law employers BEFORE any owned-site or search outcome.
+    if clearly_non_private_practice(lead.get("firm","")):
+        return {**evidence,"status":"review_nonlaw_employer",
+                "reason":"Employer not verified as a private law practice"}
     if source["website_candidates"]:
         return {**evidence,"status":"review_website","website_candidates":source["website_candidates"]}
 
     # Attorney count is optional metadata under the 2026-10-19 user policy.
     evidence["qualification_scope"]="law_no_owned_website_any_size"
-    from law_local.florida_roster import clearly_non_law_employer, NON_PRIVATE
-    if clearly_non_law_employer(lead.get("firm","")) or NON_PRIVATE.search(lead.get("firm","")):
-        return {**evidence,"status":"review_nonlaw_employer",
-                "reason":"In-house or non-private-law employer"}
     site=classify_search_results(search_results)
     evidence["site_status"]=site["status"]
     evidence["site_evidence"]={"checked_at":utc_now(),"providers":[
@@ -268,7 +321,7 @@ def evaluate_candidate(lead,source_html,search_results,mx_check):
          "urls":[v for v in r.get("urls",[])[:10] if _public_http_url(v)]}
         for r in search_results]}
     if site["status"]!="screened_no_site":
-        return {**evidence,"status":site["status"],"site_evidence":site}
+        return {**evidence,"status":site["status"],"site_evidence":{**evidence["site_evidence"],**site}}
     # Email is optional for calling; only a source-published MX-checked email
     # permits promotion to the separate strict email-qualified pool.
     for email in source["emails"]:
@@ -336,10 +389,12 @@ class SqliteQueue:
         rows=self.conn.execute("""SELECT * FROM candidates
              WHERE status='pending' OR
                    (status='inconclusive' AND attempts < 3 AND updated <= ?)
-             ORDER BY CASE WHEN source_url LIKE 'https://plea.net/%' THEN -1
-                                  WHEN source_url LIKE 'https://www.inbar.org/%' OR
-                                  source_url LIKE 'https://inbar.org/%' THEN 0 ELSE 1 END,
-                      CASE WHEN status='pending' THEN 0 ELSE 1 END,
+             ORDER BY CASE WHEN status='pending' THEN 0 ELSE 1 END,
+                      CASE WHEN source_url LIKE 'https://plea.net/%' OR
+                                     source_url LIKE 'https://irela.org/Sys/PublicProfile/%' OR
+                                     source_url LIKE 'https://www.irela.org/Sys/PublicProfile/%' THEN -1
+                           WHEN source_url LIKE 'https://www.inbar.org/%' OR
+                                source_url LIKE 'https://inbar.org/%' THEN 0 ELSE 1 END,
                       updated ASC LIMIT ?""",(cutoff,int(limit))).fetchall()
         return [dict(row) for row in rows]
     def record(self,lead,result):
@@ -395,6 +450,8 @@ class SqliteQueue:
             if evidence.get("eligibility_hold") or evidence.get("owned_site_url"):
                 return False
             if evidence.get("status")!=status or evidence.get("site_status")!="screened_no_site":
+                return False
+            if generic_practice_label(row["firm"]) or generic_practice_label(evidence.get("firm","")):
                 return False
             # Accept dated historical policies, but never require a headcount.
             if evidence.get("qualification_scope") not in (
@@ -674,7 +731,13 @@ def domain_has_mail(domain):
     try:
         p=subprocess.run(["nslookup","-type=mx",domain],
                          timeout=5,text=True,capture_output=True,check=False)
-        return p.returncode==0 and bool(re.search(r"(?i)(mail exchanger|exchanger\s*=|MX preference)",p.stdout))
+        if p.returncode != 0:
+            return False
+        # RFC 7505 null MX is an explicit declaration of no mail service.
+        hosts = re.findall(r"(?im)^.*?(?:mail exchanger\s*=\s*\d+\s+|mail exchanger\s*=\s*|MX preference\s*=\s*\d+,\s*mail exchanger\s*=\s*)([^\s]+)\s*$", p.stdout)
+        if any(host == "." for host in hosts):
+            return False
+        return any(re.fullmatch(r"(?i)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+\.?", host) for host in hosts)
     except (OSError,subprocess.TimeoutExpired):
         return False
 
@@ -706,10 +769,17 @@ def process_candidate(lead,site_search_usable=True):
         source_url=lead["source_url"]
         if (urlparse(source_url).hostname or "").removeprefix("www.")=="plea.net":
             html=_shared_directory_page(urlparse(source_url)._replace(fragment="").geturl(),int(time.time()//300))
+        elif (urlparse(source_url).hostname or "").removeprefix("www.") == "irela.org":
+            from law_local.irela_source import fetch_profile
+            html = fetch_profile(source_url)
         else:
             html=fetch_public(source_url)
         if not firm_identity_matches(html,lead):
             return {"status":"unverified_identity","source_url":lead["source_url"],"checked_at":utc_now()}
+        if clearly_non_private_practice(lead.get("firm","")):
+            return {"status":"review_nonlaw_employer",
+                    "reason":"Employer not verified as a private law practice",
+                    "checked_at":utc_now(),"source_url":lead["source_url"]}
         source=evaluate_published_source(html,lead)
         mail_sites=email_domain_websites(source["emails"]) if not source["website_candidates"] else []
         search=search_for_firm({**lead,"emails":source["emails"]}) if site_search_usable and not source["website_candidates"] and not mail_sites else []
@@ -794,7 +864,7 @@ def discovery_queries(states):
             raise ValueError("Unknown US state abbreviation: "+state)
         name=DISCOVERY_STATES[state]
         for source in ("lawyer.com/firm", "lawyer.com/firms"):
-            for practice in ("firm size", "family law", "estate planning", "criminal law"):
+            for practice in ("contact email", "family law", "estate planning", "criminal law"):
                 yield state, f'site:{source} {name} {practice}'
 
 
@@ -936,6 +1006,15 @@ def discover_candidates(db,states,max_queries=20,max_pages=100,seconds=480,delay
             time.sleep(delay)
     return counts
 
+def configure_search_defaults(command, platform, environ):
+    """The Mac CLI and its launchd campaign must use the same existing sources.
+
+    Do not silently fall back to unavailable public Brave/DDG on manual runs;
+    preserve explicit choices and fail closed when localhost engines are down.
+    """
+    if command in ("run","discover") and platform=="darwin":
+        environ.setdefault("OPENLEADS_SEARCH_MODE","local_forks")
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description="Local law-firm lead verifier: no Redis, cloud host, or paid API")
     parser.add_argument("--db",default="./law-leads.sqlite3")
@@ -959,6 +1038,8 @@ def main(argv=None):
     p.add_argument("--out",default="./strict-law-leads.csv")
     sub.add_parser("stats")
     args=parser.parse_args(argv)
+    import sys
+    configure_search_defaults(args.cmd,sys.platform,os.environ)
     db=SqliteQueue(args.db)
     try:
         if args.cmd=="import":

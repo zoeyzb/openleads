@@ -4,9 +4,11 @@ The same worker runs on a laptop, rented VM, or managed Node host. Node.js 22+ a
 
 ## Qualification contract
 
-- **Call Ready:** genuine law firm, usable published U.S. telephone number, source-verified 2–10 attorneys and a completed bounded owned-website absence audit. A valid-looking number has **not** been confirmed as an active telephone line.
+- **Call Ready:** genuine law firm, usable published U.S. telephone number, matched source-published practice identity and a completed bounded owned-website absence audit. A valid-looking number has **not** been confirmed as an active telephone line.
 - **Strict Eligible:** all call-ready requirements plus a source-verified, usable public email address.
-- Email enrichment is optional and never blocks the calling lane.
+- Email enrichment never blocks the separate calling lane. Strict eligibility requires a source-published validated email.
+- Attorney count is optional metadata; solo, unknown-size and large firms are eligible.
+- The canonical Mac worker uses SQLite; this page documents the retained Redis CLI integration.
 - Two attorney listings sharing one office phone are one exported call target.
 - A negative website search is a bounded audit, not proof that a website cannot exist.
 

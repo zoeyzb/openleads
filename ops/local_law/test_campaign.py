@@ -144,3 +144,9 @@ class SchedulerTests(unittest.TestCase):
     self.assertNotIn("law_local/worker.py",args)
 
 if __name__=="__main__":unittest.main()
+
+class IrelaCampaignTest(unittest.TestCase):
+ def test_source_is_bounded_and_uses_canonical_db(self):
+  source=Path(campaign.__file__).read_text()
+  self.assertIn('law_local.irela_source","--db",str(DB)',source)
+  self.assertIn('irela_contacts_exit',source)

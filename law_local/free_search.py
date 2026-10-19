@@ -122,11 +122,19 @@ def searx_engine(query, engine, origin=None, fetch=None, lead=None):
             if engine in names:
                 entries.append(hit)
         output["urls"] = _urls(entries, "url", lead)
-        # A local HTTP 200 with no attributable firm-matching hits is not
-        # evidence of a completed negative website search. This matters when
-        # SearXNG silently falls back to other engines or a parser breaks.
-        output["responded"] = bool(output["urls"])
-        output["reason"] = "results" if output["urls"] else "empty_or_unattributed"
+        # A genuinely empty result is normal for a firm with no web presence.
+        # SearXNG echoes the exact query and includes an explicit, empty
+        # unresponsive_engines list on successful zero-hit searches. Require
+        # those fields AND the independently exercised, known-owned-site
+        # preflight in the canonical worker before using these negatives.
+        # A non-empty result supplied by a DIFFERENT engine is not success.
+        completed_empty=(not payload["results"] and
+                         payload.get("query")==query and
+                         "unresponsive_engines" in payload)
+        output["responded"] = bool(entries) or completed_empty
+        output["reason"] = ("results" if output["urls"] else
+                           "completed_no_attributed_results" if output["responded"]
+                           else "empty_or_wrong_engine")
     except (ValueError, OSError, TimeoutError, TypeError, json.JSONDecodeError) as exc:
         output["reason"] = type(exc).__name__
     return output

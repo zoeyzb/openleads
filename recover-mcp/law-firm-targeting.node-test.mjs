@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,qualifiesEmailReadyNoWebsiteLawLead,qualifiesCallReadyNoWebsiteLawLead,shouldPauseLawDiscovery,lawResearchQueries,isUsableLawEmail,isPreferredLawFirmSize} from "./law-firm-targeting.mjs";
+import {isLawFirmLead,scoreLawFirmLead,lawFirmPracticeAreas,matchesLawPractice,qualifiesNoWebsiteLawLead,qualifiesEmailReadyNoWebsiteLawLead,qualifiesCallReadyNoWebsiteLawLead,shouldPauseLawDiscovery,lawResearchQueries,isUsableLawEmail} from "./law-firm-targeting.mjs";
 
 assert.equal(isLawFirmLead({category:"Personal injury attorney",name:"Smith & Doe Law"}),true);
 assert.equal(isLawFirmLead({category:"Criminal defense attorney",name:"Jones Defense Law"}),true);
@@ -22,12 +22,9 @@ assert.ok(scored.score>=70);
 assert.ok(scored.practice_areas.includes("personal injury"));
 console.log("law-firm-targeting tests passed");
 
-assert.equal(isPreferredLawFirmSize(1),false);
-assert.equal(isPreferredLawFirmSize(2),true);
-assert.equal(isPreferredLawFirmSize(10),true);
-assert.equal(isPreferredLawFirmSize(11),false);
 
 const qualifiedBase={
+  law_identity_verified:true,
   website:"",
   no_owned_website_verified:true,
   phone:"3125551212",
@@ -42,7 +39,7 @@ assert.equal(qualifiesCallReadyNoWebsiteLawLead({
   emails:[],
   email:"",
   email_source_verified:false
-}),true,"call-ready requires audited no-owned-site + callable + verified 2-10 and does not require email");
+}),true,"call-ready requires audited no-owned-site + callable + any size and does not require email");
 assert.equal(qualifiesCallReadyNoWebsiteLawLead({
   ...qualifiedBase,
   no_owned_website_verified:false
@@ -58,10 +55,10 @@ assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,emails:[],ema
 assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,website:"https://example.com"}),false);
 assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,emails:[],email:""}),false);
 assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,practice_keys:[]}),true);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:1}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:11}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:1}),true);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_estimate:11}),true);
 assert.equal(qualifiesEmailReadyNoWebsiteLawLead({...qualifiedBase,email_source_verified:false}),false);
-assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_evidence_verified:false}),false);
+assert.equal(qualifiesNoWebsiteLawLead({...qualifiedBase,attorney_count_evidence_verified:false}),true);
 
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:1500,limit:1000}),true);
 assert.equal(shouldPauseLawDiscovery({pendingEnrichment:999,limit:1000}),false);

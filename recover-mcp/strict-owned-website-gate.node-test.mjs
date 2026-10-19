@@ -15,7 +15,7 @@ assert.equal(needsCallReadyOwnedWebsiteAudit({
   attorneyCount:4,
   attorneyCountVerified:true,
   noOwnedWebsiteVerified:false
-}),true,"verified 2-10 callable candidate must get site audit even without email");
+}),true,"any-size callable candidate must get site audit even without email");
 
 assert.equal(needsCallReadyOwnedWebsiteAudit({
   website:"",
@@ -39,7 +39,7 @@ assert.equal(needsCallReadyOwnedWebsiteAudit({
   attorneyCount:1,
   attorneyCountVerified:true,
   noOwnedWebsiteVerified:false
-}),false,"wrong-size lead must not consume call-ready website audit");
+}),true,"solo lead requires the same website audit");
 
 assert.equal(needsStrictOwnedWebsiteAudit({
   website:"https://examplefirm.com",
@@ -63,7 +63,7 @@ assert.equal(needsStrictOwnedWebsiteAudit({
   emails:["office@examplefirm.com"],
   attorneyCount:1,
   attorneyCountVerified:true
-}),false,"wrong-size firms are not final strict candidates");
+}),true,"solo firms require the same final strict audit");
 
 assert.equal(noOwnedWebsiteAuditOutcome({
   ownedWebsite:"https://firm.example",checksSucceeded:1,checksFailed:2

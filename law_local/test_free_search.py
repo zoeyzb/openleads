@@ -115,6 +115,32 @@ class FreeSearchTests(unittest.TestCase):
         got=free_search.searx_engine('firm','yahoo',fetch=lambda _:response)
         self.assertFalse(got['responded'])
 
+    def test_echoed_empty_query_is_completed_negative_when_engine_preflight_healthy(self):
+        # SearXNG returns this exact shape for zero-result queries in production.
+        q='"unlisted-fictional-local-firm-x9q" law firm'
+        payload={'query':q,'results':[], 'unresponsive_engines':[]}
+        got=free_search.searx_engine(q,'yandex',fetch=lambda _:payload)
+        self.assertTrue(got['responded'])
+        self.assertEqual(got['urls'],[])
+        self.assertEqual(classify_search_results([got,{**got,'provider':'searxng:yep'}])['status'],'screened_no_site')
+
+    def test_empty_query_missing_echo_or_engine_health_fails_closed(self):
+        q='"unlisted-fictional-local-firm-x9q" law firm'
+        for payload in ({'results':[], 'unresponsive_engines':[]},
+                        {'query':'another query','results':[], 'unresponsive_engines':[]},
+                        {'query':q,'results':[]},
+                        {'query':q,'results':[], 'unresponsive_engines':[['yandex','timeout']]}):
+            with self.subTest(payload=payload):
+                self.assertFalse(free_search.searx_engine(q,'yandex',fetch=lambda _:payload)['responded'])
+
+    def test_requested_engine_result_with_irrelevant_legal_article_is_completed(self):
+        q='"unknown distinct firm" law firm'
+        payload={'query':q,'results':[{'url':'https://news.example/irrelevant',
+                 'engine':'yandex','title':'Unrelated legal news'}], 'unresponsive_engines':[]}
+        got=free_search.searx_engine(q,'yandex',lead={'firm':'Unknown Distinct Firm'},fetch=lambda _:payload)
+        self.assertTrue(got['responded'])
+        self.assertEqual(got['urls'],[])
+
     def test_search_engine_error_fails_closed(self):
         response={'results':[{'url':'https://lawfirm.example/','engine':'yahoo','title':'Law Firm'}], 'unresponsive_engines':[['yahoo','HTTP 429']]}
         got=free_search.searx_engine('law firm','yahoo',fetch=lambda _:response)
