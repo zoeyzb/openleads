@@ -5,8 +5,8 @@ from law_local.site_provider_health import audit_provider_health
 class SiteProviderHealthTests(unittest.TestCase):
     def test_both_providers_plus_known_owned_domain(self):
         ok=audit_provider_health(lambda control:[
-            {"responded":True,"urls":["https://www.axslawgroup.com/"]},
-            {"responded":True,"urls":["https://axslawgroup.com/"]}
+            {"provider":"searxng:google cse","responded":True,"urls":["https://www.axslawgroup.com/"]},
+            {"provider":"searxng:yep","responded":True,"urls":["https://axslawgroup.com/"]}
         ])
         self.assertEqual(ok["status"],"usable")
         self.assertTrue(ok["positive_control_found"])
@@ -40,10 +40,29 @@ class SiteProviderHealthTests(unittest.TestCase):
         self.assertEqual(detail["retry_after_seconds"],21600)
         self.assertEqual(out["status"],"degraded")
 
+    def test_duplicate_engine_and_unattributed_control_cannot_verify_absence(self):
+        for labels in (("searxng:yep", "searxng:yep"), (None, "searxng:yep")):
+            result = audit_provider_health(lambda _: [
+                {"provider":label,"responded":True,"urls":["https://axslawgroup.com/"]}
+                for label in labels])
+            self.assertEqual(result["status"],"degraded")
+
+    def test_live_preflight_does_not_spend_peer_quota_on_known_rate_limit(self):
+        from unittest.mock import patch
+        from law_local.site_provider_health import control_sources, CONTROL
+        with patch.dict('os.environ', {'OPENLEADS_SEARCH_MODE':'local_forks'}), \
+             patch('law_local.free_search._cooldown_remaining', side_effect=lambda e: 600 if e=='google cse' else 0), \
+             patch('law_local.free_search.candidate_search') as request:
+            sources=control_sources(CONTROL)
+        self.assertEqual(sources[0]['reason'],'provider_cooldown')
+        self.assertEqual(sources[1]['reason'],'skipped_peer_cooldown')
+        request.assert_not_called()
+
     def test_local_control_avoids_supplemental_alias_requests(self):
         from unittest.mock import patch
         from law_local.site_provider_health import control_sources,CONTROL
         with patch.dict('os.environ',{'OPENLEADS_SEARCH_MODE':'local_forks'}), \
+             patch('law_local.free_search._cooldown_remaining',return_value=0), \
              patch('law_local.free_search.candidate_search',return_value={'responded':True}) as search:
             self.assertEqual(len(control_sources(CONTROL)),2)
             self.assertEqual(search.call_count,2)

@@ -25,7 +25,15 @@ def control_sources(control):
     if os.environ.get('OPENLEADS_SEARCH_MODE')!='local_forks':
         return worker.search_for_firm(control)
     from concurrent.futures import ThreadPoolExecutor
-    from law_local.free_search import candidate_search,SITE_ENGINES
+    from law_local.free_search import candidate_search,SITE_ENGINES,_cooldown_remaining
+    # If one independently required engine is explicitly rate-limited,
+    # probing its peer cannot make the pair ready. Save peer quota too.
+    cooldowns = {e:_cooldown_remaining(e) for e in SITE_ENGINES}
+    if any(cooldowns.values()):
+        return [{'provider':'searxng:'+e, 'responded':False, 'urls':[],
+                 'reason':'provider_cooldown' if cooldowns[e] else 'skipped_peer_cooldown',
+                 'retry_after_seconds':cooldowns[e] or max(cooldowns.values())}
+                for e in SITE_ENGINES]
     query='"'+control['firm']+'" law firm '+control['city']+' '+control['state']
     with ThreadPoolExecutor(max_workers=2) as pool:
         return list(pool.map(lambda engine:candidate_search(query,engine,control),SITE_ENGINES))
@@ -51,6 +59,10 @@ def bounded_sources(seconds=20):
 def audit_provider_health(lookups=None):
     sources=lookups(CONTROL) if lookups is not None else bounded_sources()
     both_ready=len(sources)>=2 and all(src.get("responded") is True for src in sources[:2])
+    names=[src.get('provider') for src in sources[:2]]
+    # Two URLs from one engine are not two independent search providers.
+    # Fail closed on missing or duplicated attribution.
+    independent=len(names)==2 and all(isinstance(name,str) and name for name in names) and len(set(names))==2
     details=[]
     for source in sources[:2]:
         found=False
@@ -69,10 +81,10 @@ def audit_provider_health(lookups=None):
                         "result_count":len(source.get("urls",[])),
                         "positive_control_found":found})
     relevant=len(details)==2 and all(d["positive_control_found"] for d in details)
-    return {"status":"usable" if both_ready and relevant else "degraded",
+    return {"status":"usable" if both_ready and relevant and independent else "degraded",
             "responded":sum(bool(s.get("responded")) for s in sources[:2]),
             "positive_control_found":relevant,"provider_details":details,
-            "reason":"Each independent provider must answer and find the known owned website"}
+            "reason":"Each independently attributed provider must answer and find the known owned website"}
 
 def main():
     p=argparse.ArgumentParser()

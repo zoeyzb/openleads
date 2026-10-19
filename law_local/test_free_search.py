@@ -220,13 +220,33 @@ class PhoneFallbackTests(unittest.TestCase):
 
 class PacingTests(unittest.TestCase):
     def test_same_engine_requests_wait_without_retrying_request(self):
-        with patch.dict(free_search._ENGINE_LAST_REQUEST,{'yep':100.0},clear=True), \
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(free_search, 'PACER_DIR', Path(temp)), \
+             patch.dict(free_search._ENGINE_LAST_REQUEST,{'yep':100.0},clear=True), \
              patch.object(free_search.time,'monotonic',return_value=101.0), \
              patch.object(free_search.time,'sleep') as sleep, \
              patch.object(free_search,'_read_json',return_value={'results':[]}) as read:
             free_search._paced_request('http://127.0.0.1:18888/search','yep')
             sleep.assert_called_once_with(4.0)
             read.assert_called_once()
+
+    def test_pacing_persists_across_fresh_worker_process_state(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(free_search, 'PACER_DIR', Path(temp)), \
+             patch.dict(free_search._ENGINE_LAST_REQUEST, {}, clear=True), \
+             patch.object(free_search, '_read_json', return_value={'results': []}) as fetch:
+            free_search._paced_request('http://127.0.0.1:18888/search', 'yep')
+            free_search._ENGINE_LAST_REQUEST.clear()
+            with patch.object(free_search.time, 'sleep') as sleep:
+                free_search._paced_request('http://127.0.0.1:18888/search', 'yep')
+            self.assertTrue(sleep.called)
+            self.assertGreater(sleep.call_args.args[0], 0)
+            self.assertEqual(fetch.call_count, 2)
+
     def test_supplemental_attempts_retain_per_engine_queries(self):
         def response(query,engine,lead=None):
             return dict(provider='searxng:'+engine,responded=True,urls=['https://lawyers.com/fixture'],query=query,checked_at='fixture',reason='results')
@@ -235,3 +255,58 @@ class PacingTests(unittest.TestCase):
         extra=next(x for x in found if x['provider']=='alias_phone_positive_only')
         self.assertEqual(len(extra['query_attempts']),4)
         self.assertEqual({x['provider'] for x in extra['query_attempts']},set(free_search.SITE_PROVIDERS))
+
+class SearchRateLimitRecoveryTests(unittest.TestCase):
+    def test_rate_limit_enters_cooldown_and_repeated_requests_do_not_hit_backend(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(free_search,'COOLDOWN_PATH',Path(temp)/'cooldown.json'), \
+             patch.object(free_search,'_paced_request',return_value={
+                 'query':'test','results':[],
+                 'unresponsive_engines':[['google cse','Suspended: too many requests']]}) as backend:
+            first=free_search.searx_engine('test','google cse')
+            self.assertEqual(first['reason'],'engine_rate_limited')
+            self.assertFalse(first['responded'])
+            second=free_search.searx_engine('test','google cse')
+            self.assertEqual(second['reason'],'provider_cooldown')
+            self.assertGreater(second['retry_after_seconds'],0)
+            backend.assert_called_once()
+
+    def test_non_rate_limit_failure_does_not_create_cooldown(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(free_search,'COOLDOWN_PATH',Path(temp)/'cooldown.json'), \
+             patch.object(free_search,'_paced_request',return_value={
+                 'results':[], 'unresponsive_engines':[['yandex','timeout']]}) as backend:
+            for _ in range(2):
+                self.assertEqual(free_search.searx_engine('test','yandex')['reason'],'engine_unresponsive')
+            self.assertEqual(backend.call_count,2)
+
+    def test_known_owned_site_short_circuits_unnecessary_positive_only_requests(self):
+        lead={'firm':'AXS Law Group','phone':'3057030274','city':'Miami','state':'FL'}
+        def search(query,engine,lead=None):
+            return {'provider':'searxng:'+engine,'responded':True,
+                    'urls':['https://axslawgroup.com/'], 'reason':'results'}
+        with patch.object(free_search,'candidate_search',side_effect=search) as primary, \
+             patch.object(free_search,'searx_engine') as extras:
+            found=free_search.search_firm(lead)
+        self.assertEqual(primary.call_count,2)
+        extras.assert_not_called()
+        self.assertEqual(len(found),2)
+        self.assertEqual(classify_search_results(found)['status'],'review_website')
+
+class CooldownAttributionTests(unittest.TestCase):
+    def test_foreign_engine_rate_limit_does_not_cool_down_requested_engine(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(free_search, 'COOLDOWN_PATH', Path(temp) / 'cooldown.json'), \
+             patch.object(free_search, '_paced_request', return_value={
+                 'results':[], 'unresponsive_engines':[['google cse','too many requests']]}) as backend:
+            result=free_search.searx_engine('test','yep')
+            self.assertEqual(result['reason'],'engine_unresponsive')
+            self.assertEqual(free_search._cooldown_remaining('yep'),0)
+            self.assertEqual(free_search._cooldown_remaining('google cse'),0)
+            self.assertEqual(backend.call_count,1)

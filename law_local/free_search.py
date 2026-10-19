@@ -10,6 +10,8 @@ import os
 import re
 import time
 import threading
+import fcntl
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.parse import urlencode, urlparse
@@ -21,12 +23,69 @@ MAX_RESPONSE = 1024 * 1024
 _ENGINE_LOCKS = {name: threading.Lock() for name in ('google','bing','google cse','yahoo','yandex','yep')}
 _ENGINE_LAST_REQUEST = {}
 ENGINE_INTERVAL_SECONDS = 5.0
+# An explicit upstream rate limit survives independent CLI subprocesses.
+# This is a tiny, ignored metadata file, not a search-result cache.
+COOLDOWN_PATH = Path(__file__).resolve().parents[1] / "state" / "search-provider-cooldowns.json"
+PACER_DIR = COOLDOWN_PATH.parent
+RATE_LIMIT_COOLDOWN_SECONDS = 2 * 3600
+
+
+def _cooldown_remaining(engine):
+    try:
+        until = float(json.loads(COOLDOWN_PATH.read_text()).get(engine, 0))
+        return max(0, int(until - time.time()) + 1) if until > time.time() else 0
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0
+
+
+def _record_rate_limit(engine):
+    path = COOLDOWN_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Serializes readers/writers across separate worker and health processes.
+    with path.with_suffix('.lock').open('a+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            state = json.loads(path.read_text())
+            if not isinstance(state, dict): state = {}
+        except (ValueError, OSError):
+            state = {}
+        now = time.time()
+        state = {k:v for k,v in state.items() if k in _ENGINE_LOCKS
+                 and isinstance(v,(int,float)) and v > now}
+        state[engine] = now + RATE_LIMIT_COOLDOWN_SECONDS
+        temp = path.with_name(path.name + '.tmp.' + str(os.getpid()))
+        try:
+            temp.write_text(json.dumps(state, sort_keys=True))
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+
 
 def _paced_request(url, engine):
+    # Thread pacing alone resets with each scheduled subprocess. Persist only
+    # the prior request timestamp, serialized by an OS lock per named engine.
+    # No query strings, result bodies, identities, or secrets touch disk.
     with _ENGINE_LOCKS[engine]:
-        delay=ENGINE_INTERVAL_SECONDS-(time.monotonic()-_ENGINE_LAST_REQUEST.get(engine,0))
-        if delay>0:time.sleep(delay)
-        _ENGINE_LAST_REQUEST[engine]=time.monotonic()
+        PACER_DIR.mkdir(parents=True, exist_ok=True)
+        pace_file = PACER_DIR / ("search-pacing-" + engine.replace(' ','-') + ".txt")
+        with pace_file.open('a+') as state:
+            fcntl.flock(state, fcntl.LOCK_EX)
+            state.seek(0)
+            try: last_wall = float(state.read() or '0')
+            except ValueError: last_wall = 0
+            since_process = time.monotonic() - _ENGINE_LAST_REQUEST.get(engine, 0)
+            # An adjusted system clock must not cause an unbounded sleep.
+            since_machine = max(0.0, time.time() - last_wall)
+            delay = max(0.0, ENGINE_INTERVAL_SECONDS - since_process,
+                        ENGINE_INTERVAL_SECONDS - since_machine)
+            if delay > 0: time.sleep(delay)
+            _ENGINE_LAST_REQUEST[engine] = time.monotonic()
+            state.seek(0)
+            state.truncate(0)
+            state.write(str(time.time()))
+            state.flush()
+            fcntl.flock(state, fcntl.LOCK_UN)
         return _read_json(url)
 
 # Two independently indexed public-web search engines; each must recover
@@ -121,12 +180,28 @@ def searx_engine(query, engine, origin=None, fetch=None, lead=None):
     try:
         url = local_origin(origin or os.environ.get("OPENLEADS_SEARXNG_URL", "http://127.0.0.1:18888"), 18888)
         request_url = url + "/search?" + urlencode({"q": query, "format": "json", "engines": engine, "language": "en-US"})
+        # Tests using an explicit fetch never consult or create machine cooldowns.
+        remaining = _cooldown_remaining(engine) if fetch is None else 0
+        if remaining:
+            output.update(reason="provider_cooldown", retry_after_seconds=remaining)
+            return output
         payload = _read_json(request_url, fetch) if fetch is not None else _paced_request(request_url,engine)
         if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
             raise ValueError("invalid SearXNG results structure")
         failures = payload.get("unresponsive_engines") or []
         if failures:
-            output["reason"] = "engine_unresponsive"
+            own_errors = [str(item[1])[:140] for item in failures
+                          if isinstance(item, (list, tuple)) and len(item)>1
+                          and item[0] == engine]
+            output["upstream_errors"] = own_errors[:3]
+            if any("too many requests" in value.lower() or "rate limit" in value.lower()
+                   or "http 429" in value.lower() for value in own_errors):
+                output["reason"] = "engine_rate_limited"
+                if fetch is None:
+                    _record_rate_limit(engine)
+                    output["retry_after_seconds"] = RATE_LIMIT_COOLDOWN_SECONDS
+            else:
+                output["reason"] = "engine_unresponsive"
             return output
         # The per-engine parameter is mandatory; enforce attribution of any
         # result so a different engine cannot silently satisfy the query.
@@ -206,6 +281,14 @@ def search_firm(lead):
     # reducing a two-provider outage from ~16s to ~8s per firm.
     with ThreadPoolExecutor(max_workers=2) as pool:
         result=list(pool.map(lambda engine:candidate_search(query,engine,lead),SITE_ENGINES))
+    # One attributable potential owned-site link is already a hard review hold;
+    # sending more alias queries cannot convert it to a no-site candidate.
+    # Skip those needless upstream requests, without omitting any checks for
+    # directory-only / otherwise potentially eligible candidates.
+    from law_local.worker import _third_party
+    if any(not _third_party(urlparse(url).hostname or "")
+           for item in result for url in item.get("urls", [])):
+        return result
     # Directory labels may abbreviate Offices, merge a suffix, or retain a
     # middle initial absent on the actual site. Search names and exact phone
     # independently of that label. Extra queries are positive-only: they cannot
